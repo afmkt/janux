@@ -412,10 +412,10 @@ pub async fn metrics(depot: &mut Depot, res: &mut Response) {
     if let Ok(state) = depot.obtain_mut::<ServerState>() {
         TENANTS_LOADED.set(state.storage.tenants.len() as i64);
     }
-    if let Some(store) = crate::jwt::InvalidJwt::try_global() {
-        if let Ok(n) = store.len().await {
-            REVOKED_STORED.set(n as i64);
-        }
+    if let Some(store) = crate::jwt::InvalidJwt::try_global()
+        && let Ok(n) = store.len().await
+    {
+        REVOKED_STORED.set(n as i64);
     }
     match TextEncoder::new().encode_to_string(&REGISTRY.gather()) {
         Ok(out) => {

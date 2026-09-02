@@ -225,31 +225,6 @@ pub struct CanAccess {
 }
 
 impl Policy {
-    /// Evaluate this policy against a single request.
-    ///
-    /// Returns `None` when the policy does **not apply** to this request
-    /// (domain, action, or resource shape don't match) — the engine skips it
-    /// and continues checking other policies. Returns `Some(CanAccess)` when
-    /// the policy *is* applicable, carrying the allow/deny verdict and MFA
-    /// status.
-    ///
-    /// # Matching rules
-    ///
-    /// 1. The request `domain` must equal both the JWT's domain and
-    /// `self.domain_id`, and the HTTP `act` must equal `self.action` (or
-    /// `self.action` is `None`, matching any method).
-    /// 2. If both [`SourceResolver`] and [`TargetResolver`] are `Nothing`,
-    /// the request `path` segments must match `self.resource` exactly.
-    /// 3. Otherwise the source is resolved from the JWT and the target from
-    /// the path/query/headers; the request matches only when source and
-    /// target denote the same identity (e.g. a user accessing their own
-    /// record).
-    /// 4. When [`mfa`](Self::mfa) is set the caller must have authenticated
-    /// with MFA (TOTP + at least one other factor). If MFA is missing the
-    /// result is denied with `expect_mfa = true` so the caller can
-    /// re-authenticate; otherwise the `allowed` verdict applies.
-    ///
-    // Examples are in tests/unit/policy_unit.rs
     pub fn can_access(
         &self,
         act: &HttpMethod,
@@ -271,11 +246,11 @@ impl Policy {
                 let t = self.resolve_target(path, query, header);
                 match s {
                     None => t.is_none(),
-                    Some(Source::User(name)) => t.map_or(false, |target_name| target_name == name),
+                    Some(Source::User(name)) => t.is_some_and(|target_name| target_name == name),
                     Some(Source::Domain(name)) => {
-                        t.map_or(false, |target_domain| target_domain == name)
+                        t.is_some_and(|target_domain| target_domain == name)
                     }
-                    Some(Source::Role(name)) => t.map_or(false, |target_role| target_role == name),
+                    Some(Source::Role(name)) => t.is_some_and(|target_role| target_role == name),
                 }
             }
         } else {
@@ -328,14 +303,12 @@ impl Policy {
                             return None; // No match                                                                                                                                                
                         }
                     }
-                    return mapping.get(pname).map(|a| a.clone());
+                    return mapping.get(pname).cloned();
                 }
-                return None;
+                None
             }
-            TargetResolver::FromQuery { qname } => query.get(qname).map(|a| a.clone()),
-            TargetResolver::FromHeader { hname } => {
-                header.get(&hname.to_lowercase()).map(|a| a.clone())
-            }
+            TargetResolver::FromQuery { qname } => query.get(qname).cloned(),
+            TargetResolver::FromHeader { hname } => header.get(&hname.to_lowercase()).cloned(),
         }
     }
 }
@@ -410,7 +383,7 @@ impl Tenant {
 
         self.policies
             .entry(domain.to_string())
-            .or_insert_with(DashMap::new)
+            .or_default()
             .entry(ret.role_id.clone())
             .or_default()
             .push(ret.clone());

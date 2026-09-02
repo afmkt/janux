@@ -406,7 +406,7 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                             previous_fa.insert(AuthType::OTP.as_str().to_string());
                             if let Ok(jwt) = tenant
                                 .authenticate_jwt(
-                                    &&previous_fa,
+                                    &previous_fa,
                                     issuer.as_str(),
                                     domain.as_ref(),
                                     &verify_reqest.name,

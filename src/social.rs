@@ -343,21 +343,6 @@ pub struct ExchangeResult {
     pub email: Option<String>,
 }
 
-/// Resolve the user for a social login, subject-first.
-///
-/// 1. An existing `(provider, subject)` binding IS the identity — the
-/// email asserted by the IdP is never consulted for authentication.
-/// 2. Without a binding, provision a new UUID user and record the
-/// binding. A verified email is attached only when no other user owns
-/// it; a claimed email is skipped, never merged into — linking an IdP
-/// identity to an existing account must be an explicit, authenticated
-/// decision, not a side effect of any configured IdP's email
-/// assertion.
-///
-/// Provisioning is all-or-nothing: if recording the binding fails (e.g.
-/// a concurrent first login for the same subject won the race), the
-/// just-created user (and any attached email) is rolled back so no orphan
-/// rows accumulate.
 pub async fn ensure_user_from_social(
     tenant: &mut Tenant,
     provider_id: &str,
@@ -1106,26 +1091,26 @@ pub async fn all_oauth2(req: &mut Request, depot: &mut Depot, res: &mut Response
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
-    if let Some(req_request) = crate::utils::extract::<AllIdentityRequest>(req, None).await {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-            && let Ok(data) = tenant.all_oauth2(req_request.name.as_deref()).await
-        {
-            let tmp: Vec<IdentityEntry> = data
-                .iter()
-                .map(|a| IdentityEntry {
-                    provider: a.provider_id.clone(),
-                    provider_user_id: a.provider_user_id.clone(),
-                    name: a.user.get().name.clone(),
-                })
-                .collect();
-            res.status_code(StatusCode::OK);
-            res.render(Json(ApiResponse {
-                ok: true,
-                data: Some(tmp),
-            }));
-            return;
-        }
+    if let Some(req_request) = crate::utils::extract::<AllIdentityRequest>(req, None).await
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && let Ok(data) = tenant.all_oauth2(req_request.name.as_deref()).await
+    {
+        let tmp: Vec<IdentityEntry> = data
+            .iter()
+            .map(|a| IdentityEntry {
+                provider: a.provider_id.clone(),
+                provider_user_id: a.provider_user_id.clone(),
+                name: a.user.get().name.clone(),
+            })
+            .collect();
+        res.status_code(StatusCode::OK);
+        res.render(Json(ApiResponse {
+            ok: true,
+            data: Some(tmp),
+        }));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err))

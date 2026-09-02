@@ -338,8 +338,8 @@ pub async fn send_otp(
     let access_key_id = key;
     let access_key_secret = secret;
 
-    let access_key_id: &str = &access_key_id;
-    let access_key_secret: &str = &access_key_secret;
+    let access_key_id: &str = access_key_id;
+    let access_key_secret: &str = access_key_secret;
 
     // RPC接口请求示例一：请求参数"in":"query" POST
     let method = Method::POST; // 请求方法

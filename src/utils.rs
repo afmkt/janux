@@ -191,20 +191,6 @@ fn strip_default_port<'a>(host: &'a str, scheme: &str) -> &'a str {
     }
 }
 
-/// Unified tenant-domain resolution — the single place where a tenant is
-/// derived from a request. Every endpoint and code path must use this.
-///
-/// - `trust_forwarded_headers = false` (default): only the raw `Host` header is used.
-/// - `trust_forwarded_headers = true`: `X-Forwarded-Host` (first entry) is preferred,
-/// falling back to `Host`. Enable only behind a reverse proxy that owns
-/// these headers (e.g. Caddy with `header_up X-Forwarded-Host {host}`).
-///
-/// Candidates are validated against the registered tenant domains; a
-/// port-stripped fallback handles clients sending `Host: domain:port`.
-/// Returns `(visible_host, registered_domain)`: the host value the client
-/// used (port included, exactly as sent) and the registered tenant domain
-/// it matched (port stripped). Returns `None` when no registered tenant
-/// matches.
 fn resolve_host<'a>(req: &'a Request, state: &ServerState) -> Option<(&'a str, &'a str)> {
     let mut candidates: Vec<&'a str> = Vec::new();
     if state.trust_forwarded_headers
@@ -688,32 +674,6 @@ where
     }
 }
 
-/// Client identity for rate limiting: the client IP, nothing else.
-///
-/// The old key mixed the peer socket address — *including its ephemeral
-/// port*, so every new TCP connection was already a fresh identity — with an
-/// `X-User-ID` header or `name` query chosen by the caller, so rotating the
-/// header bought a fresh budget. Both are gone; the key is now the bare IP.
-///
-/// Which IP depends on the same trust model as [`get_domain`]/[`get_issuer`]
-///, because behind a forward-auth proxy (Caddy/Traefik) the TCP
-/// peer is the proxy itself and keying on it would put **every** client
-/// behind one shared budget:
-///
-/// - `trust_forwarded_headers = false` (default, direct connections): the
-/// peer's IP.
-/// - `trust_forwarded_headers = true`: the **rightmost** `X-Forwarded-For`
-/// entry — the one written by the trusted proxy directly in front of this
-/// server. Caddy's `forward_auth` (a `reverse_proxy`) discards client-sent
-/// `X-Forwarded-For` unless `trusted_proxies` is configured and writes the
-/// real client IP; Traefik's ForwardAuth sends the source IP the same way.
-/// The *leftmost* entry is deliberately not used: with CDN/`trusted_proxies`
-/// chains both proxies preserve client-supplied entries to the left of the
-/// ones they append, so the left side is spoofable and would reintroduce
-/// the identity-rotation bypass. The rightmost entry is always an address
-/// observed by trusted infrastructure — in a multi-hop chain it may
-/// identify the last proxy's peer rather than the end client (coarse, but
-/// never attacker-chosen). Missing/unparseable values fall back to the peer.
 fn client_ip(req: &Request, depot: &Depot) -> String {
     let trusted = depot
         .obtain::<ServerState>()

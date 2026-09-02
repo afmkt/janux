@@ -29,31 +29,32 @@ pub async fn cors_middleware(
         .await
         .unwrap_or_default();
 
-    if let Some(origin) = request_origin {
-        if allowed_origins.contains(&origin.to_string()) {
-            // 2. Set necessary headers
-            res.headers_mut()
-                .insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
-            res.headers_mut()
-                .insert(ACCESS_CONTROL_ALLOW_CREDENTIALS, "true".parse().unwrap());
-            res.headers_mut().insert(VARY, "Origin".parse().unwrap()); // Important for cache correctness
+    if let Some(origin) = request_origin
+        && allowed_origins.contains(&origin.to_string())
+    {
+        // 2. Set necessary headers
+        res.headers_mut()
+            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
+        res.headers_mut()
+            .insert(ACCESS_CONTROL_ALLOW_CREDENTIALS, "true".parse().unwrap());
+        res.headers_mut().insert(VARY, "Origin".parse().unwrap()); // Important for cache correctness
 
-            // 3. Handle OPTIONS preflight
-            if req.method() == Method::OPTIONS {
-                res.headers_mut().insert(
-                    ACCESS_CONTROL_ALLOW_METHODS,
-                    "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap(),
-                );
-                res.headers_mut().insert(
-                    ACCESS_CONTROL_ALLOW_HEADERS,
-                    "Content-Type, Authorization".parse().unwrap(),
-                );
-                res.status_code(StatusCode::NO_CONTENT);
-                ctrl.skip_rest(); // Preflight finished, no need to call next handlers
-                return;
-            }
+        // 3. Handle OPTIONS preflight
+        if req.method() == Method::OPTIONS {
+            res.headers_mut().insert(
+                ACCESS_CONTROL_ALLOW_METHODS,
+                "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap(),
+            );
+            res.headers_mut().insert(
+                ACCESS_CONTROL_ALLOW_HEADERS,
+                "Content-Type, Authorization".parse().unwrap(),
+            );
+            res.status_code(StatusCode::NO_CONTENT);
+            ctrl.skip_rest(); // Preflight finished, no need to call next handlers
+            return;
         }
     }
+
     // If no origin match, just continue (or return Forbidden if you prefer strict mode)
     ctrl.call_next(req, depot, res).await;
 }
