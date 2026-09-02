@@ -1353,7 +1353,6 @@ mod tests {
     /// RP's state preserved.
     #[tokio::test]
     async fn end_session_revokes_session_and_redirects() {
-        use salvo::test::ResponseExt;
         let (state, _tmp) = http_env().await;
         let issuer = format!("http://{HTTP_DOMAIN}");
         let session_jwt = {

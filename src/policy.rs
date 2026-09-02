@@ -159,7 +159,6 @@ impl PolicyDTO {
 /// | `User` | `FromQuery { qname }` | Self-scoped via query param (e.g. `?owner=alice`) |
 /// | `User` | `FromHeader { hname }` | Self-scoped via custom header (e.g. `X-User-Id`) |
 /// | `Domain` | `FromHeader` | Domain-scoped access where the target is a header like `X-Tenant-Id` |
-
 ///
 /// # Unique constraint
 ///
@@ -299,11 +298,6 @@ impl Policy {
             }
         }
     }
-    /// Resolve the *source* identity for this policy from the JWT, according to
-    /// the configured [`SourceResolver`].
-    ///
-    /// Returns `None` when the resolver is `Nothing` (the policy is not
-    /// identity-scoped). Otherwise returns the caller's username, domain
 
     pub fn resolve_source(&self, jwt: &JwtData) -> Option<Source> {
         match self.source {
@@ -313,15 +307,6 @@ impl Policy {
             SourceResolver::Role => Some(Source::Role(self.role_id.clone())),
         }
     }
-    /// Resolve the *target* identity the caller is acting upon, extracted from
-    /// the request path, query string, or headers.
-    ///
-    /// Returns `None` when the resolver is `Nothing`. For `FromPath` the
-    /// `resource` template is matched segment-by-segment against `path`;
-    /// segments wrapped in `{ braces }` are captured as named parameters and
-    /// the one named by `pname` is returned. Non-template segments must match
-    /// exactly or the whole policy is skipped.
-    ///
 
     pub fn resolve_target(
         &self,
@@ -371,7 +356,7 @@ impl Tenant {
         let ret = DashMap::new();
         for p in policies {
             ret.entry(p.domain_id.clone())
-                .or_insert_with(DashMap::new)
+                .or_insert_with(DashMap::<std::string::String, Vec<Policy>>::new)
                 .entry(p.role_id.clone())
                 .or_default()
                 .push(p.clone());
