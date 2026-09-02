@@ -187,10 +187,7 @@ impl Tenant {
 
     // role CRUD
     pub async fn all_roles(&mut self) -> Result<Vec<Role>> {
-        Role::all()
-            .exec(&mut self.database)
-            .await
-            .map_err(Into::into)
+        Role::all().exec(&mut self.database).await
     }
 
     /// Create a role.
@@ -260,9 +257,7 @@ impl Tenant {
     }
 
     pub async fn role(&mut self, name: &str) -> Result<Role> {
-        Role::get_by_id(&mut self.database, name)
-            .await
-            .map_err(Into::into)
+        Role::get_by_id(&mut self.database, name).await
     }
 }
 

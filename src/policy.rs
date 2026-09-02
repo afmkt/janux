@@ -283,19 +283,19 @@ impl Policy {
             false
         };
         if !matched {
-            return None;
+            None
         } else {
             if !self.mfa {
-                return Some(CanAccess {
+                Some(CanAccess {
                     can_access: self.allowed,
                     expect_mfa: self.mfa,
-                });
+                })
             } else {
                 let mfa = jwt.mfa.contains("totp") && jwt.mfa.len() > 1;
-                return Some(CanAccess {
+                Some(CanAccess {
                     can_access: mfa && self.allowed,
                     expect_mfa: !mfa,
-                });
+                })
             }
         }
     }
@@ -373,7 +373,7 @@ impl Tenant {
             ret.entry(p.domain_id.clone())
                 .or_insert_with(DashMap::new)
                 .entry(p.role_id.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(p.clone());
         }
         Ok(ret)
@@ -427,7 +427,7 @@ impl Tenant {
             .entry(domain.to_string())
             .or_insert_with(DashMap::new)
             .entry(ret.role_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(ret.clone());
 
         Ok(ret)

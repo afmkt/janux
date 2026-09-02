@@ -31,7 +31,7 @@ impl TenantDTO {
             }
         };
         for d in self.domains.iter() {
-            d.save(&mut *tenant).await?;
+            d.save(&mut tenant).await?;
         }
         // Roles first: policy_create resolves the role by name and fails
         // when it does not exist yet. Seeding is the trust anchor, so
@@ -40,13 +40,13 @@ impl TenantDTO {
             tenant.role_create(&Caller::Bootstrap, r, 0).await?;
         }
         for u in self.users.iter() {
-            u.save(&mut *tenant).await?;
+            u.save(&mut tenant).await?;
         }
         for p in self.policies.iter() {
-            p.save(&mut *tenant).await?;
+            p.save(&mut tenant).await?;
         }
-        self.resend.save(&mut *tenant).await?;
-        self.alisms.save(&mut *tenant).await?;
+        self.resend.save(&mut tenant).await?;
+        self.alisms.save(&mut tenant).await?;
         Ok(())
     }
 }

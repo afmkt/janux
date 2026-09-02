@@ -167,11 +167,10 @@ impl SocialProvider {
 
 impl Tenant {
     pub async fn all_providers(&mut self) -> Vec<SocialProvider> {
-        if let Ok(ps) = SocialProvider::all().exec(&mut self.database).await {
-            ps
-        } else {
-            vec![]
-        }
+        SocialProvider::all()
+            .exec(&mut self.database)
+            .await
+            .unwrap_or_default()
     }
 
     /// Build a `DashMap` from pre-fetched providers (no DB query).
