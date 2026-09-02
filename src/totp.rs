@@ -152,7 +152,7 @@ impl Tenant {
                 )
                 .exec(&mut self.database)
                 .await?;
-            if ts.len() > 0 {
+            if !ts.is_empty() {
                 Ok(ts[0].clone())
             } else {
                 Err(anyhow::anyhow!("User doesn't have TOTP"))
@@ -167,7 +167,7 @@ impl Tenant {
                 )
                 .exec(&mut self.database)
                 .await?;
-            if ts.len() > 0 {
+            if !ts.is_empty() {
                 Ok(ts[0].clone())
             } else {
                 Err(anyhow::anyhow!("User doesn't have TOTP"))
@@ -320,73 +320,74 @@ pub async fn enroll(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(req_request) = extract::<EnrollTotpRequest>(req, None).await {
         // the name can not be empty string ""
-        if !req_request.name.is_empty() {
-            if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                let mut totp = tenant
-                    .totp_of(&user, &domain, Some(&req_request.name))
-                    .await;
-                if totp.is_err() {
-                    totp = tenant.new_totp(&user, &req_request.name, &domain).await;
-                } else if let Ok(existing) = &totp {
-                    // re-enrolling an ACTIVE record re-exposes the
-                    // live secret — require (and consume) a valid current
-                    // code as proof of possession first. An inactive record
-                    // holds no working credential, so re-issuing its QR is
-                    // harmless.
-                    if existing.active {
-                        let possessed = req_request
-                            .code
-                            .as_deref()
-                            .is_some_and(|c| existing.code_is_fresh(c));
-                        if !possessed
-                            || tenant
-                                .totp_mark_used(&user, &req_request.name, &domain, step_start())
-                                .await
-                                .is_err()
-                        {
-                            res.status_code(StatusCode::UNAUTHORIZED);
-                            res.render(Json(ApiProblem::unauthorized()));
-                            return;
-                        }
+        if !req_request.name.is_empty()
+            && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        {
+            let mut totp = tenant
+                .totp_of(&user, &domain, Some(&req_request.name))
+                .await;
+            if totp.is_err() {
+                totp = tenant.new_totp(&user, &req_request.name, &domain).await;
+            } else if let Ok(existing) = &totp {
+                // re-enrolling an ACTIVE record re-exposes the
+                // live secret — require (and consume) a valid current
+                // code as proof of possession first. An inactive record
+                // holds no working credential, so re-issuing its QR is
+                // harmless.
+                if existing.active {
+                    let possessed = req_request
+                        .code
+                        .as_deref()
+                        .is_some_and(|c| existing.code_is_fresh(c));
+                    if !possessed
+                        || tenant
+                            .totp_mark_used(&user, &req_request.name, &domain, step_start())
+                            .await
+                            .is_err()
+                    {
+                        res.status_code(StatusCode::UNAUTHORIZED);
+                        res.render(Json(ApiProblem::unauthorized()));
+                        return;
                     }
                 }
-                if let Ok(tp) = totp {
-                    // The new TOTP stays inactive until `verify` proves possession
-                    // of the secret with a valid code — enrolling must never
-                    // deactivate the user's existing, working TOTP.
-                    if let Ok(qr) = tp.qr() {
-                        let jdata = TotpEnrollData {
-                            domain: domain.clone(),
-                            user: user.clone(),
-                            name: req_request.name.clone(),
-                        };
-                        if let Ok(token) = tenant
-                            .jwt_authenticate(&issuer, &domain, &user, &jdata, 15)
+            }
+            if let Ok(tp) = totp {
+                // The new TOTP stays inactive until `verify` proves possession
+                // of the secret with a valid code — enrolling must never
+                // deactivate the user's existing, working TOTP.
+                if let Ok(qr) = tp.qr() {
+                    let jdata = TotpEnrollData {
+                        domain: domain.clone(),
+                        user: user.clone(),
+                        name: req_request.name.clone(),
+                    };
+                    if let Ok(token) = tenant
+                        .jwt_authenticate(&issuer, &domain, &user, &jdata, 15)
+                        .await
+                    {
+                        // register the token for one-shot
+                        // consumption at `verify`.
+                        TOTP_ENROLL_CACHE
+                            .insert(format!("{}:{}", domain, token), user.clone())
                             .await
-                        {
-                            // register the token for one-shot
-                            // consumption at `verify`.
-                            TOTP_ENROLL_CACHE
-                                .insert(format!("{}:{}", domain, token), user.clone())
-                                .await
-                                .ok();
-                            let data = EnrollTotpResponse {
-                                user,
-                                name: req_request.name,
-                                qr,
-                                uri: tp.uri().unwrap(),
-                                domain,
-                                token: token.clone(),
-                            };
-                            res.status_code(StatusCode::OK);
-                            res.render(Json(ApiResponse::ok(data)));
-                            return;
-                        }
+                            .ok();
+                        let data = EnrollTotpResponse {
+                            user,
+                            name: req_request.name,
+                            qr,
+                            uri: tp.uri().unwrap(),
+                            domain,
+                            token: token.clone(),
+                        };
+                        res.status_code(StatusCode::OK);
+                        res.render(Json(ApiResponse::ok(data)));
+                        return;
                     }
                 }
             }
         }
     }
+
     res.status_code(StatusCode::UNAUTHORIZED);
     res.render(Json(ApiProblem::unauthorized()))
 }
@@ -579,19 +580,19 @@ pub async fn list_totp(req: &mut Request, depot: &mut Depot, res: &mut Response)
         .unwrap_or("")
         .to_string();
     if let Some(req_request) = crate::utils::extract::<AllTotpRequest>(req, None).await {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-            if let Ok(data) = tenant.all_totps(req_request.name.as_deref(), None).await {
-                let tmp: Vec<TotpEntry> = data
-                    .iter()
-                    .map(|a| TotpEntry {
-                        name: a.name.clone(),
-                        active: a.active,
-                    })
-                    .collect();
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiResponse::ok(tmp)));
-                return;
-            }
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+            && let Ok(data) = tenant.all_totps(req_request.name.as_deref(), None).await
+        {
+            let tmp: Vec<TotpEntry> = data
+                .iter()
+                .map(|a| TotpEntry {
+                    name: a.name.clone(),
+                    active: a.active,
+                })
+                .collect();
+            res.status_code(StatusCode::OK);
+            res.render(Json(ApiResponse::ok(tmp)));
+            return;
         }
     }
     let err = ApiProblem::validation_error("Failed to parse request body");
@@ -618,19 +619,19 @@ pub async fn remove_totp(req: &mut Request, depot: &mut Depot, res: &mut Respons
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
-    if let Some(req_request) = crate::utils::extract::<RemoveTotpRequest>(req, None).await {
-        if !req_request.name.is_empty() && !req_request.totp.is_empty() {
-            if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                if tenant
-                    .delete_totp(&req_request.name, &req_request.totp, &domain)
-                    .await
-                    .is_ok()
-                {
-                    res.status_code(StatusCode::OK);
-                    res.render(Json(ApiResponse::ok(())));
-                    return;
-                }
-            }
+    if let Some(req_request) = crate::utils::extract::<RemoveTotpRequest>(req, None).await
+        && !req_request.name.is_empty()
+        && !req_request.totp.is_empty()
+    {
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+            && tenant
+                .delete_totp(&req_request.name, &req_request.totp, &domain)
+                .await
+                .is_ok()
+        {
+            res.status_code(StatusCode::OK);
+            res.render(Json(ApiResponse::ok(())));
+            return;
         }
     }
     let err = ApiProblem::validation_error("Failure");

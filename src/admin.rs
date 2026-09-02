@@ -181,7 +181,12 @@ pub async fn add_domain(req: &mut Request, depot: &mut Depot, res: &mut Response
         };
         if let Some(name) = tenant_name {
             if name == body.tenant {
-                if let Ok(_) = state.storage.add_domain(&body.domain, &body.tenant).await {
+                if state
+                    .storage
+                    .add_domain(&body.domain, &body.tenant)
+                    .await
+                    .is_ok()
+                {
                     res.status_code(StatusCode::OK);
                     res.render(Json(ApiResponse::ok(())));
                     return;
@@ -259,10 +264,11 @@ pub async fn delete_domain(req: &mut Request, depot: &mut Depot, res: &mut Respo
         };
         if let Some(name) = tenant_name {
             if body.tenant == name {
-                if let Ok(_) = state
+                if state
                     .storage
                     .remove_domain(&body.domain, &body.tenant)
                     .await
+                    .is_ok()
                 {
                     res.status_code(StatusCode::OK);
                     res.render(Json(ApiResponse::ok(())));

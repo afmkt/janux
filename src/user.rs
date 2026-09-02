@@ -26,13 +26,6 @@ pub struct UserDTO {
 }
 
 impl UserDTO {
-    // pub fn from_user(user: &User) -> Self {
-    // UserDTO {
-    // id: user.id.clone(),
-    // active: user.active,
-    // roles: user.roles(),
-    // }
-    // }
     pub async fn save(&self, tenant: &mut Tenant) -> Result<()> {
         let mut user = tenant.user(&self.id).await;
         if user.is_err() {
@@ -406,15 +399,16 @@ pub async fn all_users(req: &mut Request, depot: &mut Depot, res: &mut Response)
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
-    if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-        if let Ok(data) = tenant.all_users().await {
-            res.status_code(StatusCode::OK);
-            res.render(Json(ApiResponse::ok(
-                data.iter().map(|u| u.name.clone()).collect::<Vec<_>>(),
-            )));
-            return;
-        }
+    if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
+        && let Ok(data) = tenant.all_users().await
+    {
+        res.status_code(StatusCode::OK);
+        res.render(Json(ApiResponse::ok(
+            data.iter().map(|u| u.name.clone()).collect::<Vec<_>>(),
+        )));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err))
@@ -437,13 +431,13 @@ pub async fn add_user(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     if let Some(body) = extract::<AddUser>(req, None).await {
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-            if let Ok(_) = tenant.user_create(&body.name).await {
-                let resp = ApiResponse::ok(());
-                res.status_code(StatusCode::OK);
-                res.render(Json(resp));
-                return;
-            }
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
+            && tenant.user_create(&body.name).await.is_ok()
+        {
+            let resp = ApiResponse::ok(());
+            res.status_code(StatusCode::OK);
+            res.render(Json(resp));
+            return;
         }
     };
     let err = ApiProblem::validation_error("Failed to parse request body");
@@ -657,14 +651,18 @@ pub async fn activate_self(req: &mut Request, depot: &mut Depot, res: &mut Respo
                     }
                     // self-activation is identity-checked, not
                     // level-gated.
-                    if let Ok(_) = tenant.user_activate_self(&caller, &user_name).await {
+                    if tenant.user_activate_self(&caller, &user_name).await.is_ok() {
                         let resp = ApiResponse::ok(());
                         res.status_code(StatusCode::OK);
                         res.render(Json(resp));
                         return;
                     }
                 } else {
-                    if let Ok(_) = tenant.user_deactivate_self(&caller, &user_name).await {
+                    if tenant
+                        .user_deactivate_self(&caller, &user_name)
+                        .await
+                        .is_ok()
+                    {
                         let resp = ApiResponse::ok(());
                         res.status_code(StatusCode::OK);
                         res.render(Json(resp));
@@ -784,16 +782,14 @@ pub async fn user_roles(req: &mut Request, depot: &mut Depot, res: &mut Response
     if let Some(body) = extract::<UserRoleRequest>(req, None).await {
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-            if let Ok(user) = tenant.user(&body.user).await {
-                if let Ok(data) = tenant.user_roles(user.id).await {
-                    let resp =
-                        ApiResponse::ok(data.iter().map(|r| r.id.clone()).collect::<Vec<_>>());
-                    res.status_code(StatusCode::OK);
-                    res.render(Json(resp));
-                    return;
-                }
-            }
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
+            && let Ok(user) = tenant.user(&body.user).await
+            && let Ok(data) = tenant.user_roles(user.id).await
+        {
+            let resp = ApiResponse::ok(data.iter().map(|r| r.id.clone()).collect::<Vec<_>>());
+            res.status_code(StatusCode::OK);
+            res.render(Json(resp));
+            return;
         }
     }
     let err = ApiProblem::validation_error("Failed to parse request body");

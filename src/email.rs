@@ -566,24 +566,23 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
-    if let Some(req_request) = extract::<ReqRequest>(req, None).await {
-        if !req_request.name.is_empty() {
-            if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                if tenant
-                    .email_delete(&req_request.name, &req_request.email)
-                    .await
-                    .is_ok()
-                {
-                    res.status_code(StatusCode::OK);
-                    res.render(Json(EmailResponse {
-                        ok: true,
-                        code: StatusCode::OK.as_u16(),
-                        msg: "Success".to_string(),
-                        jwt: None,
-                    }));
-                    return;
-                }
-            }
+    if let Some(req_request) = extract::<ReqRequest>(req, None).await
+        && !req_request.name.is_empty()
+    {
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+            && tenant
+                .email_delete(&req_request.name, &req_request.email)
+                .await
+                .is_ok()
+        {
+            res.status_code(StatusCode::OK);
+            res.render(Json(EmailResponse {
+                ok: true,
+                code: StatusCode::OK.as_u16(),
+                msg: "Success".to_string(),
+                jwt: None,
+            }));
+            return;
         }
     }
     res.status_code(StatusCode::BAD_REQUEST);
@@ -619,19 +618,19 @@ pub async fn all_emails(req: &mut Request, depot: &mut Depot, res: &mut Response
         .unwrap_or("")
         .to_string();
     if let Some(req_request) = extract::<AllEmailRequest>(req, None).await {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-            if let Ok(data) = tenant.all_emails(req_request.name.as_deref()).await {
-                let tmp: Vec<EmailEntry> = data
-                    .iter()
-                    .map(|a| EmailEntry {
-                        email: a.id.clone(),
-                        name: a.user.get().name.clone(),
-                    })
-                    .collect();
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiResponse::ok(tmp)));
-                return;
-            }
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+            && let Ok(data) = tenant.all_emails(req_request.name.as_deref()).await
+        {
+            let tmp: Vec<EmailEntry> = data
+                .iter()
+                .map(|a| EmailEntry {
+                    email: a.id.clone(),
+                    name: a.user.get().name.clone(),
+                })
+                .collect();
+            res.status_code(StatusCode::OK);
+            res.render(Json(ApiResponse::ok(tmp)));
+            return;
         }
     }
     let err = ApiProblem::validation_error("Failed to parse request body");

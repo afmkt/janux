@@ -79,14 +79,15 @@ pub struct VHostConfig {
 
 impl VHostConfig {
     pub fn acme_parameter(&self) -> Option<(Vec<String>, Vec<String>)> {
-        if let Some(acme) = &self.acme {
-            if !acme.domains.is_empty() {
-                return Some((
-                    acme.domains.clone().into_iter().collect(),
-                    acme.emails.clone().into_iter().collect(),
-                ));
-            }
+        if let Some(acme) = &self.acme
+            && !acme.domains.is_empty()
+        {
+            return Some((
+                acme.domains.clone().into_iter().collect(),
+                acme.emails.clone().into_iter().collect(),
+            ));
         }
+
         None
     }
     pub fn tls_parameter(&self) -> Option<RustlsConfig> {
@@ -183,12 +184,13 @@ impl VHostConfig {
             if let Some(acme_email) = domain.acme_email.clone() {
                 acme.emails.insert(acme_email);
             }
-            if let Some(cert) = domain.cert.clone() {
-                if let Some(key) = domain.key.clone() {
-                    let tls_entry = Tls { cert, key };
-                    tls.insert(domain.id.clone(), tls_entry);
-                }
+            if let Some(cert) = domain.cert.clone()
+                && let Some(key) = domain.key.clone()
+            {
+                let tls_entry = Tls { cert, key };
+                tls.insert(domain.id.clone(), tls_entry);
             }
+
             http.domains.insert(domain.id.clone());
         }
 

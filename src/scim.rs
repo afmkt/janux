@@ -200,11 +200,12 @@ async fn to_scim_user(tenant: &mut Tenant, user: &User) -> ScimUser {
 /// Resolve the `{id}` path segment: surrogate key first, login name as a
 /// fallback (IdPs send the id they received; humans may send a userName).
 async fn resolve_path_user(tenant: &mut Tenant, id: &str) -> Option<User> {
-    if let Ok(uuid) = uuid::Uuid::try_parse(id) {
-        if let Ok(user) = tenant.user_by_id(uuid).await {
-            return Some(user);
-        }
+    if let Ok(uuid) = uuid::Uuid::try_parse(id)
+        && let Ok(user) = tenant.user_by_id(uuid).await
+    {
+        return Some(user);
     }
+
     tenant.user(id).await.ok()
 }
 
@@ -442,11 +443,13 @@ async fn apply_attrs(
     mut user: User,
     body: &ScimUserRequest,
 ) -> anyhow::Result<User> {
-    if let Some(new_name) = &body.user_name {
-        if !new_name.is_empty() && *new_name != user.name {
-            user = tenant.user_rename(caller, &user.name, new_name).await?;
-        }
+    if let Some(new_name) = &body.user_name
+        && !new_name.is_empty()
+        && *new_name != user.name
+    {
+        user = tenant.user_rename(caller, &user.name, new_name).await?;
     }
+
     if let Some(external_id) = &body.external_id {
         let value = if external_id.is_empty() {
             None

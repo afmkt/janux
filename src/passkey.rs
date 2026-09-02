@@ -649,13 +649,14 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
-    if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-        if tenant.deactivate_passkeys(&user, &domain).await.is_ok() {
-            res.status_code(StatusCode::OK);
-            res.render(Json(ApiResponse::ok(String::new())));
-            return;
-        }
+    if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && tenant.deactivate_passkeys(&user, &domain).await.is_ok()
+    {
+        res.status_code(StatusCode::OK);
+        res.render(Json(ApiResponse::ok(String::new())));
+        return;
     }
+
     res.status_code(StatusCode::UNAUTHORIZED);
     res.render(Json(ApiProblem::unauthorized()))
 }

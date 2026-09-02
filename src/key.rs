@@ -147,30 +147,31 @@ pub async fn all_keys(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
-    if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-        if let Ok(keys) = tenant.all_keys().await {
-            res.status_code(StatusCode::OK);
-            res.render(Json(ApiResponse::ok(
-                keys.iter()
-                    .map(|entry| {
-                        if let Ok(dk) = entry.public_pem() {
-                            return KeyEntry {
-                                name: entry.id.clone(),
-                                public: dk,
-                                domain: entry.domain_id.clone(),
-                            };
-                        }
-                        KeyEntry {
+    if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
+        && let Ok(keys) = tenant.all_keys().await
+    {
+        res.status_code(StatusCode::OK);
+        res.render(Json(ApiResponse::ok(
+            keys.iter()
+                .map(|entry| {
+                    if let Ok(dk) = entry.public_pem() {
+                        return KeyEntry {
                             name: entry.id.clone(),
-                            public: String::from("Invalid public key"),
+                            public: dk,
                             domain: entry.domain_id.clone(),
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-            )));
-            return;
-        }
+                        };
+                    }
+                    KeyEntry {
+                        name: entry.id.clone(),
+                        public: String::from("Invalid public key"),
+                        domain: entry.domain_id.clone(),
+                    }
+                })
+                .collect::<Vec<_>>(),
+        )));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err))
@@ -194,13 +195,13 @@ pub async fn add_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<Addkey>(req, None).await {
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-            if tenant.key_create(&body.domain, &body.name).await.is_ok() {
-                let resp = ApiResponse::ok(());
-                res.status_code(StatusCode::OK);
-                res.render(Json(resp));
-                return;
-            }
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
+            && tenant.key_create(&body.domain, &body.name).await.is_ok()
+        {
+            let resp = ApiResponse::ok(());
+            res.status_code(StatusCode::OK);
+            res.render(Json(resp));
+            return;
         }
     };
     let err = ApiProblem::validation_error("Failed to parse request body");
@@ -225,13 +226,13 @@ pub async fn delete_key(req: &mut Request, depot: &mut Depot, res: &mut Response
     if let Some(body) = crate::utils::extract::<DeleteKey>(req, None).await {
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-            if tenant.key_delete(&body.name).await.is_ok() {
-                let resp = ApiResponse::ok(());
-                res.status_code(StatusCode::OK);
-                res.render(Json(resp));
-                return;
-            }
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
+            && tenant.key_delete(&body.name).await.is_ok()
+        {
+            let resp = ApiResponse::ok(());
+            res.status_code(StatusCode::OK);
+            res.render(Json(resp));
+            return;
         }
     };
     let err = ApiProblem::validation_error("Failed to parse request body");
@@ -273,14 +274,14 @@ pub async fn jwks_endpoint(req: &mut Request, depot: &mut Depot, res: &mut Respo
 
     let mut jwk_set = JwkSet { keys: vec![] };
 
-    if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-        if let Ok(keys) = tenant.all_keys().await {
-            for key_model in keys {
-                // Convert stored PEM public key into a jsonwebtoken JWK
-                if let Ok(public_pem) = key_model.public_pem() {
-                    if let Ok(jwk) = pem_to_jwk(&public_pem, &key_model.id) {
-                        jwk_set.keys.push(jwk);
-                    }
+    if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
+        && let Ok(keys) = tenant.all_keys().await
+    {
+        for key_model in keys {
+            // Convert stored PEM public key into a jsonwebtoken JWK
+            if let Ok(public_pem) = key_model.public_pem() {
+                if let Ok(jwk) = pem_to_jwk(&public_pem, &key_model.id) {
+                    jwk_set.keys.push(jwk);
                 }
             }
         }

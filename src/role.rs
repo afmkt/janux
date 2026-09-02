@@ -285,21 +285,22 @@ pub async fn all_roles(req: &mut Request, depot: &mut Depot, res: &mut Response)
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
-    if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-        if let Ok(data) = tenant.all_roles().await {
-            res.status_code(StatusCode::OK);
-            res.render(Json(ApiResponse::ok(
-                data.iter()
-                    .map(|r| RoleEntry {
-                        name: r.id.clone(),
-                        level: r.level,
-                        builtin: r.builtin,
-                    })
-                    .collect::<Vec<_>>(),
-            )));
-            return;
-        }
+    if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
+        && let Ok(data) = tenant.all_roles().await
+    {
+        res.status_code(StatusCode::OK);
+        res.render(Json(ApiResponse::ok(
+            data.iter()
+                .map(|r| RoleEntry {
+                    name: r.id.clone(),
+                    level: r.level,
+                    builtin: r.builtin,
+                })
+                .collect::<Vec<_>>(),
+        )));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err))

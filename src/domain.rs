@@ -21,7 +21,7 @@ pub struct DomainDTO {
 }
 impl DomainDTO {
     pub async fn save(&self, tenant: &mut Tenant) -> Result<()> {
-        if let Ok(_) = tenant.domain(&self.id).await {
+        if tenant.domain(&self.id).await.is_ok() {
             tenant
                 .domain_update(
                     &self.id,

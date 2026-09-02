@@ -1060,25 +1060,24 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
-    if let Some(req_request) = crate::utils::extract::<RemoveOAuth2>(req, None).await {
-        if !req_request.name.is_empty() {
-            if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                if let Ok(_) = tenant
-                    .oauth2_delete(
-                        &req_request.name,
-                        &req_request.provider,
-                        &req_request.provider_user_id,
-                    )
-                    .await
-                {
-                    let resp = ApiResponse::ok(());
-                    res.status_code(StatusCode::OK);
-                    res.render(Json(resp));
-                    return;
-                }
-            }
-        }
+    if let Some(req_request) = crate::utils::extract::<RemoveOAuth2>(req, None).await
+        && !req_request.name.is_empty()
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && tenant
+            .oauth2_delete(
+                &req_request.name,
+                &req_request.provider,
+                &req_request.provider_user_id,
+            )
+            .await
+            .is_ok()
+    {
+        let resp = ApiResponse::ok(());
+        res.status_code(StatusCode::OK);
+        res.render(Json(resp));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err))
@@ -1109,23 +1108,23 @@ pub async fn all_oauth2(req: &mut Request, depot: &mut Depot, res: &mut Response
         .unwrap_or("")
         .to_string();
     if let Some(req_request) = crate::utils::extract::<AllIdentityRequest>(req, None).await {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-            if let Ok(data) = tenant.all_oauth2(req_request.name.as_deref()).await {
-                let tmp: Vec<IdentityEntry> = data
-                    .iter()
-                    .map(|a| IdentityEntry {
-                        provider: a.provider_id.clone(),
-                        provider_user_id: a.provider_user_id.clone(),
-                        name: a.user.get().name.clone(),
-                    })
-                    .collect();
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiResponse {
-                    ok: true,
-                    data: Some(tmp),
-                }));
-                return;
-            }
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+            && let Ok(data) = tenant.all_oauth2(req_request.name.as_deref()).await
+        {
+            let tmp: Vec<IdentityEntry> = data
+                .iter()
+                .map(|a| IdentityEntry {
+                    provider: a.provider_id.clone(),
+                    provider_user_id: a.provider_user_id.clone(),
+                    name: a.user.get().name.clone(),
+                })
+                .collect();
+            res.status_code(StatusCode::OK);
+            res.render(Json(ApiResponse {
+                ok: true,
+                data: Some(tmp),
+            }));
+            return;
         }
     }
     let err = ApiProblem::validation_error("Failed to parse request body");
@@ -1154,28 +1153,27 @@ pub async fn add_provider(req: &mut Request, depot: &mut Depot, res: &mut Respon
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
-    if let Some(req_request) = crate::utils::extract::<AddProvider>(req, None).await {
-        if !req_request.name.is_empty() {
-            if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                if let Ok(_) = tenant
-                    .provider_create(
-                        &req_request.name,
-                        &req_request.client_id,
-                        &req_request.client_secret,
-                        &req_request.issuer_url,
-                    )
-                    .await
-                {
-                    // Invalidate TTL-based social providers cache so next login uses fresh discovery
-                    let _ = tenant.invalidate_social_cache(domain.as_ref()).await;
-                    let resp = ApiResponse::ok(());
-                    res.status_code(StatusCode::OK);
-                    res.render(Json(resp));
-                    return;
-                }
-            }
-        }
+    if let Some(req_request) = crate::utils::extract::<AddProvider>(req, None).await
+        && !req_request.name.is_empty()
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && tenant
+            .provider_create(
+                &req_request.name,
+                &req_request.client_id,
+                &req_request.client_secret,
+                &req_request.issuer_url,
+            )
+            .await
+            .is_ok()
+    {
+        // Invalidate TTL-based social providers cache so next login uses fresh discovery
+        let _ = tenant.invalidate_social_cache(domain.as_ref()).await;
+        let resp = ApiResponse::ok(());
+        res.status_code(StatusCode::OK);
+        res.render(Json(resp));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err))
@@ -1225,20 +1223,19 @@ pub async fn remove_provider(req: &mut Request, depot: &mut Depot, res: &mut Res
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
-    if let Some(req_request) = crate::utils::extract::<RemoveProvider>(req, None).await {
-        if !req_request.name.is_empty() {
-            if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                if let Ok(_) = tenant.provider_delete(&req_request.name).await {
-                    // Invalidate TTL-based social providers cache so next login uses fresh discovery
-                    let _ = tenant.invalidate_social_cache(domain.as_ref()).await;
-                    let resp = ApiResponse::ok(());
-                    res.status_code(StatusCode::OK);
-                    res.render(Json(resp));
-                    return;
-                }
-            }
-        }
+    if let Some(req_request) = crate::utils::extract::<RemoveProvider>(req, None).await
+        && !req_request.name.is_empty()
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && tenant.provider_delete(&req_request.name).await.is_ok()
+    {
+        // Invalidate TTL-based social providers cache so next login uses fresh discovery
+        let _ = tenant.invalidate_social_cache(domain.as_ref()).await;
+        let resp = ApiResponse::ok(());
+        res.status_code(StatusCode::OK);
+        res.render(Json(resp));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err))
@@ -1435,7 +1432,7 @@ mod tests {
     ) -> (StatusCode, serde_json::Value) {
         let client = salvo::test::TestClient::post("http://localhost/redeem").json(body);
         let client = match bind {
-            Some(b) => client.add_header("Cookie", &format!("{}={}", SOCIAL_BIND_COOKIE, b), true),
+            Some(b) => client.add_header("Cookie", format!("{}={}", SOCIAL_BIND_COOKIE, b), true),
             None => client,
         };
         let mut res = client.send(service).await;
