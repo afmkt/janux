@@ -1,5 +1,5 @@
 use totp_rs::{Algorithm, Secret, TOTP};
-fn main() -> () {
+fn main() {
     let secret = Secret::generate_secret();
     let totp = TOTP::new(
         Algorithm::SHA1,

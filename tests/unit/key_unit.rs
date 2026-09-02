@@ -27,8 +27,6 @@ fn test_at_hash_is_deterministic() {
 
 #[test]
 fn test_at_hash_differs_for_different_tokens() {
-    use sha2::{Digest, Sha256};
-
     let hash1 = compute_at_hash("token-a");
     let hash2 = compute_at_hash("token-b");
 
@@ -116,6 +114,7 @@ fn compute_at_hash(access_token: &str) -> String {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // mirrors OIDC JWT claims; only some are exercised per test
 struct JanuxJwtOidcParams {
     client_id: String,
     nonce: Option<String>,

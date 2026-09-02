@@ -7,7 +7,6 @@ use anyhow::Result;
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::RefMut;
-use jiff;
 use salvo::oapi::ToSchema;
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
@@ -19,11 +18,11 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use toasty_driver_turso;
 use tokio::fs::*;
 
 #[derive(Eq, Clone, Hash, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+#[allow(clippy::upper_case_acronyms)] // OTP/TOTP are domain acronyms
 pub enum AuthType {
     PassKey,
     Email,
@@ -85,6 +84,7 @@ pub fn acr_value(mfa: &HashSet<String>) -> Option<String> {
 }
 
 #[derive(Debug, PartialEq, toasty::Embed, Serialize, Deserialize, Clone, ToSchema)]
+#[allow(clippy::upper_case_acronyms)] // HTTP method names are uppercase by convention
 pub enum HttpMethod {
     #[column(variant = 1)]
     GET,
@@ -555,9 +555,7 @@ impl Storage {
         let directory = self.directory();
         let tenant_dir = self.tenant_path(name)?;
         if tenant_dir.is_dir() {
-            let pdir = directory
-                .parent()
-                .map_or_else(|| directory.as_path(), |a| a);
+            let pdir = directory.parent().unwrap_or(directory.as_path());
             let backup_dir = pdir.join("backups");
             ensure_dir(backup_dir.as_path()).await?;
 

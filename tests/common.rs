@@ -2,6 +2,7 @@
 //!
 //! Provides `TestEnv` which auto-starts a Janux server in a subprocess
 //! with a temporary data dir, governed by `tests/test_config.toml`.
+#![allow(dead_code)] // shared helper surface; each test target uses a subset
 
 use std::process::{Child, Stdio};
 use tempfile::TempDir;
@@ -108,10 +109,10 @@ impl TestEnv {
             .await
             .ok();
 
-        if let Some(data) = resp {
-            if let Some(v) = data.json::<serde_json::Value>().await.ok() {
-                return v["ok"] == true;
-            }
+        if let Some(data) = resp
+            && let Ok(v) = data.json::<serde_json::Value>().await
+        {
+            return v["ok"] == true;
         }
         false
     }

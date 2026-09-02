@@ -59,10 +59,12 @@ async fn main() {
         cli.config
     };
 
-    let server_config: JanuxConfig = JanuxConfig::load_from(&config_paths).expect(&format!(
-        "Failed to load configuration files: {:?}",
-        config_paths
-    ));
+    let server_config: JanuxConfig = JanuxConfig::load_from(&config_paths).unwrap_or_else(|e| {
+        panic!(
+            "Failed to load configuration files: {:?}: {e}",
+            config_paths
+        )
+    });
 
     if let Some(ref key) = server_config.encryption_key {
         crypto::setup_encryption_key(key).expect("failed to initialize encryption key");

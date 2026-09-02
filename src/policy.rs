@@ -272,6 +272,7 @@ impl Tenant {
     /// gate (rule R5): API callers may only attach policies to roles
     /// strictly below their own effective level — a role can never expand
     /// its own permission set (or a peer's / superior's).
+    #[allow(clippy::too_many_arguments)]
     pub async fn policy_create(
         &mut self,
         caller: &crate::role::Caller,

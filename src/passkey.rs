@@ -338,7 +338,7 @@ async fn render_passkey_auth_success(
 #[derive(Deserialize, Serialize, Debug, ToSchema)]
 pub struct PasskeyRequest(String);
 
-async fn login(domain: &str, origin: &str, creds: &Vec<pk::Passkey>, res: &mut Response) {
+async fn login(domain: &str, origin: &str, creds: &[pk::Passkey], res: &mut Response) {
     match start_passkey_login(creds, domain, origin).await {
         Ok((challenge_opts, token)) => {
             res.status_code(StatusCode::OK);
@@ -569,20 +569,16 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     if let Ok(stored_passkeys) = tenant
                         .active_passkey(Some(&rqst.username), Some(&domain))
                         .await
+                        && let Some(stored) = stored_passkeys.into_iter().next()
+                        && let Ok(mut passkey) = stored.get_passkey()
+                        && passkey.update_credential(&auth_result).unwrap_or(false)
+                        && let Ok(updated_bytes) = serde_json::to_vec(&passkey)
                     {
-                        for stored in stored_passkeys {
-                            if let Ok(mut passkey) = stored.get_passkey()
-                                && passkey.update_credential(&auth_result).unwrap_or(false)
-                                && let Ok(updated_bytes) = serde_json::to_vec(&passkey)
-                            {
-                                let _ = toasty::update!(
-                                                Passkey::filter(Passkey::fields().id().eq(stored.id))
-                                            { credential: updated_bytes })
-                                            .exec(&mut tenant.database)
-                                            .await;
-                            }
-                            break;
-                        }
+                        let _ = toasty::update!(
+                                        Passkey::filter(Passkey::fields().id().eq(stored.id))
+                                    { credential: updated_bytes })
+                        .exec(&mut tenant.database)
+                        .await;
                     }
                     // A login completed while already holding a session
                     // for the same user accumulates factors; an unrelated

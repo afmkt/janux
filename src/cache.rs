@@ -139,6 +139,7 @@ where
     }
 
     /// Invalidate all entries in the cache.
+    #[allow(dead_code)] // public cache API surface
     pub async fn clear(&self) {
         self.inner.invalidate_all();
     }

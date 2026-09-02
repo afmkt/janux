@@ -413,7 +413,7 @@ async fn email_request_success() {
             .is_some_and(|r| r.status().is_client_error() || r.status().is_success());
 
     // Verify the route is wired up by checking it doesn't return 404/501
-    let not_found = resp.as_ref().ok().map(|r| r.status().as_u16()) == Some(404)
+    let _not_found = resp.as_ref().ok().map(|r| r.status().as_u16()) == Some(404)
         || resp.as_ref().ok().map(|r| r.status().as_u16()) == Some(501);
 
     if ok_anyways {

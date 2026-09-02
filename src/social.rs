@@ -328,6 +328,9 @@ impl Tenant {
     }
 }
 
+// Parsed token response fields; kept for protocol completeness even where
+// the current flows only consume part of them.
+#[allow(dead_code)]
 pub struct ExchangeResult {
     pub access_token: AccessToken,
     pub token_type: String, // typically "Bearer"

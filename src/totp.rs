@@ -448,52 +448,49 @@ async fn verify_totp(
             && let Ok(totp) = tenant
                 .totp_of(&verify_reqest.user, domain, verify_reqest.name.as_deref())
                 .await
+            && totp.code_is_fresh(&verify_reqest.code)
+            && (totp.active
+                || tenant
+                    .active_totp(&verify_reqest.user, &totp.name, &totp.domain_id)
+                    .await
+                    .is_ok())
         {
-            if totp.code_is_fresh(&verify_reqest.code) {
-                if totp.active
-                    || tenant
-                        .active_totp(&verify_reqest.user, &totp.name, &totp.domain_id)
-                        .await
-                        .is_ok()
-                {
-                    if tenant
-                        .totp_mark_used(
-                            &verify_reqest.user,
-                            &totp.name,
-                            &totp.domain_id,
-                            step_start(),
-                        )
-                        .await
-                        .is_err()
-                    {
-                        res.status_code(StatusCode::UNAUTHORIZED);
-                        res.render(Json(ApiProblem::unauthorized()));
-                        return;
-                    }
-                    let mut tmp = session
-                        .filter(|(user, _)| user == &verify_reqest.user)
-                        .map(|(_, mfa)| mfa.clone())
-                        .unwrap_or_default();
-                    tmp.insert(AuthType::TOTP.as_str().to_string());
+            if tenant
+                .totp_mark_used(
+                    &verify_reqest.user,
+                    &totp.name,
+                    &totp.domain_id,
+                    step_start(),
+                )
+                .await
+                .is_err()
+            {
+                res.status_code(StatusCode::UNAUTHORIZED);
+                res.render(Json(ApiProblem::unauthorized()));
+                return;
+            }
+            let mut tmp = session
+                .filter(|(user, _)| user == &verify_reqest.user)
+                .map(|(_, mfa)| mfa.clone())
+                .unwrap_or_default();
+            tmp.insert(AuthType::TOTP.as_str().to_string());
 
-                    if let Ok(jwt) = tenant
-                        .authenticate_jwt(&tmp, &issuer, domain.as_ref(), &verify_reqest.user, 15)
-                        .await
-                    {
-                        if let Some(name) = verify_reqest.cookie {
-                            let cookie = Cookie::build((name, jwt.clone()))
-                                .path("/")
-                                .http_only(true)
-                                .secure(true)
-                                .same_site(SameSite::Strict)
-                                .build();
-                            res.add_cookie(cookie);
-                        }
-                        res.status_code(StatusCode::OK);
-                        res.render(Json(ApiResponse::ok(jwt)));
-                        return;
-                    }
+            if let Ok(jwt) = tenant
+                .authenticate_jwt(&tmp, &issuer, domain.as_ref(), &verify_reqest.user, 15)
+                .await
+            {
+                if let Some(name) = verify_reqest.cookie {
+                    let cookie = Cookie::build((name, jwt.clone()))
+                        .path("/")
+                        .http_only(true)
+                        .secure(true)
+                        .same_site(SameSite::Strict)
+                        .build();
+                    res.add_cookie(cookie);
                 }
+                res.status_code(StatusCode::OK);
+                res.render(Json(ApiResponse::ok(jwt)));
+                return;
             }
         }
     }

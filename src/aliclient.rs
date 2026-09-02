@@ -108,6 +108,7 @@ pub enum RequestBody {
     None,
 }
 // 规范化请求
+#[allow(clippy::too_many_arguments)]
 pub async fn call_api(
     client: Client,
     method: Method,
@@ -216,15 +217,14 @@ pub async fn call_api(
     // 6.构建 Authorization
     headers.insert("Authorization", HeaderValue::from_str(&auth_data).unwrap());
     // 构造 url 拼接请求参数
-    let url: String;
-    if !query_params.is_empty() {
-        url = format!(
+    let url = if !query_params.is_empty() {
+        format!(
             "https://{}{}?{}",
             host, canonical_uri, canonical_query_string
-        );
+        )
     } else {
-        url = format!("https://{}{}", host, canonical_uri);
-    }
+        format!("https://{}{}", host, canonical_uri)
+    };
     // 调用发送请求
     let response = send_request(
         &client,
@@ -322,6 +322,7 @@ pub struct AliResponse {
     bizid: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn send_otp(
     key: &str,
     secret: &str,
@@ -348,11 +349,12 @@ pub async fn send_otp(
     let action = "SendSms"; // API名称
     let version = "2017-05-25"; // API版本号
     let region_id = region;
-    let mut query: Vec<(&str, &str)> = Vec::new();
-    query.push(("RegionId", region_id));
-    query.push(("PhoneNumbers", mobile));
-    query.push(("SignName", sign_name));
-    query.push(("TemplateCode", template));
+    let mut query: Vec<(&str, &str)> = vec![
+        ("RegionId", region_id),
+        ("PhoneNumbers", mobile),
+        ("SignName", sign_name),
+        ("TemplateCode", template),
+    ];
     let otp_code = OTPCode {
         code: otp.to_string(),
     };

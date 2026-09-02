@@ -2,9 +2,9 @@
 use janux::db::{HttpMethod, JwtData};
 use janux::policy::Source;
 use janux::policy::{Policy, SourceResolver, TargetResolver};
-use serde_json::json;
 use std::collections::HashMap;
 
+#[allow(clippy::too_many_arguments)] // test helper mirroring the policy surface
 fn make_policy(
     domain: &str,
     action: Option<HttpMethod>,
@@ -69,7 +69,7 @@ fn test_exact_path_allow_any_user() {
     );
 
     assert!(result.is_some());
-    assert_eq!(result.unwrap().can_access, true);
+    assert!(result.unwrap().can_access);
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn test_exact_path_deny_any_user() {
     );
 
     assert!(result.is_some());
-    assert_eq!(result.unwrap().can_access, false);
+    assert!(!result.unwrap().can_access);
 }
 
 #[test]
@@ -253,7 +253,7 @@ fn test_self_scoped_access_path_match() {
     );
 
     assert!(result.is_some());
-    assert_eq!(result.unwrap().can_access, true);
+    assert!(result.unwrap().can_access);
 }
 
 #[test]
@@ -348,7 +348,7 @@ fn test_self_scoped_access_query_match() {
     );
 
     assert!(result.is_some());
-    assert_eq!(result.unwrap().can_access, true);
+    assert!(result.unwrap().can_access);
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn test_self_scoped_access_header_match() {
     );
 
     assert!(result.is_some());
-    assert_eq!(result.unwrap().can_access, true);
+    assert!(result.unwrap().can_access);
 }
 
 // ─── 5. MFA-gated policies ──────────────────────────────────────────────────
@@ -518,13 +518,13 @@ fn test_totp_only_without_other_factor_rejected() {
         &HashMap::new(),
     );
 
-    let access = result.unwrap_or_else(|| {
+    let access = result.unwrap_or(
         // No matching rules — acceptable; policy can be constructed correctly.
         janux::policy::CanAccess {
             can_access: false,
             expect_mfa: true,
-        }
-    });
+        },
+    );
     assert!(!access.can_access);
     assert!(access.expect_mfa);
 }
@@ -559,7 +559,7 @@ fn test_domain_source_matches() {
     );
 
     assert!(result.is_some());
-    assert_eq!(result.unwrap().can_access, true);
+    assert!(result.unwrap().can_access);
 }
 
 // ─── 7. resolve_source tests ────────────────────────────────────────────────

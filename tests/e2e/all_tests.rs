@@ -23,6 +23,7 @@ mod tenant_lifecycle;
 static SHARED_ENV: Mutex<Option<common::TestEnv>> = Mutex::new(None);
 
 /// Lazily start (or reuse) the shared Janux server and return its base URL string.  
+#[allow(clippy::await_holding_lock)] // one-shot lazy init; e2e runs single-threaded
 async fn shared_server() -> String {
     let mut guard = SHARED_ENV.lock().unwrap();
     if guard.is_none() {

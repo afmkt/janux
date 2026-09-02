@@ -2,7 +2,7 @@ use crate::db::Tenant;
 use crate::utils::{ApiProblem, ApiResponse};
 use anyhow::Result;
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 #[derive(Debug, toasty::Model, Clone)]
 pub struct Config {
     #[key]
@@ -134,6 +134,7 @@ impl ResendDTO {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(clippy::upper_case_acronyms)] // OTP is a domain acronym
 pub struct OTPDTO {
     pub api_secret: String,
     pub api_key: String,
@@ -189,11 +190,6 @@ impl OTPDTO {
             .await?;
         Ok(())
     }
-}
-
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct AllConfigRequest {
-    prefix: String,
 }
 
 #[endpoint(

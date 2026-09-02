@@ -257,6 +257,7 @@ impl OAuth2Client {
 
 impl crate::db::Tenant {
     /// Register a new OAuth2 client for this tenant.
+    #[allow(clippy::too_many_arguments)]
     pub async fn oauth2client_create(
         &mut self,
         id: &str,

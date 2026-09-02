@@ -480,6 +480,7 @@ async fn handle_client_credentials(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn mint_token_response(
     tenant: &mut crate::db::Tenant,
     client: &OAuth2Client,
@@ -3304,7 +3305,7 @@ pub struct IntrospectRequest {
     pub client_secret: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Default, Serialize, ToSchema)]
 pub struct IntrospectResponse {
     pub active: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3325,23 +3326,6 @@ pub struct IntrospectResponse {
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_type: Option<String>,
-}
-
-impl Default for IntrospectResponse {
-    fn default() -> Self {
-        Self {
-            active: false,
-            client_id: None,
-            scope: None,
-            sub: None,
-            aud: None,
-            iss: None,
-            exp: None,
-            iat: None,
-            username: None,
-            token_type: None,
-        }
-    }
 }
 
 #[endpoint(

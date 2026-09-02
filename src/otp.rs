@@ -16,6 +16,7 @@ use std::sync::LazyLock;
 use toasty::*;
 
 #[derive(Debug, toasty::Model, Clone)]
+#[allow(clippy::upper_case_acronyms)] // OTP is a domain acronym
 pub struct OTP {
     #[key]
     pub id: String,

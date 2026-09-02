@@ -630,6 +630,7 @@ pub async fn refresh_jwt(req: &Request, depot: &mut Depot) -> Option<String> {
     tenant.refresh_jwt(&issuer, domain, jwt, 15).await.ok()
 }
 
+#[allow(dead_code)] // extraction sources accepted by `extract`
 pub enum ExtractSource {
     Form,
     Body,

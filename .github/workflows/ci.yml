@@ -56,7 +56,6 @@ jobs:
 
       - name: Clippy lint check
         run: cargo clippy --all-targets --all-features -- -D warnings
-        continue-on-error: true  # Warnings don't block CI yet until code is cleaned up
 
       - name: Run unit tests
         run: cargo test --lib --test unit_tests --no-fail-fast

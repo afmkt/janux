@@ -34,7 +34,9 @@ const MAX_RESULTS: usize = 200;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScimUserRequest {
+    // Accepted for SCIM wire compatibility; not needed server-side.
     #[serde(default)]
+    #[allow(dead_code)]
     pub schemas: Vec<String>,
     pub user_name: Option<String>,
     #[serde(default)]

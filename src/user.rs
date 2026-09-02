@@ -290,6 +290,7 @@ impl Tenant {
             .await
             .map_err(Into::into)
     }
+    #[allow(dead_code)] // symmetric API surface; consumed by future admin endpoints
     pub async fn user_passkey(&mut self, id: uuid::Uuid) -> Result<Vec<Passkey>> {
         User::filter_by_id(id)
             .passkey()
@@ -313,6 +314,7 @@ impl Tenant {
             .map_err(Into::into)
     }
 
+    #[allow(dead_code)] // symmetric API surface; consumed by future admin endpoints
     pub async fn user_oauth2(&mut self, id: uuid::Uuid) -> Result<Vec<OAuth2>> {
         User::filter_by_id(id)
             .oauth2()
@@ -321,6 +323,7 @@ impl Tenant {
             .map_err(Into::into)
     }
 
+    #[allow(dead_code)] // symmetric API surface; consumed by future admin endpoints
     pub async fn user_otp(&mut self, id: uuid::Uuid) -> Result<Vec<OTP>> {
         User::filter_by_id(id)
             .otp()

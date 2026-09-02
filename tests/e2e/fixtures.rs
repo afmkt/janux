@@ -171,7 +171,7 @@ pub async fn create_test_tenant(tenant_name: &str) -> bool {
         .await
         .ok();
 
-    resp.map_or(false, |r| r.status().is_success())
+    resp.is_some_and(|r| r.status().is_success())
 }
 
 /// Cleanup a test tenant created during e2e tests.

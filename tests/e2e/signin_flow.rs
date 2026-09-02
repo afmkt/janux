@@ -178,9 +178,3 @@ async fn test_user_roles_lookup_works() {
         assert!(resp.is_ok(), "Roles endpoint should be accessible");
     }
 }
-
-// ─── e2e helpers ──────────────────────────────────────────────────────
-
-mod e2e_helpers {
-    pub use crate::auth_config::*;
-}

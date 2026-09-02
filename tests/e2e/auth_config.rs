@@ -19,12 +19,12 @@ pub fn load_base_url() -> String {
 fn extract_port(content: &str) -> Option<u16> {
     for line in content.lines() {
         let line = line.trim();
-        if line.starts_with("port") && !line.starts_with("[[seed]") {
-            if let Some(val_str) = line.split('=').nth(1).map(|s| s.trim().trim_matches('"')) {
-                if let Ok(v) = val_str.parse::<u16>() {
-                    return Some(v);
-                }
-            }
+        if line.starts_with("port")
+            && !line.starts_with("[[seed]")
+            && let Some(val_str) = line.split('=').nth(1).map(|s| s.trim().trim_matches('"'))
+            && let Ok(v) = val_str.parse::<u16>()
+        {
+            return Some(v);
         }
     }
     None
