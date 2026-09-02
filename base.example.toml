@@ -1,0 +1,13 @@
+# Example base server configuration.
+# Copy to base.toml (gitignored) and adjust, then run: janux -c base -c seed
+data_dir = "./data"
+# 64 hex chars (32 bytes) for AES-256-GCM. Generate your own, e.g.:
+#   openssl rand -hex 32
+encryption_key = "1234567812345678123456781234567812345678123456781234567812345678"
+# true  = behind a reverse proxy (Caddy/Traefik/...): trust X-Forwarded-* headers
+# false = standalone: ignore X-Forwarded-* headers, use Host and the real URI
+trust_forwarded_headers = true
+
+[bind]
+address = "0.0.0.0"
+port = 8080

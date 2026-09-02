@@ -1,0 +1,15 @@
+target
+.DS_Store
+*.db
+*.db-log
+*.db-wal
+data/
+test-data/
+.env
+janux.toml
+base.toml
+seed.toml
+.obsidian/
+.venv/
+__pycache__/
+*.pyc

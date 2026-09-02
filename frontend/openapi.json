@@ -1,0 +1,3602 @@
+{
+  "components": {
+    "schemas": {
+      "openapi.admin.AddDomain": {
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "tenant": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant",
+          "domain"
+        ],
+        "type": "object"
+      },
+      "openapi.admin.DeleteDomain": {
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "tenant": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant",
+          "domain"
+        ],
+        "type": "object"
+      },
+      "openapi.admin.DeleteTenant": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "openapi.admin.NewTenant": {
+        "properties": {
+          "admin": {
+            "description": "First admin user; created and granted the builtin `admin` role.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "domain": {
+            "description": "First domain of the new tenant; the standard admin policy set is\nbound to it. Without a domain the\ntenant stays default-deny locked until one is added.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "openapi.db.HttpMethod": {
+        "enum": [
+          "GET",
+          "POST",
+          "PUT",
+          "OPTIONS",
+          "DELETE",
+          "PATCH",
+          "CONNECT",
+          "HEAD",
+          "TRACE"
+        ],
+        "type": "string"
+      },
+      "openapi.email.EmailAddRequest": {
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "openapi.email.EmailAddVerifyRequest": {
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "email"
+        ],
+        "type": "object"
+      },
+      "openapi.email.EmailResponse": {
+        "properties": {
+          "code": {
+            "format": "uint16",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jwt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "msg": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "code",
+          "msg"
+        ],
+        "type": "object"
+      },
+      "openapi.email.ReqRequest": {
+        "properties": {
+          "client_id": {
+            "description": "Return context parked on the login page: an in-flight OIDC\n`/authorize` (client_id + state) or a plain same-origin redirect.\nEmbedded in the emailed link so the magic-link round-trip can resume\nit after verify — safe because resume/redirect targets are validated\nserver-side (parked authorize) or same-origin-checked client-side.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "redirect_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ],
+        "type": "object"
+      },
+      "openapi.idp.DeleteOauth2Client": {
+        "properties": {
+          "client_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id"
+        ],
+        "type": "object"
+      },
+      "openapi.idp.NewOauth2Client": {
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "default_scopes": {
+            "type": "string"
+          },
+          "grant_types": {
+            "type": "string"
+          },
+          "redirect_uris": {
+            "type": "string"
+          },
+          "response_types": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string"
+          },
+          "token_endpoint_auth_method": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id",
+          "secret",
+          "redirect_uris",
+          "grant_types",
+          "response_types",
+          "token_endpoint_auth_method",
+          "default_scopes"
+        ],
+        "type": "object"
+      },
+      "openapi.idp.OAuth2ClientDto": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "domain_id": {
+            "type": "string"
+          },
+          "grant_types": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "redirect_uris": {
+            "type": "string"
+          },
+          "response_types": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "secret_grace_until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token_endpoint_auth_method": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "redirect_uris",
+          "grant_types",
+          "response_types",
+          "token_endpoint_auth_method",
+          "scope",
+          "domain_id",
+          "active",
+          "updated_at",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "openapi.key.Addkey": {
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "name"
+        ],
+        "type": "object"
+      },
+      "openapi.key.DeleteKey": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "openapi.key.KeyEntry": {
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "public": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "public",
+          "domain"
+        ],
+        "type": "object"
+      },
+      "openapi.oidc_ext.ClientMetaRequest": {
+        "properties": {
+          "backchannel_logout_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "client_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "post_logout_redirect_uris": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "client_id"
+        ],
+        "type": "object"
+      },
+      "openapi.oidc_ext.OidcTenantConfig": {
+        "properties": {
+          "dcr_enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "dcr_enabled"
+        ],
+        "type": "object"
+      },
+      "openapi.ops.HealthyResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      },
+      "openapi.otp.MobileAddRequest": {
+        "properties": {
+          "mobile": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mobile"
+        ],
+        "type": "object"
+      },
+      "openapi.otp.MobileAddVerifyRequest": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "code"
+        ],
+        "type": "object"
+      },
+      "openapi.otp.MobileResponse": {
+        "properties": {
+          "code": {
+            "format": "uint16",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jwt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "msg": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "code",
+          "msg"
+        ],
+        "type": "object"
+      },
+      "openapi.otp.ReqRequest": {
+        "properties": {
+          "mobile": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "mobile"
+        ],
+        "type": "object"
+      },
+      "openapi.passkey.PasskeyRequest": {
+        "type": "string"
+      },
+      "openapi.passkey.PasskeyResponse": {
+        "description": "Response body for the registration/login challenge.",
+        "properties": {
+          "publicKey": {},
+          "token": {
+            "description": " Opaque per-flow handle the client must echo back to `verify`\n. Replaces the old username-derived cache key.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "publicKey",
+          "token"
+        ],
+        "type": "object"
+      },
+      "openapi.passkey.VerifyRequest": {
+        "properties": {
+          "cookie": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credential": {},
+          "token": {
+            "description": "Flow handle from `passkey/request`: selects the cached\nchallenge. Required — without it no ceremony can be completed.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "credential",
+          "token"
+        ],
+        "type": "object"
+      },
+      "openapi.policy.DeletePolicy": {
+        "description": "Request body for [`delete_policy`] — identifies a policy by its\nresource template, HTTP method, and role. The domain is always the one\nresolved from the request `Host`; a `domain` field present in\nthe body is ignored.",
+        "properties": {
+          "action": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/openapi.db.HttpMethod"
+              }
+            ]
+          },
+          "resource": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource",
+          "role"
+        ],
+        "type": "object"
+      },
+      "openapi.policy.PolicyEntry": {
+        "description": "Wire-format representation of a [`Policy`] for HTTP responses and request\nbodies. `resource` is a slash-joined path template (e.g. `\"users/{id}\"`)\nrather than the segmented `Vec<String>` stored on the model.",
+        "properties": {
+          "action": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/openapi.db.HttpMethod"
+              }
+            ]
+          },
+          "allowed": {
+            "type": "boolean"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mfa": {
+            "type": "boolean"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/openapi.policy.SourceResolver"
+          },
+          "target": {
+            "$ref": "#/components/schemas/openapi.policy.TargetResolver"
+          }
+        },
+        "required": [
+          "resource",
+          "domain",
+          "role",
+          "source",
+          "target",
+          "mfa",
+          "allowed"
+        ],
+        "type": "object"
+      },
+      "openapi.policy.SourceResolver": {
+        "description": "How the *source* (the identity acting in the request) is resolved from the\nauthenticated JWT. Used by a [`Policy`] to decide whether the caller itself\nis the target of the rule.\n\n`Nothing` means the policy is identity-independent (it applies to whoever\nholds the role). `User`, `Domain`, and `Roles` pull the corresponding field\nfrom the JWT to be compared against the resolved target.",
+        "enum": [
+          "Nothing",
+          "User",
+          "Domain",
+          "Role"
+        ],
+        "type": "string"
+      },
+      "openapi.policy.TargetResolver": {
+        "description": "How the *target* (the resource being accessed) is extracted from the\nincoming request so it can be compared against the resolved source.\n\n- `Nothing` — no target extraction; matching is purely path-based.\n- `FromPath` — capture a named path parameter (e.g. `{user}`) from the\nrequest path, matched against the policy's `resource` template.\n- `FromQuery` — read the target from a named query-string parameter.\n- `FromHeader` — read the target from a request header (case-insensitive\nlookup).",
+        "oneOf": [
+          {
+            "enum": [
+              "Nothing"
+            ],
+            "type": "string"
+          },
+          {
+            "properties": {
+              "FromPath": {
+                "properties": {
+                  "pname": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pname"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "FromPath"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "FromQuery": {
+                "properties": {
+                  "qname": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "qname"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "FromQuery"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "FromHeader": {
+                "properties": {
+                  "hname": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "hname"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "FromHeader"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "openapi.role.AddRole": {
+        "properties": {
+          "level": {
+            "description": "Privilege level of the new role; must lie in `[0, caller level)`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "level"
+        ],
+        "type": "object"
+      },
+      "openapi.role.DeleteRole": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "openapi.role.RoleEntry": {
+        "properties": {
+          "builtin": {
+            "type": "boolean"
+          },
+          "level": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "level",
+          "builtin"
+        ],
+        "type": "object"
+      },
+      "openapi.social.AddProvider": {
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_secret": {
+            "type": "string"
+          },
+          "issuer_url": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "issuer_url",
+          "client_id",
+          "client_secret"
+        ],
+        "type": "object"
+      },
+      "openapi.social.RedeemRequest": {
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
+      "openapi.social.RemoveProvider": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "openapi.social.SocialProvider": {
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_secret": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "issuer_url": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "client_id",
+          "client_secret",
+          "issuer_url"
+        ],
+        "type": "object"
+      },
+      "openapi.totp.AllTotpRequest": {
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "openapi.totp.EnrollTotpRequest": {
+        "properties": {
+          "code": {
+            "description": "Required when a TOTP with this name is already ACTIVE: a valid\ncurrent code proving possession before the active secret is\nre-exposed. The code is consumed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "user": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "openapi.totp.EnrollTotpResponse": {
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "qr": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "name",
+          "qr",
+          "uri",
+          "domain",
+          "token"
+        ],
+        "type": "object"
+      },
+      "openapi.totp.RemoveTotpRequest": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "totp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "totp"
+        ],
+        "type": "object"
+      },
+      "openapi.totp.TotpEntry": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "active"
+        ],
+        "type": "object"
+      },
+      "openapi.totp.VerifyTotpRequest": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "cookie": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "code"
+        ],
+        "type": "object"
+      },
+      "openapi.user.ActivateSelf": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "active"
+        ],
+        "type": "object"
+      },
+      "openapi.user.ActivateUser": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "active"
+        ],
+        "type": "object"
+      },
+      "openapi.user.AddRole": {
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "role"
+        ],
+        "type": "object"
+      },
+      "openapi.user.AddUser": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "openapi.user.DeleteUser": {
+        "properties": {
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user"
+        ],
+        "type": "object"
+      },
+      "openapi.user.RemoveRole": {
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "role"
+        ],
+        "type": "object"
+      },
+      "openapi.user.UserRoleRequest": {
+        "properties": {
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiProblem": {
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "format": "uint16",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "type"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<()>": {
+        "properties": {
+          "data": {
+            "default": null
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<String>": {
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<alloc.vec.Vec<String>>": {
+        "properties": {
+          "data": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.idp.OAuth2ClientDto>>": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.idp.OAuth2ClientDto"
+            },
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.key.KeyEntry>>": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.key.KeyEntry"
+            },
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.policy.PolicyEntry>>": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.policy.PolicyEntry"
+            },
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.role.RoleEntry>>": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.role.RoleEntry"
+            },
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.social.SocialProvider>>": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.social.SocialProvider"
+            },
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.totp.TotpEntry>>": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.totp.TotpEntry"
+            },
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<openapi.oidc_ext.OidcTenantConfig>": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/openapi.oidc_ext.OidcTenantConfig"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Secure Auth Microservice API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/admin/domain/create": {
+      "post": {
+        "operationId": "openapi.admin.add_domain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.admin.AddDomain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Domain created successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Add domain to tenant"
+      }
+    },
+    "/api/v1/admin/domain/delete": {
+      "post": {
+        "operationId": "openapi.admin.delete_domain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.admin.DeleteDomain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Domain removed successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Remove a domain from tenant"
+      }
+    },
+    "/api/v1/admin/domain/list": {
+      "get": {
+        "operationId": "openapi.admin.all_domains",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<String>>"
+                }
+              }
+            },
+            "description": "All domain names of the tenant"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Return all domains in a tenant"
+      }
+    },
+    "/api/v1/admin/key/create": {
+      "post": {
+        "operationId": "openapi.key.add_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.key.Addkey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Scope created successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Add scope to tenant"
+      }
+    },
+    "/api/v1/admin/key/delete": {
+      "post": {
+        "operationId": "openapi.key.delete_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.key.DeleteKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Remove a scope from tenant"
+      }
+    },
+    "/api/v1/admin/key/list": {
+      "get": {
+        "operationId": "openapi.key.all_keys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.key.KeyEntry>>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "List all keys in a tenant"
+      }
+    },
+    "/api/v1/admin/metrics": {
+      "get": {
+        "operationId": "openapi.ops.metrics",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Prometheus text exposition format"
+          }
+        },
+        "summary": "Prometheus metrics (process-global, admin-gated)"
+      }
+    },
+    "/api/v1/admin/oauth2client/create": {
+      "post": {
+        "operationId": "openapi.idp.new_oauth2client",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.idp.NewOauth2Client"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Client created successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Create a new OAuth2 client"
+      }
+    },
+    "/api/v1/admin/oauth2client/delete": {
+      "post": {
+        "operationId": "openapi.idp.delete_oauth2client",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.idp.DeleteOauth2Client"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<String>"
+                }
+              }
+            },
+            "description": "Client deactivated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Deactivate (soft-delete) an OAuth2 client"
+      }
+    },
+    "/api/v1/admin/oauth2client/list": {
+      "get": {
+        "operationId": "openapi.idp.list_oauth2clients",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.idp.OAuth2ClientDto>>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "List all active OAuth2 clients for the current tenant"
+      }
+    },
+    "/api/v1/admin/oauth2client/meta": {
+      "post": {
+        "operationId": "openapi.oidc_ext.set_client_meta",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.oidc_ext.ClientMetaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Metadata saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Set extended OIDC metadata for an OAuth2 client"
+      }
+    },
+    "/api/v1/admin/oidc/config": {
+      "get": {
+        "operationId": "openapi.oidc_ext.oidc_config",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.oidc_ext.OidcTenantConfig>"
+                }
+              }
+            },
+            "description": "Current configuration"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Read tenant OIDC feature configuration"
+      },
+      "post": {
+        "operationId": "openapi.oidc_ext.set_oidc_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.oidc_ext.OidcTenantConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Configuration updated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Update tenant OIDC feature configuration"
+      }
+    },
+    "/api/v1/admin/policy/create": {
+      "post": {
+        "description": "The policy's domain is always the domain resolved from the request\n`Host` — any `domain` supplied in the body is ignored, so a\npolicy-admin of one domain cannot write policies naming another domain\nserved by the same tenant.\n\nThe created policy is inserted into both the database and the tenant's\nin-memory [`PolicyCache`] so it takes effect immediately for subsequent\nJWT verification.",
+        "operationId": "openapi.policy.add_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.policy.PolicyEntry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Policy created successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the role"
+          }
+        },
+        "summary": "Add policy to tenant"
+      }
+    },
+    "/api/v1/admin/policy/delete": {
+      "post": {
+        "description": "The policy is matched within the domain resolved from the request\n`Host`, never a client-supplied domain string.\n\nDeletes from the DB and evicts from the in-memory cache, keeping both\nin sync.",
+        "operationId": "openapi.policy.delete_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.policy.DeletePolicy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the role"
+          }
+        },
+        "summary": "Remove a policy from tenant"
+      }
+    },
+    "/api/v1/admin/policy/list": {
+      "get": {
+        "description": "Policies are read directly from the DB (not the cache) so the caller sees\nthe latest configuration. The `resource` field is flattened back from its\nsegmented storage form into a slash-joined path string.",
+        "operationId": "openapi.policy.all_policies",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.policy.PolicyEntry>>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "List all policies in a tenant"
+      }
+    },
+    "/api/v1/admin/provider/create": {
+      "post": {
+        "operationId": "openapi.social.add_provider",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.social.AddProvider"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Token exchange failed"
+          }
+        },
+        "summary": "Add external IdP"
+      }
+    },
+    "/api/v1/admin/provider/delete": {
+      "post": {
+        "operationId": "openapi.social.remove_provider",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.social.RemoveProvider"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Remove an external IdP"
+      }
+    },
+    "/api/v1/admin/provider/list": {
+      "get": {
+        "operationId": "openapi.social.all_providers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.social.SocialProvider>>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "List all external IdPs"
+      }
+    },
+    "/api/v1/admin/role/create": {
+      "post": {
+        "operationId": "openapi.role.add_role",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.role.AddRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Role created successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the role"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Role name already exists"
+          }
+        },
+        "summary": "Add role to tenant"
+      }
+    },
+    "/api/v1/admin/role/delete": {
+      "post": {
+        "operationId": "openapi.role.delete_role",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.role.DeleteRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the role"
+          }
+        },
+        "summary": "Remove a role from tenant"
+      }
+    },
+    "/api/v1/admin/role/list": {
+      "get": {
+        "operationId": "openapi.role.all_roles",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.role.RoleEntry>>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "List all roles in a tenant"
+      }
+    },
+    "/api/v1/admin/tenant/create": {
+      "post": {
+        "operationId": "openapi.admin.new_tenant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.admin.NewTenant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Tenant created successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Create a new tenant"
+      }
+    },
+    "/api/v1/admin/tenant/delete": {
+      "post": {
+        "operationId": "openapi.admin.remove_tenant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.admin.DeleteTenant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<String>"
+                }
+              }
+            },
+            "description": "Tenant deleted successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Delete a tenant (db backed up before removal)"
+      }
+    },
+    "/api/v1/admin/tenant/list": {
+      "get": {
+        "operationId": "openapi.admin.all_tenants",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<String>>"
+                }
+              }
+            },
+            "description": "All tenant names"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "List all tenants"
+      }
+    },
+    "/api/v1/admin/totp/list": {
+      "post": {
+        "operationId": "openapi.totp.list_totp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.totp.AllTotpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.totp.TotpEntry>>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Failed"
+          }
+        },
+        "summary": "Return all TOTP entries for a user"
+      }
+    },
+    "/api/v1/admin/totp/remove": {
+      "post": {
+        "operationId": "openapi.totp.remove_totp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.totp.RemoveTotpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Failed"
+          }
+        },
+        "summary": "Remove a TOTP entry"
+      }
+    },
+    "/api/v1/admin/user/activate": {
+      "post": {
+        "operationId": "openapi.user.activate_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.user.ActivateUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No verified session"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the target user"
+          }
+        },
+        "summary": "Activate/deactivate a user"
+      }
+    },
+    "/api/v1/admin/user/activate/self": {
+      "post": {
+        "operationId": "openapi.user.activate_self",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.user.ActivateSelf"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Activate/deactivate the user specified in JWT"
+      }
+    },
+    "/api/v1/admin/user/add_role": {
+      "post": {
+        "operationId": "openapi.user.add_role",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.user.AddRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the role"
+          }
+        },
+        "summary": "Add role to the user"
+      }
+    },
+    "/api/v1/admin/user/create": {
+      "post": {
+        "operationId": "openapi.user.add_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.user.AddUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "User created successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Add user to tenant"
+      }
+    },
+    "/api/v1/admin/user/delete": {
+      "post": {
+        "operationId": "openapi.user.delete_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.user.DeleteUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No verified session"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the target user"
+          }
+        },
+        "summary": "Remove a user from tenant"
+      }
+    },
+    "/api/v1/admin/user/delete/self": {
+      "post": {
+        "operationId": "openapi.user.delete_self",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Remove the user specified in JWT"
+      }
+    },
+    "/api/v1/admin/user/list": {
+      "get": {
+        "operationId": "openapi.user.all_users",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<String>>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "List all users in a tenant"
+      }
+    },
+    "/api/v1/admin/user/remove_email": {
+      "post": {
+        "operationId": "openapi.email.remove",
+        "parameters": [
+          {
+            "description": "User name",
+            "in": "query",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "User mobile",
+            "in": "query",
+            "name": "mobile",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Failed"
+          }
+        },
+        "summary": "Remove Magic Link"
+      }
+    },
+    "/api/v1/admin/user/remove_mobile": {
+      "post": {
+        "operationId": "openapi.otp.remove",
+        "parameters": [
+          {
+            "description": "User name",
+            "in": "query",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "User mobile",
+            "in": "query",
+            "name": "mobile",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Failed"
+          }
+        },
+        "summary": "Remove OTP"
+      }
+    },
+    "/api/v1/admin/user/remove_role": {
+      "post": {
+        "operationId": "openapi.user.remove_role",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.user.RemoveRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the role"
+          }
+        },
+        "summary": "Remove role from the user"
+      }
+    },
+    "/api/v1/admin/user/remove_social": {
+      "post": {
+        "operationId": "openapi.social.remove",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Failure"
+          }
+        },
+        "summary": "Remove OAuth2/OIDC authentication record"
+      }
+    },
+    "/api/v1/admin/user/roles": {
+      "get": {
+        "operationId": "openapi.user.user_roles",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.user.UserRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<String>>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "List all roles of the user"
+      }
+    },
+    "/api/v1/auth/email/add": {
+      "post": {
+        "operationId": "openapi.email.add",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.email.EmailAddRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Success — confirmation link sent"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "No valid session or failed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Per-recipient dispatch budget exhausted"
+          }
+        },
+        "summary": "Add an email address to the session's own account"
+      }
+    },
+    "/api/v1/auth/email/add/verify": {
+      "post": {
+        "operationId": "openapi.email.add_verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.email.EmailAddVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Success — email attached to the session's account"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "No valid session, unknown/consumed token, or the email was claimed in the meantime"
+          }
+        },
+        "summary": "Complete a session-gated email add"
+      }
+    },
+    "/api/v1/auth/email/request": {
+      "post": {
+        "operationId": "openapi.email.request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.email.ReqRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Failed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Per-recipient dispatch budget exhausted"
+          }
+        },
+        "summary": "Request Magic Link"
+      }
+    },
+    "/api/v1/auth/email/verify": {
+      "post": {
+        "operationId": "openapi.email.verify",
+        "parameters": [
+          {
+            "description": "Unique token",
+            "in": "query",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "User name",
+            "in": "query",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "User email",
+            "in": "query",
+            "name": "email",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Failed"
+          }
+        },
+        "summary": "Verify Magic Link"
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "openapi.verify.logout",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Authorized"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          }
+        },
+        "summary": "Logout, invalidate JWT"
+      }
+    },
+    "/api/v1/auth/otp/add": {
+      "post": {
+        "operationId": "openapi.otp.add",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.otp.MobileAddRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Success — SMS code sent"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "No valid session or failed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Per-recipient dispatch budget exhausted"
+          }
+        },
+        "summary": "Add a mobile number to the session's own account"
+      }
+    },
+    "/api/v1/auth/otp/add/verify": {
+      "post": {
+        "operationId": "openapi.otp.add_verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.otp.MobileAddVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Success — mobile attached to the session's account"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "No valid session, unknown/consumed token, wrong code, or the number was claimed in the meantime"
+          }
+        },
+        "summary": "Complete a session-gated mobile add"
+      }
+    },
+    "/api/v1/auth/otp/request": {
+      "post": {
+        "operationId": "openapi.otp.request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.otp.ReqRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Failed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Per-recipient dispatch budget exhausted"
+          }
+        },
+        "summary": "Request OTP"
+      }
+    },
+    "/api/v1/auth/otp/verify": {
+      "post": {
+        "operationId": "openapi.otp.verify",
+        "parameters": [
+          {
+            "description": "Unique token",
+            "in": "query",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "User name",
+            "in": "query",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "User mobile",
+            "in": "query",
+            "name": "mobile",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "OTP code",
+            "in": "query",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Failed"
+          }
+        },
+        "summary": "Verify OTP"
+      }
+    },
+    "/api/v1/auth/passkey/remove": {
+      "post": {
+        "description": "Requires an authenticated session; deactivates the caller's own passkeys only.",
+        "operationId": "openapi.passkey.remove",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<String>"
+                }
+              }
+            },
+            "description": "Passkeys deactivated"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "summary": "Deactivate all passkeys of the authenticated user"
+      }
+    },
+    "/api/v1/auth/passkey/request": {
+      "post": {
+        "description": "Initiates the WebAuthN passkey registration flow.",
+        "operationId": "openapi.passkey.request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.passkey.PasskeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.passkey.PasskeyResponse"
+                }
+              }
+            },
+            "description": "Registration started successfully"
+          },
+          "401": {
+            "description": "Failed or no tenant found"
+          }
+        },
+        "summary": "Request a new passkey registration challenge"
+      }
+    },
+    "/api/v1/auth/passkey/verify": {
+      "post": {
+        "description": "Validates the WebAuthN credential returned from the authenticator during login.",
+        "operationId": "openapi.passkey.verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.passkey.VerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<String>"
+                }
+              }
+            },
+            "description": "Login successful"
+          },
+          "401": {
+            "description": "Verification failed or expired token"
+          }
+        },
+        "summary": "Verify passkey registration/login"
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "openapi.verify.refresh",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<String>"
+                }
+              }
+            },
+            "description": "Authorized"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          }
+        },
+        "summary": "Refresh JWT"
+      }
+    },
+    "/api/v1/auth/social/redeem": {
+      "post": {
+        "operationId": "openapi.social.redeem",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.social.RedeemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "ok — session JWT issued"
+          },
+          "401": {
+            "description": "Unknown, expired, or already-redeemed code"
+          }
+        },
+        "summary": "Redeem a one-shot social login code for the session JWT"
+      }
+    },
+    "/api/v1/auth/social/{id}/link": {
+      "get": {
+        "operationId": "openapi.social.link",
+        "parameters": [
+          {
+            "description": "Provider id, e.g. `github`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to IdP auth page"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No valid session"
+          }
+        },
+        "summary": "Link an IdP identity to the session's own account"
+      },
+      "post": {
+        "operationId": "openapi.social.link",
+        "parameters": [
+          {
+            "description": "Provider id, e.g. `github`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to IdP auth page"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No valid session"
+          }
+        },
+        "summary": "Link an IdP identity to the session's own account"
+      }
+    },
+    "/api/v1/auth/social/{id}/request": {
+      "get": {
+        "operationId": "openapi.social.request",
+        "parameters": [
+          {
+            "description": "Provider id, e.g. `github`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to IdP auth page"
+          }
+        },
+        "summary": "Start social (OAuth2/OIDC) login via redirect to IdP"
+      },
+      "post": {
+        "operationId": "openapi.social.request",
+        "parameters": [
+          {
+            "description": "Provider id, e.g. `github`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to IdP auth page"
+          }
+        },
+        "summary": "Start social (OAuth2/OIDC) login via redirect to IdP"
+      }
+    },
+    "/api/v1/auth/social/{id}/verify": {
+      "get": {
+        "operationId": "openapi.social.verify",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to the login page with a one-shot login code"
+          },
+          "400": {
+            "description": "Missing code/state, invalid or expired state, or exchange/user failure"
+          },
+          "401": {
+            "description": "State mismatch — possible CSRF attack"
+          }
+        },
+        "summary": "Handle OAuth2/OIDC authorization callback from an IdP"
+      },
+      "post": {
+        "operationId": "openapi.social.verify",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to the login page with a one-shot login code"
+          },
+          "400": {
+            "description": "Missing code/state, invalid or expired state, or exchange/user failure"
+          },
+          "401": {
+            "description": "State mismatch — possible CSRF attack"
+          }
+        },
+        "summary": "Handle OAuth2/OIDC authorization callback from an IdP"
+      }
+    },
+    "/api/v1/auth/totp/enroll": {
+      "get": {
+        "operationId": "openapi.totp.enroll",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.totp.EnrollTotpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.totp.EnrollTotpResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Failed"
+          }
+        },
+        "summary": "Enroll TOTP"
+      },
+      "post": {
+        "operationId": "openapi.totp.enroll",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.totp.EnrollTotpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.totp.EnrollTotpResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Failed"
+          }
+        },
+        "summary": "Enroll TOTP"
+      }
+    },
+    "/api/v1/auth/totp/verify": {
+      "get": {
+        "operationId": "openapi.totp.verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.totp.VerifyTotpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<String>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Failed"
+          }
+        },
+        "summary": "Request Magic Link"
+      },
+      "post": {
+        "operationId": "openapi.totp.verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.totp.VerifyTotpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<String>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Failed"
+          }
+        },
+        "summary": "Request Magic Link"
+      }
+    },
+    "/api/v1/auth/verify": {
+      "get": {
+        "operationId": "openapi.verify.verify",
+        "responses": {
+          "200": {
+            "description": "Authorized"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "summary": "Verify JWT, entry for forward-auth"
+      },
+      "post": {
+        "operationId": "openapi.verify.verify",
+        "responses": {
+          "200": {
+            "description": "Authorized"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "summary": "Verify JWT, entry for forward-auth"
+      }
+    },
+    "/api/v1/health/live": {
+      "get": {
+        "operationId": "openapi.ops.live",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.ops.HealthyResponse"
+                }
+              }
+            },
+            "description": "Process is alive"
+          }
+        },
+        "summary": "Liveness probe"
+      }
+    },
+    "/api/v1/health/ready": {
+      "get": {
+        "description": "Deliberately takes NO tenant guard (README §6): probes must not\nserialize behind in-flight tenant requests, so this checks the\ntenant map without borrowing any tenant.",
+        "operationId": "openapi.ops.ready",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.ops.HealthyResponse"
+                }
+              }
+            },
+            "description": "Ready to serve"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.ops.HealthyResponse"
+                }
+              }
+            },
+            "description": "Not ready"
+          }
+        },
+        "summary": "Readiness probe"
+      }
+    },
+    "/api/v1/healthy": {
+      "get": {
+        "operationId": "openapi.ops.healthy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.ops.HealthyResponse"
+                }
+              }
+            },
+            "description": "Server is up"
+          }
+        },
+        "summary": "Shallow health check"
+      }
+    }
+  }
+}

@@ -1,0 +1,77 @@
+[package]
+name = "janux"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rsa = "0.9.10"
+salvo = { version = "*", features = ["full"] }
+toasty = { version = "*", features = ["turso", "postgresql", "jiff"] }
+toasty-cli = "*"
+anyhow = "*"
+tokio = { version = "*", features = ["full"] }
+tracing = { version = "*" }
+tracing-subscriber = { version = "*" }
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+gix = { version = "*" }
+rust-embed = "*"
+mime_guess = "*"
+webauthn-rs = "*"
+turso = "*"
+jiff = { version = "0.2", features = ["serde"] }
+toasty-driver-turso = "*"
+oauth2 = { version = "*", features = ["reqwest"] }
+openidconnect = { version = "*", features = ["reqwest"] }
+config = "*"
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "*", features = ["v7", "v4"] }
+moka = { version = "*", features = ["future"] }
+resend-rs = "*"
+sha2 = "*"
+hmac = "*"
+hex = "*"
+reqwest = "*"
+urlencoding = "*"
+rand = "0.10.1"
+tera = "2.0.0"
+url = "2.5.8"
+toml = "*"
+base64 = "*"
+chrono = "0.4"
+percent-encoding = "2.1"
+dashmap = "6.2.1"
+totp-rs = { version = "5.7.2", features = ["qr", "gen_secret", "otpauth"] }
+jsonwebtoken = "10.4.0"
+rcgen = "0.14.8"
+aes-gcm = "0.10"
+argon2 = "0.5.3"
+prometheus = "0.13"
+
+# ─── Test / dev dependencies ─────────────────────────────────────────────
+[dev-dependencies]
+tokio = { version = "*", features = ["full"] }
+reqwest = { version = "*", features = ["json"] }
+serde_json = "*"
+uuid = { version = "*", features = ["v4"] }
+config = "*"
+tracing-subscriber = "*"
+hex = "*"
+sha2 = "*"
+base64 = "*"
+dashmap = "6.2.1"
+toasty = { version = "*", features = ["turso"] }
+toasty-driver-turso = "*"
+serde = { version = "*", features = ["derive"] }
+globset = "*"
+tempfile = "*"
+
+# ─── Test targets ──────────────────────────────────────────────────────
+[[test]]
+name = "all_tests"
+path = "tests/e2e/all_tests.rs"
+
+# ─── Release profile: small production binary ──────────────────────────
+[profile.release]
+strip = true   # drop the symbol table (~tens of MB on a binary this size)
+lto = "thin"   # cross-crate dead-code elimination; cheaper than fat LTO

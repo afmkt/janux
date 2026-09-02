@@ -1,0 +1,136 @@
+# ================================================================
+# Seed configuration: populates tenant DB records on startup.
+# Load order: `janux -c base -c seed` (the default).
+#
+# Each [[seed]] entry creates (or updates) one tenant: its domains,
+# built-in roles, bootstrap users, RBAC policies, and provider
+# config. Seeding is idempotent — roles/users/policies are upserted,
+# so the server can reboot against the same file.
+#
+# Built-in role model (gaps.md G-10..G-12, x.md):
+#   root  — cross-tenant platform operator: tenant lifecycle only.
+#   admin — per-tenant operator: everything inside its own tenant.
+#   user  — regular account: self-service endpoints.
+#   guest — authenticated, no admin grants (default-deny placeholder
+#           for app-level policies added later via admin/policy/*).
+#
+# Roles live in the per-tenant DB. "Cross-tenant" works because the
+# tenant/* handlers act globally once the policy gate passes, and the
+# gate is evaluated in the caller's home tenant — the one seeding
+# `root` below. Tenants created later at runtime need their own
+# roles/policies (via the admin API).
+#
+# Policy notes:
+# - `protect` is default-deny: anything not listed here is rejected.
+# - Resource paths match exactly (no wildcards, G-43), so every
+#   admin endpoint gets its own row.
+# - `action` omitted = all HTTP methods; the router still enforces
+#   the real method (405 otherwise).
+# - Flip mfa = true on destructive rows once TOTP step-up is part of
+#   the admin workflow.
+#
+# SECURITY: development bootstrap only. Seeded users carry no
+# credential — the first magic-link / SMS-OTP verify performed with
+# username "admin" attaches that credential to the admin account, so
+# never run this seed on a publicly reachable host.
+# ================================================================
+
+[[seed]]
+name = "localhost"
+domains = [{ id = "localhost", cors = [] }, { id = "0.0.0.0", cors = [] }]
+
+# Pre-built roles. Created before users and policies so that
+# policy_create can resolve them.
+roles = ["root", "admin", "scim", "user", "guest"]
+
+# Bootstrap accounts (no credential attached — see SECURITY note).
+users = [
+    { id = "admin", active = true, roles = ["root", "admin", "user"] },
+    { id = "demo", active = true, roles = ["user"] },
+]
+
+policies = [
+    # ── root: cross-tenant lifecycle ──────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/tenant/list", role = "root", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/tenant/create", role = "root", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/tenant/delete", role = "root", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: domains ────────────────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/domain/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/domain/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/domain/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: users ──────────────────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/user/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/activate", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/add_role", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/remove_role", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/remove_email", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/remove_mobile", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/remove_social", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/roles", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: roles ──────────────────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/role/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/role/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/role/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: social providers ───────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/provider/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/provider/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/provider/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: policies ───────────────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/policy/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/policy/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/policy/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: signing keys ───────────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/key/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/key/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/key/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: TOTP administration ────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/totp/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/totp/remove", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: OIDC relying parties ───────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/oauth2client/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/oauth2client/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/oauth2client/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/oauth2client/meta", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: OIDC feature switches (Dynamic Client Registration) ────
+    { domain = "localhost", resource = "/api/v1/admin/oidc/config", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: observability (process-global telemetry) ───────────────
+    { domain = "localhost", resource = "/api/v1/admin/metrics", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── user: self-service (handlers act on the caller's own account) ─
+    { domain = "localhost", resource = "/api/v1/admin/user/activate/self", role = "user", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/delete/self", role = "user", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── scim: machine provisioning (G-S1/G-S2). `{id}` is the canonical
+    #    resource the SCIM protect hoop substitutes for the dynamic path
+    #    segment — policies match exactly (G-43), so one row covers all
+    #    resource instances. ─
+    { domain = "localhost", resource = "/scim/v2/Users", role = "scim", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/scim/v2/Users/{id}", role = "scim", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+]
+
+[seed.resend]
+from = "noreply@example.com"
+resend_key = "your-resend-api-key"
+template = "./email/verify.html"
+verify_url = "http://localhost/api/v1/auth/email/landing"
+
+
+[seed.alisms]
+api_secret = "your-sms-api-secret"
+api_key = "your-sms-api-key"
+template_code = "your-template-code"
+sign_name = "Your Company"
+region_id = "cn-shanghai"
+endpoint = "dysmsapi.aliyuncs.com"

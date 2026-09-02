@@ -1,0 +1,2601 @@
+
+<!DOCTYPE html>
+
+
+
+
+
+
+
+<html data-bs-theme="auto" lang="en">
+    <head>
+        
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <title>
+            
+                RFC 6750 - The OAuth 2.0 Authorization Framework: Bearer Token Usage
+            
+        </title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://static.ietf.org/fonts/inter/import.css" rel="stylesheet">
+        <link href="https://static.ietf.org/fonts/noto-sans-mono/import.css" rel="stylesheet">
+        
+            <link rel="stylesheet" href="https://static.ietf.org/dt/12.69.0/ietf/css/document_html_referenced.css">
+            
+            <script type="module" crossorigin="" src="https://static.ietf.org/dt/12.69.0/assets/embedded-f7f04c22.js"></script>
+<link href="https://static.ietf.org/dt/12.69.0/assets/create-pinia-singleton-e1887cc7.js" type="text/javascript" crossorigin="anonymous" rel="modulepreload" as="script" />
+<link href="https://static.ietf.org/dt/12.69.0/assets/Scrollbar-f0f599a2.js" type="text/javascript" crossorigin="anonymous" rel="modulepreload" as="script" />
+            <script src="https://static.ietf.org/dt/12.69.0/ietf/js/document_html.js"></script>
+            <script src="https://static.ietf.org/dt/12.69.0/ietf/js/theme.js"></script>
+        
+        <link rel="alternate" type="application/atom+xml" title="Document changes" href="/feed/document-changes/rfc6750/">
+        <meta name="description"
+            
+                content="The OAuth 2.0 Authorization Framework: Bearer Token Usage (RFC 6750, )"
+            >
+        
+
+<link rel="apple-touch-icon"
+      sizes="180x180"
+      href="https://static.ietf.org/dt/12.69.0/ietf/images/ietf-logo-nor-180.png">
+<link rel="icon"
+      sizes="32x32"
+      href="https://static.ietf.org/dt/12.69.0/ietf/images/ietf-logo-nor-32.png">
+<link rel="icon"
+      sizes="16x16"
+      href="https://static.ietf.org/dt/12.69.0/ietf/images/ietf-logo-nor-16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon"
+      href="https://static.ietf.org/dt/12.69.0/ietf/images/ietf-logo-nor-mask.svg"
+      color="#ffffff">
+<meta name="msapplication-TileColor"
+      content="#ffffff">
+<meta name="theme-color"
+      content="#ffffff">
+        
+
+
+
+
+<meta property="og:title" content="RFC 6750: The OAuth 2.0 Authorization Framework: Bearer Token Usage">
+<meta property="og:url" content="https://datatracker.ietf.org/doc/html/rfc6750">
+<link rel="canonical" href="https://datatracker.ietf.org/doc/html/rfc6750">
+<meta property="og:site_name" content="IETF Datatracker">
+<meta property="og:description" content="This specification describes how to use bearer tokens in HTTP requests to access OAuth 2.0 protected resources. Any party in possession of a bearer token (a &quot;bearer&quot;) can use it to get access to the associated resources (without demonstrating possession of a cryptographic key). To prevent misuse, bearer tokens need to be protected from disclosure in storage and in transport. [STANDARDS-TRACK]">
+<meta property="og:type" content="article">
+
+<meta property="og:image" content="https://static.ietf.org/dt/12.69.0/ietf/images/ietf-logo-card.png">
+<meta property="og:image:alt" content="Logo of the IETF">
+<meta property="article:section" content="IETF - Internet Engineering Task Force">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+
+<meta property="article:author" content="Michael B. Jones">
+<meta property="article:author" content="Dick Hardt">
+
+
+
+        
+        <style>
+            
+            .diff-form .select2-selection__rendered {
+                direction: rtl;
+                text-align: left;
+            }
+        </style>
+    </head>
+    <body>
+        
+        <noscript><iframe class="status" title="Site status" src="/status/latest"></iframe></noscript>
+<div class="vue-embed" data-component="Status"></div>
+        <div class="btn-toolbar sidebar-toolbar position-fixed top-0 end-0 m-2 m-lg-3 d-print-none">
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm me-1 dropdown-toggle d-flex align-items-center"
+                    id="bd-theme" type="button" aria-expanded="false" data-bs-toggle="dropdown"
+                    aria-label="Toggle theme">
+                        <i class="theme-icon-active bi bi-circle-half"></i>
+                </button>
+
+                <ul class="dropdown-menu" aria-labelledby="bd-theme">
+                    <li>
+                        <button type="button" class="dropdown-item d-flex align-items-center"
+                            data-bs-theme-value="light" aria-pressed="false">
+                            <i class="me-2 opacity-50 theme-icon bi bi-sun-fill"></i>
+                            Light<i class="bi bi-check2 ms-auto d-none"></i>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="dropdown-item d-flex align-items-center"
+                            data-bs-theme-value="dark" aria-pressed="false">
+                            <i class="me-2 opacity-50 theme-icon bi bi-moon-stars-fill"></i>
+                            Dark<i class="bi bi-check2 ms-auto d-none"></i>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="dropdown-item d-flex align-items-center active"
+                            data-bs-theme-value="auto" aria-pressed="true">
+                            <i class="me-2 opacity-50 theme-icon bi bi-circle-half"></i>
+                            Auto<i class="bi bi-check2 ms-auto d-none"></i>
+                        </button>
+                    </li>
+                </ul>
+            </div>
+            <button class="btn btn-outline-secondary btn-sm sidebar-toggle"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#sidebar"
+                    aria-expanded="true"
+                    aria-controls="sidebar"
+                    aria-label="Toggle metadata sidebar"
+                    title="Toggle metadata sidebar">
+            <i class="bi bi-arrow-bar-left sidebar-shown"></i>
+            <i class="bi bi-arrow-bar-right sidebar-collapsed"></i>
+            </button>
+        </div>
+        <nav class="navbar bg-light-subtle px-1 fixed-top d-print-none d-md-none">
+            <a class="nav-link ps-1"
+               href="/doc/rfc6750/">
+                
+                    RFC 6750
+                
+                <br class="d-sm-none">
+
+                <span class="ms-sm-3 badge rounded-pill badge-ps">
+                    
+                        Proposed Standard
+                    
+                </span>
+            </a>
+            <button class="navbar-toggler p-1"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#docinfo-collapse"
+                    aria-controls="docinfo-collapse"
+                    aria-expanded="false"
+                    aria-label="Show document information">
+                <span class="navbar-toggler-icon small"></span>
+            </button>
+            <div class="navbar-nav navbar-nav-scroll overscroll-none collapse pt-1" id="docinfo-collapse">
+                <div class="bg-light-subtle p-0">
+                    <table class="table table-sm table-borderless small">
+                        <tbody class="meta align-top">
+                            <tr>
+                                <th scope="row"></th>
+                                <th scope="row">Title</th>
+                                <td class="edit"></td>
+                                <td>The OAuth 2.0 Authorization Framework: Bearer Token Usage</td>
+                            </tr>
+                        </tbody>
+                        
+
+
+
+
+
+
+
+<tbody class="meta align-top ">
+    <tr>
+        <th scope="row">Document</th>
+        <th scope="row">Document type</th>
+        <td class="edit"></td>
+        <td>
+            
+
+
+
+
+
+<span class="text-success">RFC
+    
+    - Proposed Standard
+    
+</span>
+
+            
+                
+                    <br>October 2012
+                
+                <br>
+                
+                    <a class="btn btn-primary btn-sm my-1"
+                       href="https://www.rfc-editor.org/errata_search.php?rfc=6750" title="Click to view errata." rel="nofollow">
+                        View errata
+                    </a>
+                
+                
+                    <a class="btn btn-sm btn-warning"
+                       title="Click to report an error in the document."
+                       href="https://www.rfc-editor.org/errata.php#reportnew"
+                       target="_blank">
+                        Report errata
+                    </a>
+                
+                
+                    <a title="Click to view IPR declarations." class="btn btn-warning btn-sm my-1" href="/ipr/search/?submit=draft&amp;id=rfc6750">IPR</a>
+                
+                
+                <div>Updated by <a href="/doc/html/rfc8996" title="Deprecating TLS 1.0 and TLS 1.1">RFC 8996</a>, <a href="/doc/html/rfc9700" title="Best Current Practice for OAuth 2.0 Security">RFC 9700</a></div>
+                
+                
+                
+                
+                
+                    <div>
+                        Was
+                        <a href="/doc/draft-ietf-oauth-v2-bearer/23/">draft-ietf-oauth-v2-bearer</a>
+                        (<a href="/wg/oauth/about/">oauth WG</a>)
+                    </div>
+                
+            
+            
+            
+                
+
+
+
+
+    
+
+
+            
+        </td>
+    </tr>
+    
+        <tr>
+            <td></td>
+            <th scope="row">Select version</th>
+            <td class="edit"></td>
+            <td>
+                
+
+
+
+    <ul class="revision-list pagination pagination-sm text-center flex-wrap my-0">
+        
+            
+            
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-17"
+                        rel="nofollow">
+                            17
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-18"
+                        rel="nofollow">
+                            18
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-19"
+                        rel="nofollow">
+                            19
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-20"
+                        rel="nofollow">
+                            20
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-21"
+                        rel="nofollow">
+                            21
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-22"
+                        rel="nofollow">
+                            22
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-23"
+                        rel="nofollow">
+                            23
+                        </a>
+                    </li>
+                
+            
+            
+            <li class="page-item rfc active">
+                <a class="page-link"
+                href="/doc/html/rfc6750">
+                    RFC 6750
+                </a>
+            </li>
+        
+    </ul>
+
+            </td>
+        </tr>
+        
+            <tr>
+                <td></td>
+                <th scope="row">Compare versions</th>
+                <td class="edit"></td>
+                <td>
+                    
+
+
+
+<form class="form-horizontal diff-form"
+      action="https://author-tools.ietf.org/iddiff"
+      method="get"
+      target="_blank">
+
+            <select class="form-select form-select-sm mb-1 select2-field"
+                    data-max-entries="1"
+                    data-width="resolve"
+                    data-allow-clear="false"
+                    data-minimum-input-length="0"
+                    aria-label="From revision"
+                    name="url1">
+                
+                    <option value="rfc6750">
+                        RFC 6750
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-23" selected>
+                        draft-ietf-oauth-v2-bearer-23
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-22">
+                        draft-ietf-oauth-v2-bearer-22
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-21">
+                        draft-ietf-oauth-v2-bearer-21
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-20">
+                        draft-ietf-oauth-v2-bearer-20
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-19">
+                        draft-ietf-oauth-v2-bearer-19
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-18">
+                        draft-ietf-oauth-v2-bearer-18
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-17">
+                        draft-ietf-oauth-v2-bearer-17
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-16">
+                        draft-ietf-oauth-v2-bearer-16
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-15">
+                        draft-ietf-oauth-v2-bearer-15
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-14">
+                        draft-ietf-oauth-v2-bearer-14
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-13">
+                        draft-ietf-oauth-v2-bearer-13
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-12">
+                        draft-ietf-oauth-v2-bearer-12
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-11">
+                        draft-ietf-oauth-v2-bearer-11
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-10">
+                        draft-ietf-oauth-v2-bearer-10
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-09">
+                        draft-ietf-oauth-v2-bearer-09
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-08">
+                        draft-ietf-oauth-v2-bearer-08
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-07">
+                        draft-ietf-oauth-v2-bearer-07
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-06">
+                        draft-ietf-oauth-v2-bearer-06
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-05">
+                        draft-ietf-oauth-v2-bearer-05
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-04">
+                        draft-ietf-oauth-v2-bearer-04
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-03">
+                        draft-ietf-oauth-v2-bearer-03
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-02">
+                        draft-ietf-oauth-v2-bearer-02
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-01">
+                        draft-ietf-oauth-v2-bearer-01
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-00">
+                        draft-ietf-oauth-v2-bearer-00
+                        
+                    </option>
+                
+                
+            </select>
+
+            <select class="form-select form-select-sm mb-1 select2-field"
+                    data-max-entries="1"
+                    data-width="resolve"
+                    data-allow-clear="false"
+                    data-minimum-input-length="0"
+                    aria-label="To revision"
+                    name="url2">
+                
+                    <option value="rfc6750" selected>
+                        RFC 6750
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-23">
+                        draft-ietf-oauth-v2-bearer-23
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-22">
+                        draft-ietf-oauth-v2-bearer-22
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-21">
+                        draft-ietf-oauth-v2-bearer-21
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-20">
+                        draft-ietf-oauth-v2-bearer-20
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-19">
+                        draft-ietf-oauth-v2-bearer-19
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-18">
+                        draft-ietf-oauth-v2-bearer-18
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-17">
+                        draft-ietf-oauth-v2-bearer-17
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-16">
+                        draft-ietf-oauth-v2-bearer-16
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-15">
+                        draft-ietf-oauth-v2-bearer-15
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-14">
+                        draft-ietf-oauth-v2-bearer-14
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-13">
+                        draft-ietf-oauth-v2-bearer-13
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-12">
+                        draft-ietf-oauth-v2-bearer-12
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-11">
+                        draft-ietf-oauth-v2-bearer-11
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-10">
+                        draft-ietf-oauth-v2-bearer-10
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-09">
+                        draft-ietf-oauth-v2-bearer-09
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-08">
+                        draft-ietf-oauth-v2-bearer-08
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-07">
+                        draft-ietf-oauth-v2-bearer-07
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-06">
+                        draft-ietf-oauth-v2-bearer-06
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-05">
+                        draft-ietf-oauth-v2-bearer-05
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-04">
+                        draft-ietf-oauth-v2-bearer-04
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-03">
+                        draft-ietf-oauth-v2-bearer-03
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-02">
+                        draft-ietf-oauth-v2-bearer-02
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-01">
+                        draft-ietf-oauth-v2-bearer-01
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-00">
+                        draft-ietf-oauth-v2-bearer-00
+                        
+                    </option>
+                
+                
+            </select>
+
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    value="--html"
+                    name="difftype">
+                Side-by-side
+            </button>
+            
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    value="--hwdiff"
+                    name="difftype">
+                Inline
+            </button>
+
+</form>
+                </td>
+            </tr>
+        
+    
+    <tr>
+        <td></td>
+        <th scope="row">Authors</th>
+        <td class="edit">
+            
+        </td>
+        <td>
+            
+            
+                <span ><a 
+           title="Datatracker profile of Michael B. Jones"
+            href="/person/michael_b_jones@hotmail.com" >M. Jones</a> <a 
+               href="mailto:michael_b_jones%40hotmail.com"
+               aria-label="Compose email to michael_b_jones@hotmail.com"
+               title="Compose email to michael_b_jones@hotmail.com">
+                <i class="bi bi-envelope"></i></a></span>,
+            
+                <span ><a 
+           title="Datatracker profile of Dick Hardt"
+            href="/person/dick.hardt@gmail.com" >D. Hardt</a> <a 
+               href="mailto:dick.hardt%40gmail.com"
+               aria-label="Compose email to dick.hardt@gmail.com"
+               title="Compose email to dick.hardt@gmail.com">
+                <i class="bi bi-envelope"></i></a></span>
+            
+            
+                <br>
+                <a class="btn btn-primary btn-sm mt-1" href="mailto:rfc6750@ietf.org?subject=rfc6750" title="Send email to the document authors">Email authors</a>
+            
+        </td>
+    </tr>
+    
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            RFC stream
+        </th>
+        <td class="edit">
+            
+        </td>
+        <td >
+            
+                
+                
+                    
+                        
+
+
+
+<img alt="IETF Logo"
+     class="d-lm-none w-25 mt-1"
+     
+     
+        
+             src="https://static.ietf.org/dt/12.69.0/ietf/images/ietf-logo-nor-white.svg"
+        
+     
+     >
+
+<img alt="IETF Logo"
+     class="d-dm-none w-25 mt-1"
+     
+     
+        
+             src="https://static.ietf.org/dt/12.69.0/ietf/images/ietf-logo-nor.svg"
+        
+     
+     >
+                    
+                
+                
+            
+        </td>
+    </tr>
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            Other formats
+        </th>
+        <td class="edit">
+        </td>
+        <td>
+            
+                
+    <div class="buttonlist">
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.rfc-editor.org/rfc/rfc6750.txt">
+            
+                <i class="bi bi-file-text"></i> txt
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.rfc-editor.org/rfc/rfc6750.html">
+            
+                <i class="bi bi-file-code"></i> html
+            
+        </a>
+        
+    
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="/doc/rfc6750/bibtex/">
+            
+                <i class="bi bi-file-ruled"></i> bibtex
+            
+        </a>
+        
+    
+</div>
+
+            
+        </td>
+    </tr>
+    
+    
+        
+            <tr>
+                <td>
+                </td>
+                <th scope="row">
+                    Additional resources
+                </th>
+                <td class="edit">
+                    
+                </td>
+                <td>
+                    
+                        
+                        
+                            
+                                <a href="https://mailarchive.ietf.org/arch/browse/oauth/?q=rfc6750 OR %22draft-ietf-oauth-v2-bearer%22">
+                                    Mailing list discussion
+                                </a>
+                            
+                        
+                    
+                </td>
+            </tr>
+        
+    
+</tbody>
+                        <tr>
+                            <th scope="row"></th>
+                            <th scope="row"></th>
+                            <td class="edit"></td>
+                            <td>
+                                <a class="btn btn-sm btn-warning mb-3"
+                                target="_blank"
+                                href="https://github.com/ietf-tools/datatracker/issues/new/choose">
+                                    Report a bug
+                                    <i class="bi bi-bug"></i>
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </nav>
+        <div class="row g-0">
+            <div class="col-md-9 d-flex justify-content-center lh-sm"
+                 data-bs-spy="scroll"
+                 data-bs-target="#toc-nav"
+                 data-bs-smooth-scroll="true"
+                 tabindex="0"
+                 id="content">
+                
+                    <div class="rfcmarkup">
+                        <br class="noprint">
+                        <!-- [html-validate-disable-block attr-quotes, void-style, element-permitted-content, heading-level -- FIXME: rfcmarkup/rfc2html generates HTML with issues] -->
+                        <div class="rfcmarkup"><pre>Internet Engineering Task Force (IETF)                          M. Jones
+Request for Comments: 6750                                     Microsoft
+Category: Standards Track                                       D. Hardt
+ISSN: 2070-1721                                              Independent
+                                                            October 2012
+
+
+       <h1>The OAuth 2.0 Authorization Framework: Bearer Token Usage</h1>
+
+Abstract
+
+   This specification describes how to use bearer tokens in HTTP
+   requests to access OAuth 2.0 protected resources.  Any party in
+   possession of a bearer token (a &quot;bearer&quot;) can use it to get access to
+   the associated resources (without demonstrating possession of a
+   cryptographic key).  To prevent misuse, bearer tokens need to be
+   protected from disclosure in storage and in transport.
+
+Status of This Memo
+
+   This is an Internet Standards Track document.
+
+   This document is a product of the Internet Engineering Task Force
+   (IETF).  It represents the consensus of the IETF community.  It has
+   received public review and has been approved for publication by the
+   Internet Engineering Steering Group (IESG).  Further information on
+   Internet Standards is available in <a href="/doc/html/rfc5741#section-2">Section&nbsp;2 of RFC 5741</a>.
+
+   Information about the current status of this document, any errata,
+   and how to provide feedback on it may be obtained at
+   <a href="http://www.rfc-editor.org/info/rfc6750">http://www.rfc-editor.org/info/rfc6750</a>.
+
+Copyright Notice
+
+   Copyright (c) 2012 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to <a href="/doc/html/bcp78">BCP 78</a> and the IETF Trust&#x27;s Legal
+   Provisions Relating to IETF Documents
+   (<a href="http://trustee.ietf.org/license-info">http://trustee.ietf.org/license-info</a>) in effect on the date of
+   publication of this document.  Please review these documents
+   carefully, as they describe your rights and restrictions with respect
+   to this document.  Code Components extracted from this document must
+   include Simplified BSD License text as described in Section 4.e of
+   the Trust Legal Provisions and are provided without warranty as
+   described in the Simplified BSD License.
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                    [Page 1]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-2"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+Table of Contents
+
+   <a href="#section-1">1</a>. Introduction ....................................................<a href="#page-2">2</a>
+      <a href="#section-1.1">1.1</a>. Notational Conventions .....................................<a href="#page-3">3</a>
+      <a href="#section-1.2">1.2</a>. Terminology ................................................<a href="#page-3">3</a>
+      <a href="#section-1.3">1.3</a>. Overview ...................................................<a href="#page-3">3</a>
+   <a href="#section-2">2</a>. Authenticated Requests ..........................................<a href="#page-4">4</a>
+      <a href="#section-2.1">2.1</a>. Authorization Request Header Field .........................<a href="#page-5">5</a>
+      <a href="#section-2.2">2.2</a>. Form-Encoded Body Parameter ................................<a href="#page-5">5</a>
+      <a href="#section-2.3">2.3</a>. URI Query Parameter ........................................<a href="#page-6">6</a>
+   <a href="#section-3">3</a>. The WWW-Authenticate Response Header Field ......................<a href="#page-7">7</a>
+      <a href="#section-3.1">3.1</a>. Error Codes ................................................<a href="#page-9">9</a>
+   <a href="#section-4">4</a>. Example Access Token Response ..................................<a href="#page-10">10</a>
+   <a href="#section-5">5</a>. Security Considerations ........................................<a href="#page-10">10</a>
+      <a href="#section-5.1">5.1</a>. Security Threats ..........................................<a href="#page-10">10</a>
+      <a href="#section-5.2">5.2</a>. Threat Mitigation .........................................<a href="#page-11">11</a>
+      <a href="#section-5.3">5.3</a>. Summary of Recommendations ................................<a href="#page-13">13</a>
+   <a href="#section-6">6</a>. IANA Considerations ............................................<a href="#page-14">14</a>
+      <a href="#section-6.1">6.1</a>. OAuth Access Token Type Registration ......................<a href="#page-14">14</a>
+           <a href="#section-6.1.1">6.1.1</a>. The &quot;Bearer&quot; OAuth Access Token Type ...............<a href="#page-14">14</a>
+      <a href="#section-6.2">6.2</a>. OAuth Extensions Error Registration .......................<a href="#page-14">14</a>
+           <a href="#section-6.2.1">6.2.1</a>. The &quot;invalid_request&quot; Error Value ..................<a href="#page-14">14</a>
+           <a href="#section-6.2.2">6.2.2</a>. The &quot;invalid_token&quot; Error Value ....................<a href="#page-15">15</a>
+           <a href="#section-6.2.3">6.2.3</a>. The &quot;insufficient_scope&quot; Error Value ...............<a href="#page-15">15</a>
+   <a href="#section-7">7</a>. References .....................................................<a href="#page-15">15</a>
+      <a href="#section-7.1">7.1</a>. Normative References ......................................<a href="#page-15">15</a>
+      <a href="#section-7.2">7.2</a>. Informative References ....................................<a href="#page-17">17</a>
+   <a href="#appendix-A">Appendix A</a>. Acknowledgements ......................................<a href="#page-18">18</a>
+
+<h2><a class="selflink" id="section-1" href="#section-1">1</a>.  Introduction</h2>
+
+   OAuth enables clients to access protected resources by obtaining an
+   access token, which is defined in &quot;The OAuth 2.0 Authorization
+   Framework&quot; [<a href="/doc/html/rfc6749" title="&quot;The OAuth 2.0 Authorization Framework&quot;">RFC6749</a>] as &quot;a string representing an access
+   authorization issued to the client&quot;, rather than using the resource
+   owner&#x27;s credentials directly.
+
+   Tokens are issued to clients by an authorization server with the
+   approval of the resource owner.  The client uses the access token to
+   access the protected resources hosted by the resource server.  This
+   specification describes how to make protected resource requests when
+   the OAuth access token is a bearer token.
+
+   This specification defines the use of bearer tokens over HTTP/1.1
+   [<a href="/doc/html/rfc2616" title="&quot;Hypertext Transfer Protocol -- HTTP/1.1&quot;">RFC2616</a>] using Transport Layer Security (TLS) [<a href="/doc/html/rfc5246" title="&quot;The Transport Layer Security (TLS) Protocol Version 1.2&quot;">RFC5246</a>] to access
+   protected resources.  TLS is mandatory to implement and use with this
+   specification; other specifications may extend this specification for
+   use with other protocols.  While designed for use with access tokens
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                    [Page 2]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-3"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+   resulting from OAuth 2.0 authorization [<a href="/doc/html/rfc6749" title="&quot;The OAuth 2.0 Authorization Framework&quot;">RFC6749</a>] flows to access
+   OAuth protected resources, this specification actually defines a
+   general HTTP authorization method that can be used with bearer tokens
+   from any source to access any resources protected by those bearer
+   tokens.  The Bearer authentication scheme is intended primarily for
+   server authentication using the WWW-Authenticate and Authorization
+   HTTP headers but does not preclude its use for proxy authentication.
+
+<h3><a class="selflink" id="section-1.1" href="#section-1.1">1.1</a>.  Notational Conventions</h3>
+
+   The key words &quot;MUST&quot;, &quot;MUST NOT&quot;, &quot;REQUIRED&quot;, &quot;SHALL&quot;, &quot;SHALL NOT&quot;,
+   &quot;SHOULD&quot;, &quot;SHOULD NOT&quot;, &quot;RECOMMENDED&quot;, &quot;MAY&quot;, and &quot;OPTIONAL&quot; in this
+   document are to be interpreted as described in &quot;Key words for use in
+   RFCs to Indicate Requirement Levels&quot; [<a href="/doc/html/rfc2119" title="&quot;Key words for use in RFCs to Indicate Requirement Levels&quot;">RFC2119</a>].
+
+   This document uses the Augmented Backus-Naur Form (ABNF) notation of
+   [<a href="/doc/html/rfc5234" title="&quot;Augmented BNF for Syntax Specifications: ABNF&quot;">RFC5234</a>].  Additionally, the following rules are included from
+   HTTP/1.1 [<a href="/doc/html/rfc2617" title="&quot;HTTP Authentication: Basic and Digest Access Authentication&quot;">RFC2617</a>]: auth-param and auth-scheme; and from &quot;Uniform
+   Resource Identifier (URI): Generic Syntax&quot; [<a href="/doc/html/rfc3986" title="&quot;Uniform Resource Identifier (URI): Generic Syntax&quot;">RFC3986</a>]: URI-reference.
+
+   Unless otherwise noted, all the protocol parameter names and values
+   are case sensitive.
+
+<h3><a class="selflink" id="section-1.2" href="#section-1.2">1.2</a>.  Terminology</h3>
+
+   Bearer Token
+      A security token with the property that any party in possession of
+      the token (a &quot;bearer&quot;) can use the token in any way that any other
+      party in possession of it can.  Using a bearer token does not
+      require a bearer to prove possession of cryptographic key material
+      (proof-of-possession).
+
+   All other terms are as defined in &quot;The OAuth 2.0 Authorization
+   Framework&quot; [<a href="/doc/html/rfc6749" title="&quot;The OAuth 2.0 Authorization Framework&quot;">RFC6749</a>].
+
+<h3><a class="selflink" id="section-1.3" href="#section-1.3">1.3</a>.  Overview</h3>
+
+   OAuth provides a method for clients to access a protected resource on
+   behalf of a resource owner.  In the general case, before a client can
+   access a protected resource, it must first obtain an authorization
+   grant from the resource owner and then exchange the authorization
+   grant for an access token.  The access token represents the grant&#x27;s
+   scope, duration, and other attributes granted by the authorization
+   grant.  The client accesses the protected resource by presenting the
+   access token to the resource server.  In some cases, a client can
+   directly present its own credentials to an authorization server to
+   obtain an access token without having to first obtain an
+   authorization grant from a resource owner.
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                    [Page 3]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-4"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+   The access token provides an abstraction, replacing different
+   authorization constructs (e.g., username and password, assertion) for
+   a single token understood by the resource server.  This abstraction
+   enables issuing access tokens valid for a short time period, as well
+   as removing the resource server&#x27;s need to understand a wide range of
+   authentication schemes.
+
+     +--------+                               +---------------+
+     |        |--(A)- Authorization Request -&gt;|   Resource    |
+     |        |                               |     Owner     |
+     |        |&lt;-(B)-- Authorization Grant ---|               |
+     |        |                               +---------------+
+     |        |
+     |        |                               +---------------+
+     |        |--(C)-- Authorization Grant --&gt;| Authorization |
+     | Client |                               |     Server    |
+     |        |&lt;-(D)----- Access Token -------|               |
+     |        |                               +---------------+
+     |        |
+     |        |                               +---------------+
+     |        |--(E)----- Access Token ------&gt;|    Resource   |
+     |        |                               |     Server    |
+     |        |&lt;-(F)--- Protected Resource ---|               |
+     +--------+                               +---------------+
+
+                     Figure 1: Abstract Protocol Flow
+
+   The abstract OAuth 2.0 flow illustrated in Figure 1 describes the
+   interaction between the client, resource owner, authorization server,
+   and resource server (described in [<a href="/doc/html/rfc6749" title="&quot;The OAuth 2.0 Authorization Framework&quot;">RFC6749</a>]).  The following two
+   steps are specified within this document:
+
+   (E)  The client requests the protected resource from the resource
+        server and authenticates by presenting the access token.
+
+   (F)  The resource server validates the access token, and if valid,
+        serves the request.
+
+   This document also imposes semantic requirements upon the access
+   token returned in step (D).
+
+<h2><a class="selflink" id="section-2" href="#section-2">2</a>.  Authenticated Requests</h2>
+
+   This section defines three methods of sending bearer access tokens in
+   resource requests to resource servers.  Clients MUST NOT use more
+   than one method to transmit the token in each request.
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                    [Page 4]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-5"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+<h3><a class="selflink" id="section-2.1" href="#section-2.1">2.1</a>.  Authorization Request Header Field</h3>
+
+   When sending the access token in the &quot;Authorization&quot; request header
+   field defined by HTTP/1.1 [<a href="/doc/html/rfc2617" title="&quot;HTTP Authentication: Basic and Digest Access Authentication&quot;">RFC2617</a>], the client uses the &quot;Bearer&quot;
+   authentication scheme to transmit the access token.
+
+   For example:
+
+     GET /resource HTTP/1.1
+     Host: server.example.com
+     Authorization: Bearer mF_9.B5f-4.1JqM
+
+   The syntax of the &quot;Authorization&quot; header field for this scheme
+   follows the usage of the Basic scheme defined in <a href="/doc/html/rfc2617#section-2">Section&nbsp;2 of
+   [RFC2617]</a>.  Note that, as with Basic, it does not conform to the
+   generic syntax defined in <a href="/doc/html/rfc2617#section-1.2">Section&nbsp;1.2 of [RFC2617]</a> but is compatible
+   with the general authentication framework being developed for
+   HTTP 1.1 [<a href="#ref-HTTP-AUTH" title="&quot;Hypertext Transfer Protocol (HTTP/1.1): Authentication&quot;">HTTP-AUTH</a>], although it does not follow the preferred
+   practice outlined therein in order to reflect existing deployments.
+   The syntax for Bearer credentials is as follows:
+
+     b64token    = 1*( ALPHA / DIGIT /
+                       &quot;-&quot; / &quot;.&quot; / &quot;_&quot; / &quot;~&quot; / &quot;+&quot; / &quot;/&quot; ) *&quot;=&quot;
+     credentials = &quot;Bearer&quot; 1*SP b64token
+
+   Clients SHOULD make authenticated requests with a bearer token using
+   the &quot;Authorization&quot; request header field with the &quot;Bearer&quot; HTTP
+   authorization scheme.  Resource servers MUST support this method.
+
+<h3><a class="selflink" id="section-2.2" href="#section-2.2">2.2</a>.  Form-Encoded Body Parameter</h3>
+
+   When sending the access token in the HTTP request entity-body, the
+   client adds the access token to the request-body using the
+   &quot;access_token&quot; parameter.  The client MUST NOT use this method unless
+   all of the following conditions are met:
+
+   o  The HTTP request entity-header includes the &quot;Content-Type&quot; header
+      field set to &quot;application/x-www-form-urlencoded&quot;.
+
+   o  The entity-body follows the encoding requirements of the
+      &quot;application/x-www-form-urlencoded&quot; content-type as defined by
+      HTML 4.01 [<a href="#ref-W3C.REC-html401-19991224">W3C.REC-html401-19991224</a>].
+
+   o  The HTTP request entity-body is single-part.
+
+
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                    [Page 5]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-6"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+   o  The content to be encoded in the entity-body MUST consist entirely
+      of ASCII [<a href="#ref-USASCII" title="&quot;Coded Character Set -- 7-bit American Standard Code for Information Interchange&quot;">USASCII</a>] characters.
+
+   o  The HTTP request method is one for which the request-body has
+      defined semantics.  In particular, this means that the &quot;GET&quot;
+      method MUST NOT be used.
+
+   The entity-body MAY include other request-specific parameters, in
+   which case the &quot;access_token&quot; parameter MUST be properly separated
+   from the request-specific parameters using &quot;&amp;&quot; character(s) (ASCII
+   code 38).
+
+   For example, the client makes the following HTTP request using
+   transport-layer security:
+
+     POST /resource HTTP/1.1
+     Host: server.example.com
+     Content-Type: application/x-www-form-urlencoded
+
+     access_token=mF_9.B5f-4.1JqM
+
+   The &quot;application/x-www-form-urlencoded&quot; method SHOULD NOT be used
+   except in application contexts where participating browsers do not
+   have access to the &quot;Authorization&quot; request header field.  Resource
+   servers MAY support this method.
+
+<h3><a class="selflink" id="section-2.3" href="#section-2.3">2.3</a>.  URI Query Parameter</h3>
+
+   When sending the access token in the HTTP request URI, the client
+   adds the access token to the request URI query component as defined
+   by &quot;Uniform Resource Identifier (URI): Generic Syntax&quot; [<a href="/doc/html/rfc3986" title="&quot;Uniform Resource Identifier (URI): Generic Syntax&quot;">RFC3986</a>],
+   using the &quot;access_token&quot; parameter.
+
+   For example, the client makes the following HTTP request using
+   transport-layer security:
+
+     GET /resource?access_token=mF_9.B5f-4.1JqM HTTP/1.1
+     Host: server.example.com
+
+   The HTTP request URI query can include other request-specific
+   parameters, in which case the &quot;access_token&quot; parameter MUST be
+   properly separated from the request-specific parameters using &quot;&amp;&quot;
+   character(s) (ASCII code 38).
+
+
+
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                    [Page 6]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-7"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+   For example:
+
+    https://server.example.com/resource?access_token=mF_9.B5f-4.1JqM&amp;p=q
+
+   Clients using the URI Query Parameter method SHOULD also send a
+   Cache-Control header containing the &quot;no-store&quot; option.  Server
+   success (2XX status) responses to these requests SHOULD contain a
+   Cache-Control header with the &quot;private&quot; option.
+
+   Because of the security weaknesses associated with the URI method
+   (see <a href="#section-5">Section 5</a>), including the high likelihood that the URL
+   containing the access token will be logged, it SHOULD NOT be used
+   unless it is impossible to transport the access token in the
+   &quot;Authorization&quot; request header field or the HTTP request entity-body.
+   Resource servers MAY support this method.
+
+   This method is included to document current use; its use is not
+   recommended, due to its security deficiencies (see <a href="#section-5">Section 5</a>) and
+   also because it uses a reserved query parameter name, which is
+   counter to URI namespace best practices, per &quot;Architecture of the
+   World Wide Web, Volume One&quot; [<a href="#ref-W3C.REC-webarch-20041215">W3C.REC-webarch-20041215</a>].
+
+<h2><a class="selflink" id="section-3" href="#section-3">3</a>.  The WWW-Authenticate Response Header Field</h2>
+
+   If the protected resource request does not include authentication
+   credentials or does not contain an access token that enables access
+   to the protected resource, the resource server MUST include the HTTP
+   &quot;WWW-Authenticate&quot; response header field; it MAY include it in
+   response to other conditions as well.  The &quot;WWW-Authenticate&quot; header
+   field uses the framework defined by HTTP/1.1 [<a href="/doc/html/rfc2617" title="&quot;HTTP Authentication: Basic and Digest Access Authentication&quot;">RFC2617</a>].
+
+   All challenges defined by this specification MUST use the auth-scheme
+   value &quot;Bearer&quot;.  This scheme MUST be followed by one or more
+   auth-param values.  The auth-param attributes used or defined by this
+   specification are as follows.  Other auth-param attributes MAY be
+   used as well.
+
+   A &quot;realm&quot; attribute MAY be included to indicate the scope of
+   protection in the manner described in HTTP/1.1 [<a href="/doc/html/rfc2617" title="&quot;HTTP Authentication: Basic and Digest Access Authentication&quot;">RFC2617</a>].  The
+   &quot;realm&quot; attribute MUST NOT appear more than once.
+
+   The &quot;scope&quot; attribute is defined in <a href="/doc/html/rfc6749#section-3.3">Section&nbsp;3.3 of [RFC6749]</a>.  The
+   &quot;scope&quot; attribute is a space-delimited list of case-sensitive scope
+   values indicating the required scope of the access token for
+   accessing the requested resource. &quot;scope&quot; values are implementation
+   defined; there is no centralized registry for them; allowed values
+   are defined by the authorization server.  The order of &quot;scope&quot; values
+   is not significant.  In some cases, the &quot;scope&quot; value will be used
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                    [Page 7]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-8"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+   when requesting a new access token with sufficient scope of access to
+   utilize the protected resource.  Use of the &quot;scope&quot; attribute is
+   OPTIONAL.  The &quot;scope&quot; attribute MUST NOT appear more than once.  The
+   &quot;scope&quot; value is intended for programmatic use and is not meant to be
+   displayed to end-users.
+
+   Two example scope values follow; these are taken from the OpenID
+   Connect [<a href="#ref-OpenID.Messages">OpenID.Messages</a>] and the Open Authentication Technology
+   Committee (OATC) Online Multimedia Authorization Protocol [<a href="#ref-OMAP" title="&quot;Online Multimedia Authorization Protocol: An Industry Standard for Authorized Access to Internet Multimedia Resources&quot;">OMAP</a>]
+   OAuth 2.0 use cases, respectively:
+
+     scope=&quot;openid profile email&quot;
+     scope=&quot;urn:example:channel=HBO&amp;urn:example:rating=G,PG-13&quot;
+
+   If the protected resource request included an access token and failed
+   authentication, the resource server SHOULD include the &quot;error&quot;
+   attribute to provide the client with the reason why the access
+   request was declined.  The parameter value is described in
+   <a href="#section-3.1">Section 3.1</a>.  In addition, the resource server MAY include the
+   &quot;error_description&quot; attribute to provide developers a human-readable
+   explanation that is not meant to be displayed to end-users.  It also
+   MAY include the &quot;error_uri&quot; attribute with an absolute URI
+   identifying a human-readable web page explaining the error.  The
+   &quot;error&quot;, &quot;error_description&quot;, and &quot;error_uri&quot; attributes MUST NOT
+   appear more than once.
+
+   Values for the &quot;scope&quot; attribute (specified in <a href="/doc/html/rfc6749#appendix-A.4">Appendix&nbsp;A.4 of
+   [RFC6749]</a>) MUST NOT include characters outside the set %x21 / %x23-5B
+   / %x5D-7E for representing scope values and %x20 for delimiters
+   between scope values.  Values for the &quot;error&quot; and &quot;error_description&quot;
+   attributes (specified in Appendixes A.7 and A.8 of [<a href="/doc/html/rfc6749" title="&quot;The OAuth 2.0 Authorization Framework&quot;">RFC6749</a>]) MUST
+   NOT include characters outside the set %x20-21 / %x23-5B / %x5D-7E.
+   Values for the &quot;error_uri&quot; attribute (specified in <a href="/doc/html/rfc6749#appendix-A.9">Appendix&nbsp;A.9 of
+   [RFC6749]</a>) MUST conform to the URI-reference syntax and thus MUST NOT
+   include characters outside the set %x21 / %x23-5B / %x5D-7E.
+
+   For example, in response to a protected resource request without
+   authentication:
+
+     HTTP/1.1 401 Unauthorized
+     WWW-Authenticate: Bearer realm=&quot;example&quot;
+
+
+
+
+
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                    [Page 8]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-9"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+   And in response to a protected resource request with an
+   authentication attempt using an expired access token:
+
+     HTTP/1.1 401 Unauthorized
+     WWW-Authenticate: Bearer realm=&quot;example&quot;,
+                       error=&quot;invalid_token&quot;,
+                       error_description=&quot;The access token expired&quot;
+
+<h3><a class="selflink" id="section-3.1" href="#section-3.1">3.1</a>.  Error Codes</h3>
+
+   When a request fails, the resource server responds using the
+   appropriate HTTP status code (typically, 400, 401, 403, or 405) and
+   includes one of the following error codes in the response:
+
+   invalid_request
+         The request is missing a required parameter, includes an
+         unsupported parameter or parameter value, repeats the same
+         parameter, uses more than one method for including an access
+         token, or is otherwise malformed.  The resource server SHOULD
+         respond with the HTTP 400 (Bad Request) status code.
+
+   invalid_token
+         The access token provided is expired, revoked, malformed, or
+         invalid for other reasons.  The resource SHOULD respond with
+         the HTTP 401 (Unauthorized) status code.  The client MAY
+         request a new access token and retry the protected resource
+         request.
+
+   insufficient_scope
+         The request requires higher privileges than provided by the
+         access token.  The resource server SHOULD respond with the HTTP
+         403 (Forbidden) status code and MAY include the &quot;scope&quot;
+         attribute with the scope necessary to access the protected
+         resource.
+
+   If the request lacks any authentication information (e.g., the client
+   was unaware that authentication is necessary or attempted using an
+   unsupported authentication method), the resource server SHOULD NOT
+   include an error code or other error information.
+
+   For example:
+
+     HTTP/1.1 401 Unauthorized
+     WWW-Authenticate: Bearer realm=&quot;example&quot;
+
+
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                    [Page 9]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-10"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+<h2><a class="selflink" id="section-4" href="#section-4">4</a>.  Example Access Token Response</h2>
+
+   Typically, a bearer token is returned to the client as part of an
+   OAuth 2.0 [<a href="/doc/html/rfc6749" title="&quot;The OAuth 2.0 Authorization Framework&quot;">RFC6749</a>] access token response.  An example of such a
+   response is:
+
+     HTTP/1.1 200 OK
+     Content-Type: application/json;charset=UTF-8
+     Cache-Control: no-store
+     Pragma: no-cache
+
+     {
+       &quot;access_token&quot;:&quot;mF_9.B5f-4.1JqM&quot;,
+       &quot;token_type&quot;:&quot;Bearer&quot;,
+       &quot;expires_in&quot;:3600,
+       &quot;refresh_token&quot;:&quot;tGzv3JOkF0XG5Qx2TlKWIA&quot;
+     }
+
+<h2><a class="selflink" id="section-5" href="#section-5">5</a>.  Security Considerations</h2>
+
+   This section describes the relevant security threats regarding token
+   handling when using bearer tokens and describes how to mitigate these
+   threats.
+
+<h3><a class="selflink" id="section-5.1" href="#section-5.1">5.1</a>.  Security Threats</h3>
+
+   The following list presents several common threats against protocols
+   utilizing some form of tokens.  This list of threats is based on NIST
+   Special Publication 800-63 [<a href="#ref-NIST800-63" title="&quot;NIST Special Publication 800-63-1, INFORMATION SECURITY&quot;">NIST800-63</a>].  Since this document builds
+   on the OAuth 2.0 Authorization specification [<a href="/doc/html/rfc6749" title="&quot;The OAuth 2.0 Authorization Framework&quot;">RFC6749</a>], we exclude a
+   discussion of threats that are described there or in related
+   documents.
+
+   Token manufacture/modification:  An attacker may generate a bogus
+      token or modify the token contents (such as the authentication or
+      attribute statements) of an existing token, causing the resource
+      server to grant inappropriate access to the client.  For example,
+      an attacker may modify the token to extend the validity period; a
+      malicious client may modify the assertion to gain access to
+      information that they should not be able to view.
+
+   Token disclosure:  Tokens may contain authentication and attribute
+      statements that include sensitive information.
+
+
+
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                   [Page 10]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-11"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+   Token redirect:  An attacker uses a token generated for consumption
+      by one resource server to gain access to a different resource
+      server that mistakenly believes the token to be for it.
+
+   Token replay:  An attacker attempts to use a token that has already
+      been used with that resource server in the past.
+
+<h3><a class="selflink" id="section-5.2" href="#section-5.2">5.2</a>.  Threat Mitigation</h3>
+
+   A large range of threats can be mitigated by protecting the contents
+   of the token by using a digital signature or a Message Authentication
+   Code (MAC).  Alternatively, a bearer token can contain a reference to
+   authorization information, rather than encoding the information
+   directly.  Such references MUST be infeasible for an attacker to
+   guess; using a reference may require an extra interaction between a
+   server and the token issuer to resolve the reference to the
+   authorization information.  The mechanics of such an interaction are
+   not defined by this specification.
+
+   This document does not specify the encoding or the contents of the
+   token; hence, detailed recommendations about the means of
+   guaranteeing token integrity protection are outside the scope of this
+   document.  The token integrity protection MUST be sufficient to
+   prevent the token from being modified.
+
+   To deal with token redirect, it is important for the authorization
+   server to include the identity of the intended recipients (the
+   audience), typically a single resource server (or a list of resource
+   servers), in the token.  Restricting the use of the token to a
+   specific scope is also RECOMMENDED.
+
+   The authorization server MUST implement TLS.  Which version(s) ought
+   to be implemented will vary over time and will depend on the
+   widespread deployment and known security vulnerabilities at the time
+   of implementation.  At the time of this writing, TLS version 1.2
+   [<a href="/doc/html/rfc5246" title="&quot;The Transport Layer Security (TLS) Protocol Version 1.2&quot;">RFC5246</a>] is the most recent version, but it has very limited actual
+   deployment and might not be readily available in implementation
+   toolkits.  TLS version 1.0 [<a href="/doc/html/rfc2246" title="&quot;The TLS Protocol Version 1.0&quot;">RFC2246</a>] is the most widely deployed
+   version and will give the broadest interoperability.
+
+   To protect against token disclosure, confidentiality protection MUST
+   be applied using TLS [<a href="/doc/html/rfc5246" title="&quot;The Transport Layer Security (TLS) Protocol Version 1.2&quot;">RFC5246</a>] with a ciphersuite that provides
+   confidentiality and integrity protection.  This requires that the
+   communication interaction between the client and the authorization
+   server, as well as the interaction between the client and the
+   resource server, utilize confidentiality and integrity protection.
+   Since TLS is mandatory to implement and to use with this
+   specification, it is the preferred approach for preventing token
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                   [Page 11]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-12"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+   disclosure via the communication channel.  For those cases where the
+   client is prevented from observing the contents of the token, token
+   encryption MUST be applied in addition to the usage of TLS
+   protection.  As a further defense against token disclosure, the
+   client MUST validate the TLS certificate chain when making requests
+   to protected resources, including checking the Certificate Revocation
+   List (CRL) [<a href="/doc/html/rfc5280" title="&quot;Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile&quot;">RFC5280</a>].
+
+   Cookies are typically transmitted in the clear.  Thus, any
+   information contained in them is at risk of disclosure.  Therefore,
+   bearer tokens MUST NOT be stored in cookies that can be sent in the
+   clear.  See &quot;HTTP State Management Mechanism&quot; [<a href="/doc/html/rfc6265" title="&quot;HTTP State Management Mechanism&quot;">RFC6265</a>] for security
+   considerations about cookies.
+
+   In some deployments, including those utilizing load balancers, the
+   TLS connection to the resource server terminates prior to the actual
+   server that provides the resource.  This could leave the token
+   unprotected between the front-end server where the TLS connection
+   terminates and the back-end server that provides the resource.  In
+   such deployments, sufficient measures MUST be employed to ensure
+   confidentiality of the token between the front-end and back-end
+   servers; encryption of the token is one such possible measure.
+
+   To deal with token capture and replay, the following recommendations
+   are made: First, the lifetime of the token MUST be limited; one means
+   of achieving this is by putting a validity time field inside the
+   protected part of the token.  Note that using short-lived (one hour
+   or less) tokens reduces the impact of them being leaked.  Second,
+   confidentiality protection of the exchanges between the client and
+   the authorization server and between the client and the resource
+   server MUST be applied.  As a consequence, no eavesdropper along the
+   communication path is able to observe the token exchange.
+   Consequently, such an on-path adversary cannot replay the token.
+   Furthermore, when presenting the token to a resource server, the
+   client MUST verify the identity of that resource server, as per
+   <a href="#section-3.1">Section 3.1</a> of &quot;HTTP Over TLS&quot; [<a href="/doc/html/rfc2818" title="&quot;HTTP Over TLS&quot;">RFC2818</a>].  Note that the client MUST
+   validate the TLS certificate chain when making these requests to
+   protected resources.  Presenting the token to an unauthenticated and
+   unauthorized resource server or failing to validate the certificate
+   chain will allow adversaries to steal the token and gain unauthorized
+   access to protected resources.
+
+
+
+
+
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                   [Page 12]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-13"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+<h3><a class="selflink" id="section-5.3" href="#section-5.3">5.3</a>.  Summary of Recommendations</h3>
+
+   Safeguard bearer tokens:  Client implementations MUST ensure that
+      bearer tokens are not leaked to unintended parties, as they will
+      be able to use them to gain access to protected resources.  This
+      is the primary security consideration when using bearer tokens and
+      underlies all the more specific recommendations that follow.
+
+   Validate TLS certificate chains:  The client MUST validate the TLS
+      certificate chain when making requests to protected resources.
+      Failing to do so may enable DNS hijacking attacks to steal the
+      token and gain unintended access.
+
+   Always use TLS (https):  Clients MUST always use TLS [<a href="/doc/html/rfc5246" title="&quot;The Transport Layer Security (TLS) Protocol Version 1.2&quot;">RFC5246</a>]
+      (https) or equivalent transport security when making requests with
+      bearer tokens.  Failing to do so exposes the token to numerous
+      attacks that could give attackers unintended access.
+
+   Don&#x27;t store bearer tokens in cookies:  Implementations MUST NOT store
+      bearer tokens within cookies that can be sent in the clear (which
+      is the default transmission mode for cookies).  Implementations
+      that do store bearer tokens in cookies MUST take precautions
+      against cross-site request forgery.
+
+   Issue short-lived bearer tokens:  Token servers SHOULD issue
+      short-lived (one hour or less) bearer tokens, particularly when
+      issuing tokens to clients that run within a web browser or other
+      environments where information leakage may occur.  Using
+      short-lived bearer tokens can reduce the impact of them being
+      leaked.
+
+   Issue scoped bearer tokens:  Token servers SHOULD issue bearer tokens
+      that contain an audience restriction, scoping their use to the
+      intended relying party or set of relying parties.
+
+   Don&#x27;t pass bearer tokens in page URLs:  Bearer tokens SHOULD NOT be
+      passed in page URLs (for example, as query string parameters).
+      Instead, bearer tokens SHOULD be passed in HTTP message headers or
+      message bodies for which confidentiality measures are taken.
+      Browsers, web servers, and other software may not adequately
+      secure URLs in the browser history, web server logs, and other
+      data structures.  If bearer tokens are passed in page URLs,
+      attackers might be able to steal them from the history data, logs,
+      or other unsecured locations.
+
+
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                   [Page 13]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-14"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+<h2><a class="selflink" id="section-6" href="#section-6">6</a>.  IANA Considerations</h2>
+
+<h3><a class="selflink" id="section-6.1" href="#section-6.1">6.1</a>.  OAuth Access Token Type Registration</h3>
+
+   This specification registers the following access token type in the
+   OAuth Access Token Types registry defined in [<a href="/doc/html/rfc6749" title="&quot;The OAuth 2.0 Authorization Framework&quot;">RFC6749</a>].
+
+<h4><a class="selflink" id="section-6.1.1" href="#section-6.1.1">6.1.1</a>.  The &quot;Bearer&quot; OAuth Access Token Type</h4>
+
+   Type name:
+      Bearer
+
+   Additional Token Endpoint Response Parameters:
+      (none)
+
+   HTTP Authentication Scheme(s):
+      Bearer
+
+   Change controller:
+      IETF
+
+   Specification document(s):
+      <a href="/doc/html/rfc6750">RFC 6750</a>
+
+<h3><a class="selflink" id="section-6.2" href="#section-6.2">6.2</a>.  OAuth Extensions Error Registration</h3>
+
+   This specification registers the following error values in the OAuth
+   Extensions Error registry defined in [<a href="/doc/html/rfc6749" title="&quot;The OAuth 2.0 Authorization Framework&quot;">RFC6749</a>].
+
+<h4><a class="selflink" id="section-6.2.1" href="#section-6.2.1">6.2.1</a>.  The &quot;invalid_request&quot; Error Value</h4>
+
+   Error name:
+      invalid_request
+
+   Error usage location:
+      Resource access error response
+
+   Related protocol extension:
+      Bearer access token type
+
+   Change controller:
+      IETF
+
+   Specification document(s):
+      <a href="/doc/html/rfc6750">RFC 6750</a>
+
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                   [Page 14]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-15"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+<h4><a class="selflink" id="section-6.2.2" href="#section-6.2.2">6.2.2</a>.  The &quot;invalid_token&quot; Error Value</h4>
+
+   Error name:
+      invalid_token
+
+   Error usage location:
+      Resource access error response
+
+   Related protocol extension:
+      Bearer access token type
+
+   Change controller:
+      IETF
+
+   Specification document(s):
+      <a href="/doc/html/rfc6750">RFC 6750</a>
+
+<h4><a class="selflink" id="section-6.2.3" href="#section-6.2.3">6.2.3</a>.  The &quot;insufficient_scope&quot; Error Value</h4>
+
+   Error name:
+      insufficient_scope
+
+   Error usage location:
+      Resource access error response
+
+   Related protocol extension:
+      Bearer access token type
+
+   Change controller:
+      IETF
+
+   Specification document(s):
+      <a href="/doc/html/rfc6750">RFC 6750</a>
+
+<h2><a class="selflink" id="section-7" href="#section-7">7</a>.  References</h2>
+
+<h3><a class="selflink" id="section-7.1" href="#section-7.1">7.1</a>.  Normative References</h3>
+
+   [<a id="ref-RFC2119">RFC2119</a>]    Bradner, S., &quot;Key words for use in RFCs to Indicate
+                Requirement Levels&quot;, <a href="/doc/html/bcp14">BCP 14</a>, <a href="/doc/html/rfc2119">RFC 2119</a>, March 1997.
+
+   [<a id="ref-RFC2246">RFC2246</a>]    Dierks, T. and C. Allen, &quot;The TLS Protocol Version 1.0&quot;,
+                <a href="/doc/html/rfc2246">RFC 2246</a>, January 1999.
+
+   [<a id="ref-RFC2616">RFC2616</a>]    Fielding, R., Gettys, J., Mogul, J., Frystyk, H.,
+                Masinter, L., Leach, P., and T. Berners-Lee, &quot;Hypertext
+                Transfer Protocol -- HTTP/1.1&quot;, <a href="/doc/html/rfc2616">RFC 2616</a>, June 1999.
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                   [Page 15]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-16"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+   [<a id="ref-RFC2617">RFC2617</a>]    Franks, J., Hallam-Baker, P., Hostetler, J., Lawrence,
+                S., Leach, P., Luotonen, A., and L. Stewart, &quot;HTTP
+                Authentication: Basic and Digest Access Authentication&quot;,
+                <a href="/doc/html/rfc2617">RFC 2617</a>, June 1999.
+
+   [<a id="ref-RFC2818">RFC2818</a>]    Rescorla, E., &quot;HTTP Over TLS&quot;, <a href="/doc/html/rfc2818">RFC 2818</a>, May 2000.
+
+   [<a id="ref-RFC3986">RFC3986</a>]    Berners-Lee, T., Fielding, R., and L. Masinter, &quot;Uniform
+                Resource Identifier (URI): Generic Syntax&quot;, STD 66,
+                <a href="/doc/html/rfc3986">RFC 3986</a>, January 2005.
+
+   [<a id="ref-RFC5234">RFC5234</a>]    Crocker, D. and P. Overell, &quot;Augmented BNF for Syntax
+                Specifications: ABNF&quot;, STD 68, <a href="/doc/html/rfc5234">RFC 5234</a>, January 2008.
+
+   [<a id="ref-RFC5246">RFC5246</a>]    Dierks, T. and E. Rescorla, &quot;The Transport Layer
+                Security (TLS) Protocol Version 1.2&quot;, <a href="/doc/html/rfc5246">RFC 5246</a>,
+                August 2008.
+
+   [<a id="ref-RFC5280">RFC5280</a>]    Cooper, D., Santesson, S., Farrell, S., Boeyen, S.,
+                Housley, R., and W. Polk, &quot;Internet X.509 Public Key
+                Infrastructure Certificate and Certificate Revocation
+                List (CRL) Profile&quot;, <a href="/doc/html/rfc5280">RFC 5280</a>, May 2008.
+
+   [<a id="ref-RFC6265">RFC6265</a>]    Barth, A., &quot;HTTP State Management Mechanism&quot;, <a href="/doc/html/rfc6265">RFC 6265</a>,
+                April 2011.
+
+   [<a id="ref-RFC6749">RFC6749</a>]    Hardt, D., Ed., &quot;The OAuth 2.0 Authorization Framework&quot;,
+                <a href="/doc/html/rfc6749">RFC 6749</a>, October 2012.
+
+   [<a id="ref-USASCII">USASCII</a>]    American National Standards Institute, &quot;Coded Character
+                Set -- 7-bit American Standard Code for Information
+                Interchange&quot;, ANSI X3.4, 1986.
+
+   [<a id="ref-W3C.REC-html401-19991224">W3C.REC-html401-19991224</a>]
+                Raggett, D., Le Hors, A., and I. Jacobs, &quot;HTML 4.01
+                Specification&quot;, World Wide Web Consortium
+                Recommendation REC-html401-19991224, December 1999,
+                &lt;<a href="http://www.w3.org/TR/1999/REC-html401-19991224">http://www.w3.org/TR/1999/REC-html401-19991224</a>&gt;.
+
+   [<a id="ref-W3C.REC-webarch-20041215">W3C.REC-webarch-20041215</a>]
+                Jacobs, I. and N. Walsh, &quot;Architecture of the World Wide
+                Web, Volume One&quot;, World Wide Web Consortium
+                Recommendation REC-webarch-20041215, December 2004,
+                &lt;<a href="http://www.w3.org/TR/2004/REC-webarch-20041215">http://www.w3.org/TR/2004/REC-webarch-20041215</a>&gt;.
+
+
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                   [Page 16]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-17"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+<h3><a class="selflink" id="section-7.2" href="#section-7.2">7.2</a>.  Informative References</h3>
+
+   [<a id="ref-HTTP-AUTH">HTTP-AUTH</a>]  Fielding, R., Ed., and J. Reschke, Ed., &quot;Hypertext
+                Transfer Protocol (HTTP/1.1): Authentication&quot;, Work
+                in Progress, October 2012.
+
+   [<a id="ref-NIST800-63">NIST800-63</a>] Burr, W., Dodson, D., Newton, E., Perlner, R., Polk, T.,
+                Gupta, S., and E. Nabbus, &quot;NIST Special Publication
+                800-63-1, INFORMATION SECURITY&quot;, December 2011,
+                &lt;<a href="http://csrc.nist.gov/publications/">http://csrc.nist.gov/publications/</a>&gt;.
+
+   [<a id="ref-OMAP">OMAP</a>]       Huff, J., Schlacht, D., Nadalin, A., Simmons, J.,
+                Rosenberg, P., Madsen, P., Ace, T., Rickelton-Abdi, C.,
+                and B. Boyer, &quot;Online Multimedia Authorization Protocol:
+                An Industry Standard for Authorized Access to Internet
+                Multimedia Resources&quot;, April 2012,
+                &lt;<a href="http://www.oatc.us/Standards/Download.aspx">http://www.oatc.us/Standards/Download.aspx</a>&gt;.
+
+   [<a id="ref-OpenID.Messages">OpenID.Messages</a>]
+                Sakimura, N., Bradley, J., Jones, M., de Medeiros, B.,
+                Mortimore, C., and E. Jay, &quot;OpenID Connect Messages
+                1.0&quot;, June 2012, &lt;<a href="http://openid.net/specs/openid-connect-messages-1_0.html">http://openid.net/specs/</a>
+                <a href="http://openid.net/specs/openid-connect-messages-1_0.html">openid-connect-messages-1_0.html</a>&gt;.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<span class="grey">Jones &amp; Hardt                Standards Track                   [Page 17]</span></pre>
+<pre class="newpage"><hr class="noprint" id="page-18"><span class="grey"><a href="/doc/html/rfc6750">RFC 6750</a>              OAuth 2.0 Bearer Token Usage          October 2012</span>
+
+
+<h2><a class="selflink" id="appendix-A" href="#appendix-A">Appendix A</a>.  Acknowledgements</h2>
+
+   The following people contributed to preliminary versions of this
+   document: Blaine Cook (BT), Brian Eaton (Google), Yaron Y. Goland
+   (Microsoft), Brent Goldman (Facebook), Raffi Krikorian (Twitter),
+   Luke Shepard (Facebook), and Allen Tom (Yahoo!).  The content and
+   concepts within are a product of the OAuth community, the Web
+   Resource Authorization Profiles (WRAP) community, and the OAuth
+   Working Group.  David Recordon created a preliminary version of this
+   specification based upon an early draft of the specification that
+   evolved into OAuth 2.0 [<a href="/doc/html/rfc6749" title="&quot;The OAuth 2.0 Authorization Framework&quot;">RFC6749</a>].  Michael B. Jones in turn created
+   the first version (00) of this specification using portions of
+   David&#x27;s preliminary document and edited all subsequent versions.
+
+   The OAuth Working Group has dozens of very active contributors who
+   proposed ideas and wording for this document, including Michael
+   Adams, Amanda Anganes, Andrew Arnott, Derek Atkins, Dirk Balfanz,
+   John Bradley, Brian Campbell, Francisco Corella, Leah Culver, Bill de
+   hOra, Breno de Medeiros, Brian Ellin, Stephen Farrell, Igor Faynberg,
+   George Fletcher, Tim Freeman, Evan Gilbert, Yaron Y. Goland, Eran
+   Hammer, Thomas Hardjono, Dick Hardt, Justin Hart, Phil Hunt, John
+   Kemp, Chasen Le Hara, Barry Leiba, Amos Jeffries, Michael B. Jones,
+   Torsten Lodderstedt, Paul Madsen, Eve Maler, James Manger, Laurence
+   Miao, William J. Mills, Chuck Mortimore, Anthony Nadalin, Axel
+   Nennker, Mark Nottingham, David Recordon, Julian Reschke, Rob
+   Richards, Justin Richer, Peter Saint-Andre, Nat Sakimura, Rob Sayre,
+   Marius Scurtescu, Naitik Shah, Justin Smith, Christian Stuebner,
+   Jeremy Suriel, Doug Tangren, Paul Tarjan, Hannes Tschofenig, Franklin
+   Tse, Sean Turner, Paul Walker, Shane Weeden, Skylar Woodward, and
+   Zachary Zeltsan.
+
+Authors&#x27; Addresses
+
+   Michael B. Jones
+   Microsoft
+
+   EMail: mbj@microsoft.com
+   URI:   <a href="http://self-issued.info/">http://self-issued.info/</a>
+
+
+   Dick Hardt
+   Independent
+
+   EMail: dick.hardt@gmail.com
+   URI:   <a href="http://dickhardt.org/">http://dickhardt.org/</a>
+
+
+
+
+
+
+Jones &amp; Hardt                Standards Track                   [Page 18]
+</pre></div>
+                    </div>
+                
+            </div>
+            <div class="d-print-none col-md-3 bg-light-subtle collapse show" id="sidebar">
+                <div class="position-fixed border-start sidebar overflow-scroll overscroll-none no-scrollbar">
+                    <div class="d-flex flex-column vh-100 pt-2 pt-lg-3 ps-3 pl-md-2 pl-lg-3">
+                        <div>
+                            <a class="btn btn-primary btn-sm" href="/doc/rfc6750/">Datatracker</a>
+                            <p class="fw-bold pt-2">
+                                
+                                    RFC 6750
+                                
+                                <br>
+                                
+
+
+
+
+
+<span class="text-success">RFC
+    
+    - Proposed Standard
+    
+</span>
+
+                            </p>
+                        </div>
+                        
+                        <ul class="nav nav-tabs nav-fill small me-2" role="tablist">
+                            <li class="nav-item" role="presentation" title="Document information">
+                                <button class="nav-link px-2"
+                                        id="docinfo-tab"
+                                        data-bs-toggle="tab"
+                                        data-bs-target="#docinfo-tab-pane"
+                                        type="button"
+                                        role="tab"
+                                        aria-controls="docinfo-tab-pane"
+                                        aria-selected="true">
+                                    <i class="bi bi-info-circle"></i><span class="d-none d-md-block d-xl-inline ms-xl-1">Info</span>
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation" title="Table of contents">
+                                <button class="nav-link px-2"
+                                        id="toc-tab"
+                                        data-bs-toggle="tab"
+                                        data-bs-target="#toc-tab-pane"
+                                        type="button"
+                                        role="tab"
+                                        aria-controls="toc-tab-pane"
+                                        aria-selected="false">
+                                    <i class="bi bi-list-ol"></i><span class="d-none d-md-block d-xl-inline ms-xl-1">Contents</span>
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation" title="Preferences">
+                                <button class="nav-link px-2"
+                                        id="pref-tab"
+                                        data-bs-toggle="tab"
+                                        data-bs-target="#pref-tab-pane"
+                                        type="button"
+                                        role="tab"
+                                        aria-controls="pref-tab-pane"
+                                        aria-selected="false">
+                                    <i class="bi bi-gear"></i><span class="d-none d-md-block d-xl-inline ms-xl-1">Prefs</span>
+                                </button>
+                            </li>
+                        </ul>
+                        <div class="overflow-auto tab-content pt-2 me-2">
+                            <div class="tab-pane"
+                                 id="docinfo-tab-pane"
+                                 role="tabpanel"
+                                 aria-labelledby="docinfo-tab"
+                                 tabindex="0">
+                                <table class="table table-sm table-borderless">
+                                    
+
+
+
+
+
+
+
+<tbody class="meta align-top ">
+    <tr>
+        <th scope="row">Document</th>
+        <th scope="row">Document type</th>
+        <td class="edit"></td>
+        <td>
+            
+
+
+
+
+
+<span class="text-success">RFC
+    
+    - Proposed Standard
+    
+</span>
+
+            
+                
+                    <br>October 2012
+                
+                <br>
+                
+                    <a class="btn btn-primary btn-sm my-1"
+                       href="https://www.rfc-editor.org/errata_search.php?rfc=6750" title="Click to view errata." rel="nofollow">
+                        View errata
+                    </a>
+                
+                
+                    <a class="btn btn-sm btn-warning"
+                       title="Click to report an error in the document."
+                       href="https://www.rfc-editor.org/errata.php#reportnew"
+                       target="_blank">
+                        Report errata
+                    </a>
+                
+                
+                    <a title="Click to view IPR declarations." class="btn btn-warning btn-sm my-1" href="/ipr/search/?submit=draft&amp;id=rfc6750">IPR</a>
+                
+                
+                <div>Updated by <a href="/doc/html/rfc8996" title="Deprecating TLS 1.0 and TLS 1.1">RFC 8996</a>, <a href="/doc/html/rfc9700" title="Best Current Practice for OAuth 2.0 Security">RFC 9700</a></div>
+                
+                
+                
+                
+                
+                    <div>
+                        Was
+                        <a href="/doc/draft-ietf-oauth-v2-bearer/23/">draft-ietf-oauth-v2-bearer</a>
+                        (<a href="/wg/oauth/about/">oauth WG</a>)
+                    </div>
+                
+            
+            
+            
+                
+
+
+
+
+    
+
+
+            
+        </td>
+    </tr>
+    
+        <tr>
+            <td></td>
+            <th scope="row">Select version</th>
+            <td class="edit"></td>
+            <td>
+                
+
+
+
+    <ul class="revision-list pagination pagination-sm text-center flex-wrap my-0">
+        
+            
+            
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-17"
+                        rel="nofollow">
+                            17
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-18"
+                        rel="nofollow">
+                            18
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-19"
+                        rel="nofollow">
+                            19
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-20"
+                        rel="nofollow">
+                            20
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-21"
+                        rel="nofollow">
+                            21
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-22"
+                        rel="nofollow">
+                            22
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-oauth-v2-bearer-23"
+                        rel="nofollow">
+                            23
+                        </a>
+                    </li>
+                
+            
+            
+            <li class="page-item rfc active">
+                <a class="page-link"
+                href="/doc/html/rfc6750">
+                    RFC 6750
+                </a>
+            </li>
+        
+    </ul>
+
+            </td>
+        </tr>
+        
+            <tr>
+                <td></td>
+                <th scope="row">Compare versions</th>
+                <td class="edit"></td>
+                <td>
+                    
+
+
+
+<form class="form-horizontal diff-form"
+      action="https://author-tools.ietf.org/iddiff"
+      method="get"
+      target="_blank">
+
+            <select class="form-select form-select-sm mb-1 select2-field"
+                    data-max-entries="1"
+                    data-width="resolve"
+                    data-allow-clear="false"
+                    data-minimum-input-length="0"
+                    aria-label="From revision"
+                    name="url1">
+                
+                    <option value="rfc6750">
+                        RFC 6750
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-23" selected>
+                        draft-ietf-oauth-v2-bearer-23
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-22">
+                        draft-ietf-oauth-v2-bearer-22
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-21">
+                        draft-ietf-oauth-v2-bearer-21
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-20">
+                        draft-ietf-oauth-v2-bearer-20
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-19">
+                        draft-ietf-oauth-v2-bearer-19
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-18">
+                        draft-ietf-oauth-v2-bearer-18
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-17">
+                        draft-ietf-oauth-v2-bearer-17
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-16">
+                        draft-ietf-oauth-v2-bearer-16
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-15">
+                        draft-ietf-oauth-v2-bearer-15
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-14">
+                        draft-ietf-oauth-v2-bearer-14
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-13">
+                        draft-ietf-oauth-v2-bearer-13
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-12">
+                        draft-ietf-oauth-v2-bearer-12
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-11">
+                        draft-ietf-oauth-v2-bearer-11
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-10">
+                        draft-ietf-oauth-v2-bearer-10
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-09">
+                        draft-ietf-oauth-v2-bearer-09
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-08">
+                        draft-ietf-oauth-v2-bearer-08
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-07">
+                        draft-ietf-oauth-v2-bearer-07
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-06">
+                        draft-ietf-oauth-v2-bearer-06
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-05">
+                        draft-ietf-oauth-v2-bearer-05
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-04">
+                        draft-ietf-oauth-v2-bearer-04
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-03">
+                        draft-ietf-oauth-v2-bearer-03
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-02">
+                        draft-ietf-oauth-v2-bearer-02
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-01">
+                        draft-ietf-oauth-v2-bearer-01
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-00">
+                        draft-ietf-oauth-v2-bearer-00
+                        
+                    </option>
+                
+                
+            </select>
+
+            <select class="form-select form-select-sm mb-1 select2-field"
+                    data-max-entries="1"
+                    data-width="resolve"
+                    data-allow-clear="false"
+                    data-minimum-input-length="0"
+                    aria-label="To revision"
+                    name="url2">
+                
+                    <option value="rfc6750" selected>
+                        RFC 6750
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-23">
+                        draft-ietf-oauth-v2-bearer-23
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-22">
+                        draft-ietf-oauth-v2-bearer-22
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-21">
+                        draft-ietf-oauth-v2-bearer-21
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-20">
+                        draft-ietf-oauth-v2-bearer-20
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-19">
+                        draft-ietf-oauth-v2-bearer-19
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-18">
+                        draft-ietf-oauth-v2-bearer-18
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-17">
+                        draft-ietf-oauth-v2-bearer-17
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-16">
+                        draft-ietf-oauth-v2-bearer-16
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-15">
+                        draft-ietf-oauth-v2-bearer-15
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-14">
+                        draft-ietf-oauth-v2-bearer-14
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-13">
+                        draft-ietf-oauth-v2-bearer-13
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-12">
+                        draft-ietf-oauth-v2-bearer-12
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-11">
+                        draft-ietf-oauth-v2-bearer-11
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-10">
+                        draft-ietf-oauth-v2-bearer-10
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-09">
+                        draft-ietf-oauth-v2-bearer-09
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-08">
+                        draft-ietf-oauth-v2-bearer-08
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-07">
+                        draft-ietf-oauth-v2-bearer-07
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-06">
+                        draft-ietf-oauth-v2-bearer-06
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-05">
+                        draft-ietf-oauth-v2-bearer-05
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-04">
+                        draft-ietf-oauth-v2-bearer-04
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-03">
+                        draft-ietf-oauth-v2-bearer-03
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-02">
+                        draft-ietf-oauth-v2-bearer-02
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-01">
+                        draft-ietf-oauth-v2-bearer-01
+                        
+                    </option>
+                
+                    <option value="draft-ietf-oauth-v2-bearer-00">
+                        draft-ietf-oauth-v2-bearer-00
+                        
+                    </option>
+                
+                
+            </select>
+
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    value="--html"
+                    name="difftype">
+                Side-by-side
+            </button>
+            
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    value="--hwdiff"
+                    name="difftype">
+                Inline
+            </button>
+
+</form>
+                </td>
+            </tr>
+        
+    
+    <tr>
+        <td></td>
+        <th scope="row">Authors</th>
+        <td class="edit">
+            
+        </td>
+        <td>
+            
+            
+                <span ><a 
+           title="Datatracker profile of Michael B. Jones"
+            href="/person/michael_b_jones@hotmail.com" >M. Jones</a> <a 
+               href="mailto:michael_b_jones%40hotmail.com"
+               aria-label="Compose email to michael_b_jones@hotmail.com"
+               title="Compose email to michael_b_jones@hotmail.com">
+                <i class="bi bi-envelope"></i></a></span>,
+            
+                <span ><a 
+           title="Datatracker profile of Dick Hardt"
+            href="/person/dick.hardt@gmail.com" >D. Hardt</a> <a 
+               href="mailto:dick.hardt%40gmail.com"
+               aria-label="Compose email to dick.hardt@gmail.com"
+               title="Compose email to dick.hardt@gmail.com">
+                <i class="bi bi-envelope"></i></a></span>
+            
+            
+                <br>
+                <a class="btn btn-primary btn-sm mt-1" href="mailto:rfc6750@ietf.org?subject=rfc6750" title="Send email to the document authors">Email authors</a>
+            
+        </td>
+    </tr>
+    
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            RFC stream
+        </th>
+        <td class="edit">
+            
+        </td>
+        <td >
+            
+                
+                
+                    
+                        
+
+
+
+<img alt="IETF Logo"
+     class="d-lm-none w-25 mt-1"
+     
+     
+        
+             src="https://static.ietf.org/dt/12.69.0/ietf/images/ietf-logo-nor-white.svg"
+        
+     
+     >
+
+<img alt="IETF Logo"
+     class="d-dm-none w-25 mt-1"
+     
+     
+        
+             src="https://static.ietf.org/dt/12.69.0/ietf/images/ietf-logo-nor.svg"
+        
+     
+     >
+                    
+                
+                
+            
+        </td>
+    </tr>
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            Other formats
+        </th>
+        <td class="edit">
+        </td>
+        <td>
+            
+                
+    <div class="buttonlist">
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.rfc-editor.org/rfc/rfc6750.txt">
+            
+                <i class="bi bi-file-text"></i> txt
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.rfc-editor.org/rfc/rfc6750.html">
+            
+                <i class="bi bi-file-code"></i> html
+            
+        </a>
+        
+    
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="/doc/rfc6750/bibtex/">
+            
+                <i class="bi bi-file-ruled"></i> bibtex
+            
+        </a>
+        
+    
+</div>
+
+            
+        </td>
+    </tr>
+    
+    
+        
+            <tr>
+                <td>
+                </td>
+                <th scope="row">
+                    Additional resources
+                </th>
+                <td class="edit">
+                    
+                </td>
+                <td>
+                    
+                        
+                        
+                            
+                                <a href="https://mailarchive.ietf.org/arch/browse/oauth/?q=rfc6750 OR %22draft-ietf-oauth-v2-bearer%22">
+                                    Mailing list discussion
+                                </a>
+                            
+                        
+                    
+                </td>
+            </tr>
+        
+    
+</tbody>
+                                </table>
+                                <a class="btn btn-sm btn-warning mb-3"
+                                target="_blank"
+                                href="https://github.com/ietf-tools/datatracker/issues/new/choose">
+                                    Report a datatracker bug
+                                    <i class="bi bi-bug"></i>
+                                </a>
+                            </div>
+                            <div class="tab-pane mb-5"
+                                 id="toc-tab-pane"
+                                 role="tabpanel"
+                                 aria-labelledby="toc-tab"
+                                 tabindex="0">
+                                <nav class="nav nav-pills flex-column small" id="toc-nav">
+                                </nav>
+                            </div>
+                            <div class="tab-pane mb-5 small"
+                                 id="pref-tab-pane"
+                                 role="tabpanel"
+                                 aria-labelledby="pref-tab"
+                                 tabindex="0">
+                                <label class="form-label fw-bold mb-2">Show sidebar by default</label>
+                                <div class="btn-group-vertical btn-group-sm d-flex" role="group">
+                                    <input type="radio" class="btn-check" name="sidebar" id="on-radio">
+                                    <label class="btn btn-outline-primary" for="on-radio">Yes</label>
+                                    <input type="radio" class="btn-check" name="sidebar" id="off-radio">
+                                    <label class="btn btn-outline-primary" for="off-radio">No</label>
+                                </div>
+                                <label class="form-label fw-bold mt-4 mb-2">Tab to show by default</label>
+                                <div class="btn-group-vertical btn-group-sm d-flex" role="group">
+                                    <input type="radio" class="btn-check" name="deftab" id="docinfo-radio">
+                                    <label class="btn btn-outline-primary" for="docinfo-radio">
+                                        <i class="bi bi-info-circle me-1"></i>Info
+                                    </label>
+                                    <input type="radio" class="btn-check" name="deftab" id="toc-radio">
+                                    <label class="btn btn-outline-primary" for="toc-radio">
+                                        <i class="bi bi-list-ol me-1"></i>Contents
+                                    </label>
+                                </div>
+                                <label class="form-label fw-bold mt-4 mb-2">HTMLization configuration</label>
+                                <div class="btn-group-vertical btn-group-sm d-flex" role="group">
+                                    <input type="radio" class="btn-check" name="htmlconf" id="txt-radio">
+                                    <label class="btn btn-outline-primary" for="txt-radio" title="This is the traditional HTMLization method.">
+                                        <i class="bi bi-badge-sd me-1"></i>HTMLize the plaintext
+                                    </label>
+                                    <input type="radio" class="btn-check" name="htmlconf" id="html-radio">
+                                    <label class="btn btn-outline-primary" for="html-radio" title="This is the modern HTMLization method.">
+                                        <i class="bi bi-badge-hd me-1"></i>Plaintextify the HTML
+                                    </label>
+                                </div>
+                                <label class="form-label fw-bold mt-4 mb-2" for="ptsize">Maximum font size</label>
+                                <input type="range" class="form-range" min="7" max="16" id="ptsize" oninput="ptdemo.value = ptsize.value">
+                                <label class="form-label fw-bold mt-4 mb-2">Page dependencies</label>
+                                <div class="btn-group-vertical btn-group-sm d-flex" role="group">
+                                    <input type="radio" class="btn-check" name="pagedeps" id="inline-radio">
+                                    <label class="btn btn-outline-primary" for="inline-radio" title="Generate larger, standalone web pages that do not require network access to render.">
+                                        <i class="bi bi-box me-1"></i>Inline
+                                    </label>
+                                    <input type="radio" class="btn-check" name="pagedeps" id="reference-radio">
+                                    <label class="btn btn-outline-primary" for="reference-radio" title="Generate regular web pages that require network access to render.">
+                                        <i class="bi bi-link-45deg me-1"></i>Reference
+                                    </label>
+                                </div>
+                                <label class="form-label fw-bold mt-4 mb-2">Citation links</label>
+                                <div class="btn-group-vertical btn-group-sm d-flex" role="group">
+                                    <input type="radio" class="btn-check" name="reflinks" id="refsection-radio">
+                                    <label class="btn btn-outline-primary" for="refsection-radio" title="Citation links go to the reference section.">
+                                        <i class="bi bi-arrow-clockwise"></i> Go to reference section
+                                    </label>
+                                    <input type="radio" class="btn-check" name="reflinks" id="citation-radio">
+                                    <label class="btn btn-outline-primary" for="citation-radio" title="Citation links go directly to the cited document.">
+                                        <i class="bi bi-link-45deg me-1"></i>Go to linked document
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+<script>
+  var _paq = window._paq || [];
+  
+  _paq.push(['disableCookies']);
+  _paq.push(['trackPageView']);
+  _paq.push(['enableLinkTracking']);
+  (function() {
+    var u="//analytics.ietf.org/";
+    _paq.push(['setTrackerUrl', u+'matomo.php']);
+    _paq.push(['setSiteId', 7]);
+    var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+    g.type='text/javascript'; g.async=true; g.defer=true; g.src=u+'matomo.js'; s.parentNode.insertBefore(g,s);
+  })();
+</script>
+<noscript><p><img src="//analytics.ietf.org/matomo.php?idsite=7" style="border:0;" alt="" /></p></noscript>
+
+    <script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a22547e16d5edcc9',t:'MTc4NTI1NjM1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

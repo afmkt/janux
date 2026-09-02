@@ -1,0 +1,18 @@
+{
+  "planName": "OpenID Connect Core: Basic Certification Profile Authorization server test",
+  "alias": "janux",
+  "description": "janux OP Basic profile conformance run",
+  "publish": "no",
+  "server": {
+    "issuer": "http://host.docker.internal:18092/",
+    "client_registration": "static_client",
+    "client_id": "oidf-basic-1",
+    "client_secret": "REPLACE",
+    "client2_id": "oidf-basic-2",
+    "client2_secret": "REPLACE",
+    "client3_id": "oidf-basic-3",
+    "client3_secret": "REPLACE",
+    "redirect_uri": "https://www.certification.openid.net/test/a/janux/callback",
+    "scope": "openid profile email"
+  }
+}

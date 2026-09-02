@@ -1,0 +1,20 @@
+[project]
+name = "janux_compliant"
+version = "0.1.0"
+description = "Standards conformance test suite for the janux auth server (OIDC OP/RP, OAuth2, SCIM2)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28",
+    "jwcrypto>=1.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests_op", "tests_scim"]
+addopts = "-ra"

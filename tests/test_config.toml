@@ -1,0 +1,54 @@
+# Janux Test Configuration
+# All test settings come from this file — no environment variables needed.
+# The test suite auto-starts a server with these settings + a temp data dir.
+
+[server]
+# Port the test server binds to (auto-selects nearby port if occupied)
+port = 18092
+
+# Bind address for the test server  
+bind_address = "127.0.0.1"
+
+# Directory used as data_dir for the test tenant database (SQLite/Turso)
+data_dir = "./test-data"
+
+# Encryption key (64 hex chars = 32 bytes for AES-256-GCM)
+encryption_key = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+# Whether to seed the database with the [[seed]] configuration
+database_seed = true
+
+[server.acme]
+# ACME (Let's Encrypt) settings for TLS testing
+enabled = false
+email = ""
+
+[tls]
+cert_path = ""
+key_path = ""
+
+[[seed]]
+name = "test-tenant"
+domains = [{ id = "test.local", cors = [] }]
+# Roles must be declared before users/policies reference them:
+# user_add_role no longer creates unknown roles (api-consolidation Step 4).
+roles = ["root", "admin", "user", "guest"]
+policies = []
+users = [
+    { id = "admin@test.local", active = true, roles = ["admin"] },
+    { id = "user@test.local", active = true, roles = ["user"] },
+]
+
+[seed.resend]
+from = "test@test.com"
+resend_key = "test_resend_key_12345"
+template = "./email/verify.html"
+verify_url = "http://test.local/api/v1/auth/email/verify"
+
+[seed.alisms]
+api_secret = "test_api_secret"
+api_key = "test_api_key"
+template_code = "TEST_12345"
+sign_name = "Test Company"
+region_id = "cn-shanghai"
+endpoint = "dysmsapi.aliyuncs.com"

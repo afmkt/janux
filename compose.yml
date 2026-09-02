@@ -1,0 +1,61 @@
+services:
+  auth:
+    # Default: build locally and tag as janux:latest (`docker compose up
+    # --build`). If you publish the image to a registry yourself, point at
+    # it instead, e.g. in /etc/environment or the compose env file:
+    #   JANUX_IMAGE=<your-registry>/janux:v1.0.0
+    #   JANUX_PULL=always
+    image: ${JANUX_IMAGE:-janux:latest}
+    pull_policy: ${JANUX_PULL:-build}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: auth
+    restart: unless-stopped
+
+    # Config is loaded from the working directory (default: base + seed).
+    # To layer overrides (e.g. trust_forwarded_headers = false for
+    # standalone dev), mount a janux.toml and append it to the command:
+    #   command: ["janux", "-c", "base", "-c", "seed", "-c", "janux"]
+    volumes:
+      - ./base.toml:/app/base.toml:ro
+      - ./seed.toml:/app/seed.toml:ro
+      # - ./janux.toml:/app/janux.toml:ro
+      - auth_data:/app/data
+
+    healthcheck:
+      # Readiness probe (src/ops.rs): 503 unless the server state is
+      # injected and the tenant data dir is present, so a broken volume
+      # marks the container unhealthy instead of silently serving.
+      # Liveness alternative: /api/v1/health/live
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/v1/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    # Observability endpoints (src/ops.rs):
+    #   GET /api/v1/health/live | /ready   unauthenticated probes
+    #   GET /api/v1/admin/metrics          Prometheus text format, admin-gated:
+    #     curl -H "Authorization: Bearer <admin session JWT>" \
+    #       http://auth:8080/api/v1/admin/metrics
+    #   Every response carries X-Request-Id for log correlation.
+
+    # Reachable from caddy on the boom network; not published on the host
+    # because trust_forwarded_headers = true requires the server to sit
+    # behind the reverse proxy and not be directly reachable.
+    # For standalone dev without caddy, publish the port instead:
+    # ports:
+    #   - "8080:8080"
+    expose:
+      - "8080"
+
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+volumes:
+  auth_data:
+    external: true
+    name: auth_data

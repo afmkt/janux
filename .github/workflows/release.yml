@@ -1,0 +1,142 @@
+# Multi-platform release pipeline.
+#
+# Native binaries (GitHub Release assets):
+#   - macOS arm64 (Apple Silicon / M-series)
+#   - Linux amd64, Linux arm64
+#   - Windows amd64, Windows arm64
+#
+# Docker images are NOT pushed by this workflow: deployment hosts build
+# locally via compose.yml (image janux:latest, pull_policy=build), i.e.
+# `docker compose up --build`. If you later want registry publishing,
+# re-add buildx push jobs and set the registry secrets.
+#
+# Triggered by version tags (v1.2.3); workflow_dispatch builds without
+# creating a GitHub Release (artifacts stay on the run).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  # ═══════════════ Native binaries ═══════════════
+
+  binaries:
+    name: Binary (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS (Apple Silicon / M-series) — macos runners are arm64.
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            binary: janux
+            asset: janux-macos-arm64
+          # Linux amd64 / arm64.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: janux
+            asset: janux-linux-amd64
+            packages: pkg-config libssl-dev
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            binary: janux
+            asset: janux-linux-arm64
+            packages: pkg-config libssl-dev
+          # Windows amd64 (native) and arm64 (cross-compiled on amd64 host).
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: janux.exe
+            asset: janux-windows-amd64
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            binary: janux.exe
+            asset: janux-windows-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # frontend/dist is embedded at compile time (rust-embed).
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          tar -czf dist/${{ matrix.asset }}.tar.gz \
+            -C target/${{ matrix.target }}/release ${{ matrix.binary }}
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive `
+            -Path target/${{ matrix.target }}/release/${{ matrix.binary }} `
+            -DestinationPath dist/${{ matrix.asset }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ═══════════════ GitHub Release (tag pushes only) ═══════════════
+
+  release:
+    name: Publish GitHub Release
+    needs: [binaries]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: janux-*
+          path: assets
+          merge-multiple: true
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true
+          body: |
+            ## Binaries
+            Attached assets for macOS arm64, Linux amd64/arm64,
+            Windows amd64/arm64.
+
+            ## Docker
+            No registry image is published; build locally on the host:
+            `docker compose up --build` (tags `janux:latest`).

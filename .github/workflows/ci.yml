@@ -1,0 +1,198 @@
+name: Janux Auth CI - Test Suite
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  NODE_VERSION: "22"
+
+jobs:
+  # ═══════════════ UNIT TESTS ═══════════════
+
+  unit-tests:
+    name: Unit Tests (Rust + Clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies (libsqlite3, openssl)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
+
+      # frontend/dist is embedded at compile time (rust-embed), so the
+      # frontend must be built before any cargo build/test.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Clippy lint check
+        run: cargo clippy --all-targets --all-features -- -D warnings
+        continue-on-error: true  # Warnings don't block CI yet until code is cleaned up
+
+      - name: Build (debug)
+        run: cargo build --verbose
+
+      - name: Run unit tests
+        run: cargo test --lib --test unit_tests --no-fail-fast
+
+      - name: Test report summary
+        if: always()
+        run: |
+          echo "### Unit Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Platform: Ubuntu LTS (GitHub Actions)" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════ INTEGRATION TESTS ═══════════════
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies (libsqlite3, openssl)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run integration tests (single-threaded)
+        run: cargo test --test z_integration_tests -- --test-threads=1
+        env:
+          CI: "true"
+
+      - name: Test report summary
+        if: always()
+        run: |
+          echo "### Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Platform: Ubuntu LTS (GitHub Actions)" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════ E2E TESTS ═══════════════
+
+  e2e-tests:
+    name: E2E Tests (all_tests)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies (libsqlite3, openssl)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests (single-threaded)
+        run: cargo test --test all_tests -- --test-threads=1
+        env:
+          CI: "true"
+
+      - name: Test report summary
+        if: always()
+        run: |
+          echo "### E2E Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Platform: Ubuntu LTS (GitHub Actions)" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════ BUILD + CHECK ═══════════════
+
+  build-release:
+    name: Build Release Binary
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build release
+        run: cargo build --release --verbose
+
+      - name: Verify binary size
+        run: ls -lh target/release/janux
