@@ -48,6 +48,13 @@ aes-gcm = "0.10"
 argon2 = "0.5.3"
 prometheus = "0.13"
 
+# ─── Windows-only: build OpenSSL from source ────────────────────
+# salvo (tokio-openssl) and webauthn-attestation-ca require OpenSSL on
+# every platform; CI Windows runners have no system OpenSSL, so vendor
+# it (needs NASM + Perl, both preinstalled on GitHub runners).
+[target.'cfg(windows)'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
 # ─── Test / dev dependencies ─────────────────────────────────────────────
 [dev-dependencies]
 tokio = { version = "*", features = ["full"] }
