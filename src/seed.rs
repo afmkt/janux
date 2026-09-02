@@ -164,12 +164,20 @@ mod tests {
 
     use crate::server::JanuxConfig;
 
-    /// The committed seed.toml is the RBAC bootstrap source of truth
-    ///: guard its shape so a typo surfaces at `cargo test` time
-    /// instead of as a lockout on first boot.
+    /// The seed.toml shape is the RBAC bootstrap source of truth:
+    /// guard it so a typo surfaces at `cargo test` time instead of as
+    /// a lockout on first boot. base.toml/seed.toml are gitignored
+    /// (local credentials); on CI or a fresh clone the committed
+    /// example files (identical shape, dummy secrets) are validated
+    /// instead.
     #[test]
     fn seed_toml_bootstraps_builtin_roles() {
-        let cfg = JanuxConfig::load_from(&["base".into(), "seed".into()])
+        let files: Vec<String> = if std::path::Path::new("seed.toml").exists() {
+            vec!["base".into(), "seed".into()]
+        } else {
+            vec!["base.example".into(), "seed.example".into()]
+        };
+        let cfg = JanuxConfig::load_from(&files)
             .expect("seed.toml must load through the production config path");
         let tenants = cfg.seed.expect("seed.toml must define [[seed]] tenants");
         let tenant = tenants

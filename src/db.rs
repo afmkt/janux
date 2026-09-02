@@ -114,19 +114,20 @@ pub enum HttpMethod {
     TRACE,
 }
 
-impl HttpMethod {
-    pub fn to_string(&self) -> String {
-        match &self {
-            HttpMethod::CONNECT => "CONNECT".to_string(),
-            HttpMethod::HEAD => "HEAD".to_string(),
-            HttpMethod::TRACE => "TRACE".to_string(),
-            HttpMethod::PATCH => "PATCH".to_string(),
-            HttpMethod::DELETE => "DELETE".to_string(),
-            HttpMethod::OPTIONS => "OPTIONS".to_string(),
-            HttpMethod::PUT => "PUT".to_string(),
-            HttpMethod::POST => "POST".to_string(),
-            HttpMethod::GET => "GET".to_string(),
-        }
+impl std::fmt::Display for HttpMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            HttpMethod::CONNECT => "CONNECT",
+            HttpMethod::HEAD => "HEAD",
+            HttpMethod::TRACE => "TRACE",
+            HttpMethod::PATCH => "PATCH",
+            HttpMethod::DELETE => "DELETE",
+            HttpMethod::OPTIONS => "OPTIONS",
+            HttpMethod::PUT => "PUT",
+            HttpMethod::POST => "POST",
+            HttpMethod::GET => "GET",
+        };
+        f.write_str(s)
     }
 }
 
@@ -143,22 +144,9 @@ pub struct JwtData {
     pub roles: HashSet<String>,
 }
 
-/// Claims payloads that the shared validation primitive
-/// ([`crate::utils::validate_token`]) can decide over.
-///
-/// Internal session tokens carry [`JwtData`]; OIDC access/refresh tokens are
-/// decoded as [`serde_json::Value`] because their payload shapes differ per
-/// token kind. The trait exposes exactly the three facts the primitive needs:
-/// the tenant-domain binding, the `typ` marker, and — only for internal
-/// session claims — the typed data the policy engine evaluates.
 pub trait TokenPayload {
-    /// The tenant domain the token is bound to, when the payload carries one.
     fn bound_domain(&self) -> Option<&str>;
-    /// The token-type marker (`typ`), when the payload carries one.
     fn typ(&self) -> Option<&str>;
-    /// The payload as internal session claims. Only `JwtData` tokens can be
-    /// evaluated by the tenant policy engine; every other payload is denied
-    /// by default when a policy check is requested.
     fn jwt_data(&self) -> Option<&JwtData>;
 }
 
@@ -207,8 +195,6 @@ pub struct JwtVerify {
     pub jwt_data: JwtData,
     pub expect_mfa: bool,
     pub domain: String,
-    /// When the user originally authenticated (OIDC Core §2 `auth_time`).
-    /// Carried through refresh so token rotation never resets it.
     pub auth_time: Option<usize>,
 }
 
@@ -222,11 +208,6 @@ pub struct Tenant {
 }
 
 impl Tenant {
-    // key CRUD
-    /// Issue an internal JWT. `issuer` is the canonical issuer URL for the
-    /// request's tenant (`crate::utils::get_issuer`) and becomes the `iss`
-    /// claim; `domain` is the registered tenant domain used for signing-key
-    /// lookup and as the internal audience.
     pub async fn jwt_authenticate<T: Serialize + Clone>(
         &mut self,
         issuer: &str,
@@ -321,16 +302,6 @@ impl Tenant {
         crate::ops::token_issued("session");
         Ok(jwt)
     }
-    /// Refresh an internal session JWT.
-    ///
-    /// Runs through the SAME rotation logic as the OIDC `handle_refresh`:
-    /// the presented
-    /// token is validated via the shared primitive (which also enforces the
-    /// revocation gate), a successor is signed BEFORE any state is
-    /// mutated, and the atomic commit point revokes the presented token in
-    /// the persistent `InvalidJwt` store. The old token never survives its
-    /// refresh, and presenting an already-rotated (or logged-out) token is
-    /// refused — the internal path no longer diverges from the OIDC one.
     pub async fn refresh_jwt(
         &mut self,
         issuer: &str,
@@ -338,13 +309,6 @@ impl Tenant {
         jwt: &str,
         minutes: i32,
     ) -> Result<String> {
-        // Signature, expiry, issuer and revocation in one primitive. Revoked
-        // (logged-out OR already-rotated) tokens fail here, so a stolen
-        // token cannot be refreshed back into a session. The policy engine
-        // is deliberately NOT consulted: the pre-consolidation path ran it
-        // and discarded its verdict, and tenants hold no grants for
-        // `auth/refresh` — gating rotation on RBAC would break every
-        // existing session. Validity alone decides, as before.
         let decision = crate::utils::validate_token::<JwtData>(
             self,
             issuer,
@@ -354,16 +318,6 @@ impl Tenant {
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-        // boundary: refresh is the only point where a stateless session
-        // can be EXTENDED, and it is a central round-trip by definition — so
-        // the user's live state is re-checked here, not at verify time (JWT
-        // validation must stay stateless/distributed). A deactivated user's
-        // current token runs out its lifetime but can never be renewed. A
-        // DELETED user fails closed too: deletion cascades every
-        // credential (see `user_delete_cascades_credentials`), so no new
-        // login is possible — the refresh boundary must not keep extending
-        // the old session either. Checked before any mutation so a refused
-        // request does not consume the presented token.
         let user_id = uuid::Uuid::try_parse(&decision.claims.data.user)
             .map_err(|_| anyhow::anyhow!("token subject is not a valid user id"))?;
         let user = match self.user_by_id(user_id).await {
@@ -381,12 +335,8 @@ impl Tenant {
                 ));
             }
         };
-        // Sign the successor BEFORE consuming the presented token (same
-        // safety ordering as handle_refresh): a signing failure must never
-        // strand the client with a revoked token and no response.
         let key = self.current_key(domain)?;
         let mut d = decision.claims.data;
-        // Keep the informational name claim current across rotation.
         d.username = user.name.clone();
         let new_jwt = jwt_authenticate(
             issuer,
@@ -397,22 +347,12 @@ impl Tenant {
             JwtOidcParams {
                 client_id: domain.to_string(),
                 nonce: Some(uuid::Uuid::new_v4().to_string()),
-                // Same factor set as the original token — re-derive so the
-                // claim stays populated through rotation.
                 amr: amr_values(&d.mfa),
                 acr: acr_value(&d.mfa),
                 access_token: None,
-                // Preserve the ORIGINAL authentication time: refresh does not
-                // re-authenticate the user, so stamping now would break
-                // max_age decisions at relying parties (OIDC Core section 2).
                 auth_time: decision.claims.auth_time,
             },
         )?;
-        // Atomic commit point: revoke the presented token (insert-wins). An
-        // expired-but-within-leeway token is rotated exactly like a live one
-        // — the old behavior of handing the same expired token back
-        // is gone. Exactly one concurrent presenter of the same token wins;
-        // every loser is refused as reuse.
         let exp = jiff::Timestamp::from_second(decision.claims.exp as i64)?;
         match crate::utils::revoke_token(self, jwt, Some(exp), "internal refresh rotation").await {
             Ok(true) => {
@@ -462,45 +402,26 @@ async fn connect_tenant(dir: &Path) -> toasty::Result<toasty::Db> {
     }
 }
 
-/// Process-wide tenant registry and domain router.
-///
-/// Concurrency model (README §6): same-tenant requests are serialized
-/// within this process by the `RefMut` write guard handed out by
-/// `tenant_by_domain` / `tenant_by_id`, which handlers hold from tenant
-/// resolution to the end of the request. The check-then-act sequences
-/// inside a tenant (identity claims, `user.active` transitions, refresh
-/// rotation, key/policy cache updates) rely on that serialization — it
-/// is deliberate design, not an accident of DashMap. Tenant/domain
-/// lifecycle mutations run outside any tenant guard and are serialized
-/// separately by `topology`. The guarantee is per-process: nothing here
-/// coordinates across instances sharing a data dir.
 pub struct Storage {
     pub raw_path: std::path::PathBuf,
     pub tenants: DashMap<String, Tenant>,
     pub router: DashMap<String, String>,
-    /// Serializes topology mutations (tenant/domain create and delete).
-    /// The maps above are concurrent, but the multi-step sequences that
-    /// keep `router` and the per-tenant databases in agreement are not
-    /// atomic on their own: two racing `add_domain` calls for the same
-    /// domain could both pass the registration check and persist the
-    /// domain into two different tenant databases. Read paths
-    /// (`tenant_by_domain`, …) never take this lock.
     pub topology: tokio::sync::Mutex<()>,
 }
 
 impl Storage {
     pub async fn domain_cors(&self, domain: &str, cors: Vec<String>) -> Result<()> {
         let tenant = self.tenant_by_domain(domain);
-        if tenant.is_some() {
-            tenant.unwrap().domain_cors(domain, cors).await
+        if let Some(mut item) = tenant {
+            item.domain_cors(domain, cors).await
         } else {
             Err(anyhow::anyhow!("Unknown domain '{}'", domain))
         }
     }
     pub async fn load_domain(&self, domain: &str) -> Result<Domain> {
         let tenant = self.tenant_by_domain(domain);
-        if tenant.is_some() {
-            tenant.unwrap().domain(domain).await
+        if let Some(mut item) = tenant {
+            item.domain(domain).await
         } else {
             Err(anyhow::anyhow!("Unknown domain '{}'", domain))
         }
@@ -513,7 +434,7 @@ impl Storage {
                     let all = t.all_domains().await;
                     return Ok(all.iter().map(|a| a.id.clone()).collect());
                 }
-            } else if d.cors.len() == 0 {
+            } else if d.cors.is_empty() {
                 return Ok(vec![]);
             //allow nothing
             } else {
@@ -524,8 +445,6 @@ impl Storage {
         Err(anyhow::anyhow!("Error loading domain"))
     }
     pub async fn add_domain(&self, domain: &str, tenant: &str) -> Result<()> {
-        // Check-then-create-then-register must be atomic, or two racing
-        // adds could persist the same domain into two tenant databases.
         let _guard = self.topology.lock().await;
         if self.router.contains_key(domain) {
             return Err(anyhow::anyhow!(
@@ -571,20 +490,7 @@ impl Storage {
         Ok(ret)
     }
 
-    /// Resolve the tenant serving `domain`.
-    ///
-    /// The returned `RefMut` is a shard **write lock** on the tenant map:
-    /// while a handler holds it, no other same-tenant request in this
-    /// process makes progress. That serialization is what the
-    /// check-then-act flows rely on (README §6), so the guard must be
-    /// held to the END of the multi-step flow — never dropped mid-flow
-    /// and re-acquired, and never replaced by `tenants.get()` (a read
-    /// ref) in a path that mutates.
     pub fn tenant_by_domain(&self, domain: &str) -> Option<RefMut<'_, String, Tenant>> {
-        // Timed for janux_tenant_guard_wait_seconds: the shard-lock wait is
-        // the head-of-line cost accepted in README §6, and this histogram is
-        // how it becomes visible. Recording includes the uncontended fast
-        // path on purpose — contention shows up as tail latency.
         let start = std::time::Instant::now();
         let ret = self
             .router
@@ -593,8 +499,6 @@ impl Storage {
         crate::ops::record_guard_wait(start.elapsed());
         ret
     }
-    /// Resolve a tenant by name. Same guard contract as
-    /// [`Self::tenant_by_domain`] (README §6).
     pub fn tenant_by_id(&self, id: &str) -> Option<RefMut<'_, String, Tenant>> {
         let start = std::time::Instant::now();
         let ret = self.tenants.get_mut(id);
@@ -603,11 +507,7 @@ impl Storage {
     }
 
     pub async fn new_tenant(&self, name: &str) -> Result<RefMut<'_, String, Tenant>> {
-        // Tenant names share the resolution namespace with domains; the
-        // collision check below must be atomic with respect to
-        // concurrent add_domain calls.
         let _guard = self.topology.lock().await;
-        // validate before the name touches a filesystem path.
         let path = self.tenant_path(name)?;
         if self.router.contains_key(name) {
             return Err(anyhow::anyhow!("Tenant '{}' already exists", name));
@@ -635,17 +535,12 @@ impl Storage {
     }
 
     pub async fn delete_tenant(&self, name: &str) -> Result<()> {
-        // Deleting a tenant removes its router entries; racing with
-        // add_domain could otherwise leave a dangling router entry
-        // pointing at a deleted tenant.
         let _guard = self.topology.lock().await;
-        // 1. Validate tenant exists
         let tenant_exists = self.tenants.contains_key(name);
         if !tenant_exists {
             return Err(anyhow::anyhow!("Tenant '{}' not found", name));
         }
 
-        // 2. Remove all router entries for this tenant
         let domains: Vec<String> = self
             .router
             .iter()
@@ -656,11 +551,8 @@ impl Storage {
             self.router.remove(domain);
         }
 
-        // 3. Remove tenant from in-memory storage
         self.tenants.remove(name);
         let directory = self.directory();
-        // 4. Backup the db file before deletion. re-derive the
-        // location through the validated path — never join a raw name.
         let tenant_dir = self.tenant_path(name)?;
         if tenant_dir.is_dir() {
             let pdir = directory
@@ -678,7 +570,6 @@ impl Storage {
             let backup_path = backup_dir.join(&backup_name);
             create_dir_all(&backup_path).await.ok(); // ignore race if concurrent delete
 
-            // Copy janux.db to backup (async)
             let db_src = tenant_dir.join("janux.db");
             if let Ok(content) = read(&db_src).await {
                 match write(backup_path.join("janux.db"), &content).await {
@@ -692,7 +583,6 @@ impl Storage {
             }
         }
 
-        // 5. Remove tenant directory on disk (async)
         if try_exists(&tenant_dir).await.ok().unwrap_or(false) {
             remove_dir_all(&tenant_dir).await?;
         }
@@ -702,8 +592,6 @@ impl Storage {
     }
 
     async fn load_tenant(&mut self, name: &str) -> Result<()> {
-        // a directory on disk is not a valid tenant name by
-        // construction — refuse to load it instead of mounting it.
         let path = self.tenant_path(name)?;
         match self.tenants.entry(name.into()) {
             Entry::Occupied(_v) => {
@@ -747,10 +635,6 @@ impl Storage {
         self.raw_path.join("tenants")
     }
 
-    /// tenant names become filesystem path components under
-    /// `directory()`. The strict charset rules out `../`, absolute paths,
-    /// and every other path metacharacter; the length bound keeps the
-    /// name within filesystem component limits.
     pub fn valid_tenant_name(name: &str) -> bool {
         !name.is_empty()
             && name.len() <= 64
@@ -759,10 +643,6 @@ impl Storage {
                 .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
     }
 
-    /// the on-disk location of a tenant. Rejects invalid names and
-    /// asserts the join stays inside the tenant root — defense in depth
-    /// on top of the charset, so no future caller can reintroduce a
-    /// traversal by bypassing the check.
     fn tenant_path(&self, name: &str) -> Result<PathBuf> {
         if !Self::valid_tenant_name(name) {
             return Err(anyhow::anyhow!(
@@ -781,8 +661,6 @@ impl Storage {
     pub async fn init(path: &Path) -> Result<Self> {
         let dir = path.join("tenants");
         ensure_dir(dir.as_path()).await?;
-        // One process-wide revocation store shared by every writer and every
-        // revocation check (first init wins; seed re-runs are no-ops).
         InvalidJwt::init_global(path).await?;
         let mut storage = Self {
             raw_path: path.to_path_buf(),
@@ -848,16 +726,9 @@ mod tests {
     const DOMAIN: &str = "localhost";
     const TEST_ISSUER: &str = "http://localhost";
 
-    /// The revocation store is a process-wide singleton, so all tests share one
-    /// backing directory that must outlive every individual test's TempDir
-    /// (same pattern as the totp.rs/oidc.rs endpoint tests).
     static TEST_STORE_DIR: LazyLock<tempfile::TempDir> =
         LazyLock::new(|| tempfile::tempdir().expect("tempdir"));
 
-    /// toasty spawns the store's connection task on whichever runtime is
-    /// current during `init_global`; a `#[tokio::test]` runtime dies with its
-    /// test. Initialize once on a dedicated multi-thread runtime whose
-    /// workers outlive every individual test.
     static TEST_STORE_RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -877,7 +748,6 @@ mod tests {
             .expect("store init task");
     }
 
-    /// In-process tenant with a signing key and one user.
     async fn refresh_test_env() -> (Storage, tempfile::TempDir) {
         init_revocation_store().await;
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -921,10 +791,6 @@ mod tests {
         assert_ne!(refreshed, token, "rotation must issue a NEW token");
     }
 
-    /// regression: logout revokes the token in the `InvalidJwt` store;
-    /// refresh must consult that store too, otherwise a logged-out (stolen)
-    /// token can be refreshed back into a fresh valid session and logout is
-    /// defeatable.
     #[tokio::test]
     async fn refresh_rejects_a_revoked_token() {
         let (storage, _tmp) = refresh_test_env().await;
@@ -934,7 +800,6 @@ mod tests {
             .await
             .expect("token");
 
-        // Logout: revoke the presented token (src/verify.rs `logout`).
         InvalidJwt::global()
             .invalid(&token, &mut tenant)
             .await
@@ -951,11 +816,6 @@ mod tests {
         );
     }
 
-    // ── Step 1.3 / internal refresh rotates like the OIDC path ────────
-
-    /// The asymmetry: the internal path used to keep the old token
-    /// alive after a refresh. Rotation must revoke the presented token and
-    /// hand out a distinct successor that is itself a valid session.
     #[tokio::test]
     async fn refresh_rotation_revokes_the_presented_token() {
         let (storage, _tmp) = refresh_test_env().await;
@@ -992,9 +852,6 @@ mod tests {
         assert_eq!(session.claims.data.user, alice.id.to_string());
     }
 
-    /// Reuse refusal: presenting an already-rotated token again must fail.
-    /// The OIDC path always had this (insert-wins commit point); the
-    /// internal path now shares it.
     #[tokio::test]
     async fn refresh_rejects_reuse_of_a_rotated_token() {
         let (storage, _tmp) = refresh_test_env().await;
@@ -1011,9 +868,6 @@ mod tests {
         );
     }
 
-    /// The second defect: refreshing an expired-but-within-leeway token
-    /// used to hand the SAME expired token back. It is now rotated like any
-    /// live token — new successor, old token revoked.
     #[tokio::test]
     async fn refresh_rotates_an_expired_within_leeway_token() {
         let (storage, _tmp) = refresh_test_env().await;
@@ -1027,8 +881,6 @@ mod tests {
             mfa: HashSet::new(),
             roles: HashSet::new(),
         };
-        // Negative lifetime: expired 60s ago — inside jwt_decode's 2-minute
-        // leeway, exactly the window the old behavior leaked through.
         let token = crate::jwt::jwt_authenticate(
             TEST_ISSUER,
             &alice.id.to_string(),
@@ -1056,13 +908,6 @@ mod tests {
         );
     }
 
-    // ── Step 4: role assignment never creates roles ─────────────────────────
-
-    /// prerequisite: `user_add_role`
-    /// must resolve an existing role instead of silently inventing an empty
-    /// one — roles are created only via the seed `roles` list or
-    /// `admin/role/create`, mirroring `policy_create`'s pre-existing-role
-    /// requirement.
     #[tokio::test]
     async fn user_add_role_rejects_unknown_roles() {
         let (storage, _tmp) = refresh_test_env().await;
@@ -1084,11 +929,6 @@ mod tests {
             .expect("assigning a declared role succeeds");
     }
 
-    // ── bounded role hierarchy ────────────────────────────────────────
-
-    /// Tenant with the builtin catalog and three users: alice holds `admin`,
-    /// bob holds `user`, carol holds `root`+`admin`+`user` — the standard
-    /// level-gate test vectors.
     async fn role_gate_env() -> (Storage, tempfile::TempDir) {
         let (storage, tmp) = refresh_test_env().await;
         {
@@ -1144,8 +984,6 @@ mod tests {
         )
     }
 
-    /// §1.3: effective level is the max over resolvable JWT roles; Bootstrap
-    /// is unrestricted; unresolvable names contribute nothing.
     #[tokio::test]
     async fn effective_level_is_the_max_resolvable_role_level() {
         let (storage, _tmp) = role_gate_env().await;
@@ -1180,8 +1018,6 @@ mod tests {
         );
     }
 
-    /// R1 (E1/E2/E7/E8): grants require a strictly higher level; nobody
-    /// grants `root`; self-targeting is subsumed, not special-cased.
     #[tokio::test]
     async fn grant_requires_strictly_higher_level() {
         let (storage, _tmp) = role_gate_env().await;
@@ -1222,8 +1058,6 @@ mod tests {
         assert!(is_forbidden(&err));
     }
 
-    /// R2: revocation is symmetric to grant — peers cannot strip each other's
-    /// roles.
     #[tokio::test]
     async fn revoke_is_symmetric_to_grant() {
         let (storage, _tmp) = role_gate_env().await;
@@ -1256,9 +1090,6 @@ mod tests {
             .expect("downward revocation stays allowed");
     }
 
-    /// R5/R6 (E3/E9/E10): policy writes are bounded by the same level test —
-    /// a role can never expand its own permission set, and the apex role's
-    /// policy set is seed-only.
     #[tokio::test]
     async fn policy_writes_are_bound_by_level() {
         let (storage, _tmp) = role_gate_env().await;
@@ -1388,8 +1219,6 @@ mod tests {
             .expect("root deletes admin policy");
     }
 
-    /// R3: created roles are born strictly below their creator; builtin names
-    /// are reserved; existing names conflict; negative levels are rejected.
     #[tokio::test]
     async fn role_create_is_bound_by_creator_level() {
         let (storage, _tmp) = role_gate_env().await;
@@ -1442,8 +1271,6 @@ mod tests {
             .expect("root may create just below the apex");
     }
 
-    /// R4: builtin roles are undeletable regardless of caller; custom roles
-    /// are deletable only from strictly above.
     #[tokio::test]
     async fn builtin_roles_are_undeletable_and_deletion_is_bounded() {
         let (storage, _tmp) = role_gate_env().await;
@@ -1484,8 +1311,6 @@ mod tests {
             .expect("80 > 30");
     }
 
-    /// §2 corollary: delegated power keeps decreasing — a holder of a custom
-    /// mid-level role can only administer roles below it.
     #[tokio::test]
     async fn transitive_delegation_stays_bounded() {
         let (storage, _tmp) = role_gate_env().await;
@@ -1550,8 +1375,6 @@ mod tests {
             .expect("30 > 20 policy");
     }
 
-    /// §1.3 default-deny: a caller whose JWT roles resolve to nothing has no
-    /// level and may administer nothing.
     #[tokio::test]
     async fn unresolvable_roles_carry_no_level() {
         let (storage, _tmp) = role_gate_env().await;
@@ -1587,8 +1410,6 @@ mod tests {
         assert!(is_forbidden(&err));
     }
 
-    /// §4: Bootstrap is the unrestricted trust anchor — idempotent catalog
-    /// seeding, root grants, and custom seed roles.
     #[tokio::test]
     async fn bootstrap_role_create_is_idempotent_and_unrestricted() {
         let (storage, _tmp) = role_gate_env().await;
@@ -1615,9 +1436,6 @@ mod tests {
         assert!(!role.builtin);
     }
 
-    // ── session validation is policy-free ─────────────────────────────
-
-    /// Tenant whose only policy requires MFA for `alice`'s role.
     async fn mfa_policy_env() -> (Storage, tempfile::TempDir) {
         let (storage, tmp) = refresh_test_env().await;
         {
@@ -1649,10 +1467,6 @@ mod tests {
         (storage, tmp)
     }
 
-    /// The step-up deadlock: a single-factor session is denied by the
-    /// policy engine (`expect_mfa`), yet session validation — the same
-    /// primitive without the policy opt-in — must still accept it so the
-    /// self-service auth endpoints can add the missing factor.
     #[tokio::test]
     async fn session_validation_ignores_the_policy_engine() {
         let (storage, _tmp) = mfa_policy_env().await;
@@ -1668,8 +1482,6 @@ mod tests {
             .await
             .expect("token");
 
-        // With the policy engine opted in, the same token is denied for the
-        // protected resource…
         let denied = crate::utils::validate_token::<JwtData>(
             &mut tenant,
             TEST_ISSUER,
@@ -1690,9 +1502,6 @@ mod tests {
         assert!(!denied.can_access);
         assert!(denied.expect_mfa);
 
-        // …but without the policy opt-in it is accepted: that is how the
-        // session reaches the auth endpoints that complete the second
-        // factor.
         let session = crate::utils::validate_token::<JwtData>(
             &mut tenant,
             TEST_ISSUER,
@@ -1749,10 +1558,6 @@ mod tests {
         );
     }
 
-    /// `/userinfo` semantics (Step 1.1): refresh-typed tokens are rejected
-    /// when `reject_typ` says so, and accepted when it does not — the flag
-    /// is what keeps introspection able to report on refresh tokens while
-    /// userinfo refuses them.
     #[tokio::test]
     async fn reject_typ_flag_controls_refresh_token_acceptance() {
         let (storage, _tmp) = refresh_test_env().await;
@@ -1806,16 +1611,6 @@ mod tests {
         );
     }
 
-    // ── user.active enforced at the stateful boundaries ────────────────
-    //
-    // JWT verification is deliberately stateless (no central authority to
-    // consult in a distributed setup), so `active` is NOT checked at verify
-    // time. Instead it is enforced where the client is already round-tripping
-    // to the authority: login (no new sessions) and refresh (no extension).
-    // Deactivation therefore propagates within one token lifetime.
-
-    /// A deactivated user cannot start a new session — every factor mints
-    /// through `authenticate_jwt`.
     #[tokio::test]
     async fn deactivated_user_cannot_authenticate() {
         let (storage, _tmp) = refresh_test_env().await;
@@ -1833,8 +1628,6 @@ mod tests {
         );
     }
 
-    /// The refresh boundary: a deactivated user's current token runs out its
-    /// lifetime but can never be renewed. Reactivation lifts the block.
     #[tokio::test]
     async fn refresh_rejects_a_deactivated_user() {
         let (storage, _tmp) = refresh_test_env().await;
@@ -1853,8 +1646,6 @@ mod tests {
             "a deactivated user must not refresh back into a session"
         );
 
-        // The refused attempt must not have consumed the token — the user
-        // check runs before the rotation commit point.
         tenant
             .user_activate(&crate::role::Caller::Bootstrap, "alice")
             .await
@@ -1865,9 +1656,6 @@ mod tests {
         );
     }
 
-    /// Verification itself must stay stateless: a deactivated user's live
-    /// token still decodes/verifies until it expires. This pins the design
-    /// decision so a future "fix" doesn't quietly re-add a verify-time check.
     #[tokio::test]
     async fn verification_stays_stateless_for_deactivated_users() {
         let (storage, _tmp) = refresh_test_env().await;
@@ -1897,8 +1685,6 @@ mod tests {
         assert_eq!(session.claims.data.user, alice.id.to_string());
     }
 
-    // ── tenant names are path-safe ────────────────────────────────────
-
     #[test]
     fn tenant_name_charset_is_strict() {
         assert!(Storage::valid_tenant_name("test-tenant"));
@@ -1915,8 +1701,6 @@ mod tests {
         assert!(!Storage::valid_tenant_name(&"a".repeat(65)));
     }
 
-    /// Traversal names must be rejected before anything touches the
-    /// filesystem: no directory or DB may appear outside the tenant root.
     #[tokio::test]
     async fn new_tenant_rejects_path_traversal_names() {
         init_revocation_store().await;
@@ -1937,7 +1721,6 @@ mod tests {
             );
         }
 
-        // Nothing may have been created outside the tenant root...
         assert!(!tmp.path().join("evil").exists());
         assert!(!std::path::Path::new("/tmp/janux-g72-abs").exists());
         // ...and the tenants directory holds no stray entries.
@@ -1952,8 +1735,6 @@ mod tests {
         assert_eq!(count, 0, "rejected names must not create directories");
     }
 
-    /// Valid names still work end-to-end, and deletion stays inside the
-    /// data directory.
     #[tokio::test]
     async fn tenant_lifecycle_stays_inside_the_data_dir() {
         init_revocation_store().await;
@@ -1973,16 +1754,6 @@ mod tests {
         assert!(!tmp.path().join("tenants").join("g72-tenant").exists());
     }
 
-    // ── Topology mutations are concurrency-safe ────────────────────────────
-    //
-    // The router (domain -> tenant) must agree with the per-tenant
-    // databases at all times. Before the topology lock, two racing
-    // add_domain calls for the same domain could both pass the
-    // registration check and persist the domain into two different
-    // tenant databases — a split-brain the next restart refuses to boot.
-
-    /// Racing `add_domain` calls for the same domain must produce exactly
-    /// one winner; the domain record may exist in one tenant database only.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_add_domain_has_exactly_one_winner() {
         init_revocation_store().await;
@@ -2037,9 +1808,6 @@ mod tests {
         );
     }
 
-    /// Racing an add against a remove must end in a consistent state:
-    /// the router entry exists if and only if exactly one tenant database
-    /// holds the domain record.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_add_and_remove_stay_consistent() {
         init_revocation_store().await;
@@ -2112,17 +1880,6 @@ mod tests {
         }
     }
 
-    // ── user deletion cascades its credentials ─────────────────────────
-    //
-    // Toasty lowers a model delete as DisassociateAll { delete: true } over
-    // every has_many relation: a child whose belongs_to is NON-NULLABLE is
-    // deleted, a nullable one is detached. All credential models (Email,
-    // OTP, Passkey, Totp, OAuth2, UserRole) declare a non-nullable
-    // belongs_to, so deleting a user cascades them all. This test pins that
-    // behavior — if a credential ever gains a nullable belongs_to, it
-    // silently switches from cascade-delete to detach and this guard fails.
-
-    /// Deleting a user removes its attached credentials and role grants.
     #[tokio::test]
     async fn user_delete_cascades_credentials() {
         init_revocation_store().await;
@@ -2184,9 +1941,9 @@ mod tests {
         }
 
         let mut tenant = storage.tenant_by_id("test-tenant").expect("tenant");
-        // The user is gone.
+
         assert!(tenant.user("alice").await.is_err());
-        // Cascade: the email and mobile credentials must not survive.
+
         assert!(
             tenant.user_by_email("alice@example.com").await.is_err(),
             "email credential must be deleted with its user"
@@ -2195,7 +1952,7 @@ mod tests {
             tenant.user_by_mobile("+15551234567").await.is_err(),
             "mobile credential must be deleted with its user"
         );
-        // Cascade: role grants and TOTP records must not survive.
+
         assert!(
             tenant.user_roles(alice_id).await.expect("roles").is_empty(),
             "role grants must be deleted with their user"
@@ -2211,9 +1968,6 @@ mod tests {
         );
     }
 
-    /// The refresh boundary: a deleted user's session can run out its
-    /// lifetime but must never be EXTENDED — refresh fails closed on the
-    /// missing user record, exactly like deactivation.
     #[tokio::test]
     async fn refresh_rejects_a_deleted_user() {
         let (storage, _tmp) = refresh_test_env().await;

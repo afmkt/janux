@@ -328,10 +328,6 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(req_request) = extract::<ReqRequest>(req, None).await {
-        // per-recipient throttle on top of the per-IP quota —
-        // distributed clients must not be able to bombard one inbox and
-        // burn the mail quota. The address is lowercased so case rotation
-        // cannot evade the budget.
         if !crate::utils::send_throttle_allows(
             &format!("email:{}", req_request.email.to_lowercase()),
             3,

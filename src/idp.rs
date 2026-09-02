@@ -336,7 +336,6 @@ impl crate::db::Tenant {
             .exec(&mut self.database)
             .await
             .map(|_| ())
-            .map_err(Into::into)
     }
 
     /// Extended OIDC metadata for a client ([`ClientMeta`]), if any was
