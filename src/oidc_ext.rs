@@ -637,11 +637,11 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
     // ── Identify the client: id_token_hint wins over the client_id param ─
     let mut client_id: Option<String> = params.client_id.clone().filter(|s| !s.is_empty());
     let mut user_id: Option<String> = None;
-    if let Some(hint) = params.id_token_hint.clone().filter(|s| !s.is_empty()) {
-        if let Some(claims) = decode_id_token_hint(&mut tenant, &issuer, &hint).await {
-            client_id = Some(claims.aud.clone());
-            user_id = Some(claims.sub.clone());
-        }
+    if let Some(hint) = params.id_token_hint.clone().filter(|s| !s.is_empty())
+        && let Some(claims) = decode_id_token_hint(&mut tenant, &issuer, &hint).await
+    {
+        client_id = Some(claims.aud.clone());
+        user_id = Some(claims.sub.clone());
     }
 
     // ── Validate post_logout_redirect_uri (must be previously registered) ─
@@ -682,20 +682,16 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
     }
 
     // ── Terminate the presented session (Bearer JWT) ───────────────────
-    if let Some(jwt) = crate::utils::get_jwt(req).map(str::to_string) {
-        if let Ok(tkn) = crate::jwt::jwt_decode::<crate::db::JwtData>(&jwt, 2, &mut tenant).await
-            && tkn.claims.iss == issuer
-            && tkn.claims.aud == domain
-        {
-            if let Ok(exp) = jiff::Timestamp::from_second(tkn.claims.exp as i64) {
-                if crate::utils::revoke_token(&mut tenant, &jwt, Some(exp), "rp-initiated logout")
-                    .await
-                    .is_ok()
-                {
-                    user_id = Some(tkn.claims.sub.clone());
-                }
-            }
-        }
+    if let Some(jwt) = crate::utils::get_jwt(req).map(str::to_string)
+        && let Ok(tkn) = crate::jwt::jwt_decode::<crate::db::JwtData>(&jwt, 2, &mut tenant).await
+        && tkn.claims.iss == issuer
+        && tkn.claims.aud == domain
+        && let Ok(exp) = jiff::Timestamp::from_second(tkn.claims.exp as i64)
+        && crate::utils::revoke_token(&mut tenant, &jwt, Some(exp), "rp-initiated logout")
+            .await
+            .is_ok()
+    {
+        user_id = Some(tkn.claims.sub.clone());
     }
 
     // ── Back-channel fan-out to the user's RPs ─────────────────────────

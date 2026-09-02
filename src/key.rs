@@ -279,10 +279,10 @@ pub async fn jwks_endpoint(req: &mut Request, depot: &mut Depot, res: &mut Respo
     {
         for key_model in keys {
             // Convert stored PEM public key into a jsonwebtoken JWK
-            if let Ok(public_pem) = key_model.public_pem() {
-                if let Ok(jwk) = pem_to_jwk(&public_pem, &key_model.id) {
-                    jwk_set.keys.push(jwk);
-                }
+            if let Ok(public_pem) = key_model.public_pem()
+                && let Ok(jwk) = pem_to_jwk(&public_pem, &key_model.id)
+            {
+                jwk_set.keys.push(jwk);
             }
         }
     }

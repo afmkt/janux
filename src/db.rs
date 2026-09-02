@@ -53,24 +53,6 @@ impl AuthType {
     }
 }
 
-/// Map the internal factor labels (see [`AuthType`]) recorded in a token's
-/// `mfa` set to their registered RFC 8176 `amr` claim values.
-///
-/// Mapping decisions:
-/// - `"passkey"` → `"hwk"` — WebAuthn credentials are proof-of-possession of a
-/// hardware-secured key.
-/// - `"email"` → `"mca"` — a magic link is multiple-channel authentication
-/// (the browser session plus the user's email inbox). RFC 8176 registers no
-/// dedicated value for email links.
-/// - `"otp"` → `"sms"` — this is the SMS code path (confirmation via SMS text
-/// message to a registered number).
-/// - `"totp"` → `"otp"` — RFC 8176 `otp` explicitly covers RFC 6238 TOTP.
-/// - `"oauth2"` / legacy `"Social"` — no registered RFC 8176 value exists for
-/// federated login; it is omitted from `amr`.
-///
-/// Returns `None` when no factor maps to a registered value so the claim is
-/// omitted entirely (it is OPTIONAL per OIDC Core §2) rather than emitted as
-/// an empty array. Output is sorted for deterministic tokens.
 pub fn amr_values(mfa: &HashSet<String>) -> Option<Vec<String>> {
     let mut out: Vec<String> = mfa
         .iter()
@@ -91,18 +73,6 @@ pub fn amr_values(mfa: &HashSet<String>) -> Option<Vec<String>> {
     Some(out)
 }
 
-/// Derive the `acr` (Authentication Context Class Reference) level from the
-/// set of factors completed in this session.
-///
-/// Levels (tenant documentation must mirror these):
-/// - `"2"` — multi-factor, defined exactly as the policy engine defines MFA
-/// (see [`crate::policy::Policy::can_access`]): TOTP plus at least one other
-/// factor. Keeping the single source of truth means the `acr` claim and the
-/// policy `expect_mfa` gate can never disagree.
-/// - `"1"` — single-factor (including passkey-only; passkey satisfies the
-/// `"1"` class until the policy engine's MFA definition is extended).
-///
-/// Returns `None` for an empty factor set (no authentication has occurred).
 pub fn acr_value(mfa: &HashSet<String>) -> Option<String> {
     if mfa.is_empty() {
         return None;

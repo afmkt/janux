@@ -467,79 +467,74 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .unwrap_or("")
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
-    if let Some(verify_reqest) = extract::<VerifyRequest>(req, None).await {
-        if let Some(_value) = MLINK_CACHE
+    if let Some(verify_reqest) = extract::<VerifyRequest>(req, None).await
+        && let Some(_value) = MLINK_CACHE
             .get_one_shot(&format!("{}:{}", domain, verify_reqest.token))
             .await
-        {
-            if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                let data_wrap = tenant
-                    .jwt_verify::<MagicLinkData>(
-                        issuer.as_str(),
-                        &verify_reqest.name,
-                        &verify_reqest.token,
-                    )
-                    .await;
-                if data_wrap.is_ok() {
-                    let data = data_wrap.unwrap();
-                    if data.email == verify_reqest.email {
-                        // the ceremony mode is fixed in the signed
-                        // token. Signup creates the user within the ceremony
-                        // (failing when the name pre-exists); signin only
-                        // resolves the email's owner and never attaches.
-                        let bound = if data.signup {
-                            tenant
-                                .signup_user_email(&verify_reqest.name, &verify_reqest.email)
-                                .await
-                        } else {
-                            tenant
-                                .signin_user_email(&verify_reqest.name, &verify_reqest.email)
-                                .await
-                        };
-                        if bound.is_ok() {
-                            // inherit only if the injected session
-                            // belongs to the user being authenticated.
-                            let mut previous_fa = session
-                                .as_ref()
-                                .filter(|(user, _)| user == &verify_reqest.name)
-                                .map(|(_, mfa)| mfa.clone())
-                                .unwrap_or_default();
-                            previous_fa.insert(AuthType::Email.as_str().to_string());
-                            if let Ok(jwt) = tenant
-                                .authenticate_jwt(
-                                    &previous_fa,
-                                    issuer.as_str(),
-                                    domain.as_ref(),
-                                    &verify_reqest.name,
-                                    15,
-                                )
-                                .await
-                            {
-                                if verify_reqest.cookie.is_some() {
-                                    let name = verify_reqest.cookie.unwrap();
-                                    let cookie = Cookie::build((name, jwt.clone()))
-                                        .path("/")
-                                        .http_only(true)
-                                        .secure(true)
-                                        .same_site(SameSite::Strict)
-                                        .build();
-                                    res.add_cookie(cookie);
-                                }
-                                res.status_code(StatusCode::OK);
-                                res.render(Json(EmailResponse {
-                                    ok: true,
-                                    code: StatusCode::OK.as_u16(),
-                                    msg: format!("Success{}", err_msg),
-                                    jwt: Some(jwt),
-                                }));
-                                return;
-                            }
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+    {
+        let data_wrap = tenant
+            .jwt_verify::<MagicLinkData>(issuer.as_str(), &verify_reqest.name, &verify_reqest.token)
+            .await;
+        if data_wrap.is_ok() {
+            let data = data_wrap.unwrap();
+            if data.email == verify_reqest.email {
+                // the ceremony mode is fixed in the signed
+                // token. Signup creates the user within the ceremony
+                // (failing when the name pre-exists); signin only
+                // resolves the email's owner and never attaches.
+                let bound = if data.signup {
+                    tenant
+                        .signup_user_email(&verify_reqest.name, &verify_reqest.email)
+                        .await
+                } else {
+                    tenant
+                        .signin_user_email(&verify_reqest.name, &verify_reqest.email)
+                        .await
+                };
+                if bound.is_ok() {
+                    // inherit only if the injected session
+                    // belongs to the user being authenticated.
+                    let mut previous_fa = session
+                        .as_ref()
+                        .filter(|(user, _)| user == &verify_reqest.name)
+                        .map(|(_, mfa)| mfa.clone())
+                        .unwrap_or_default();
+                    previous_fa.insert(AuthType::Email.as_str().to_string());
+                    if let Ok(jwt) = tenant
+                        .authenticate_jwt(
+                            &previous_fa,
+                            issuer.as_str(),
+                            domain.as_ref(),
+                            &verify_reqest.name,
+                            15,
+                        )
+                        .await
+                    {
+                        if verify_reqest.cookie.is_some() {
+                            let name = verify_reqest.cookie.unwrap();
+                            let cookie = Cookie::build((name, jwt.clone()))
+                                .path("/")
+                                .http_only(true)
+                                .secure(true)
+                                .same_site(SameSite::Strict)
+                                .build();
+                            res.add_cookie(cookie);
                         }
+                        res.status_code(StatusCode::OK);
+                        res.render(Json(EmailResponse {
+                            ok: true,
+                            code: StatusCode::OK.as_u16(),
+                            msg: format!("Success{}", err_msg),
+                            jwt: Some(jwt),
+                        }));
+                        return;
                     }
                 }
             }
         }
     }
+
     res.status_code(StatusCode::UNAUTHORIZED);
     res.render(Json(EmailResponse {
         ok: false,
@@ -617,22 +612,22 @@ pub async fn all_emails(req: &mut Request, depot: &mut Depot, res: &mut Response
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
-    if let Some(req_request) = extract::<AllEmailRequest>(req, None).await {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-            && let Ok(data) = tenant.all_emails(req_request.name.as_deref()).await
-        {
-            let tmp: Vec<EmailEntry> = data
-                .iter()
-                .map(|a| EmailEntry {
-                    email: a.id.clone(),
-                    name: a.user.get().name.clone(),
-                })
-                .collect();
-            res.status_code(StatusCode::OK);
-            res.render(Json(ApiResponse::ok(tmp)));
-            return;
-        }
+    if let Some(req_request) = extract::<AllEmailRequest>(req, None).await
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && let Ok(data) = tenant.all_emails(req_request.name.as_deref()).await
+    {
+        let tmp: Vec<EmailEntry> = data
+            .iter()
+            .map(|a| EmailEntry {
+                email: a.id.clone(),
+                name: a.user.get().name.clone(),
+            })
+            .collect();
+        res.status_code(StatusCode::OK);
+        res.render(Json(ApiResponse::ok(tmp)));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err));

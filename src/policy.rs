@@ -1,52 +1,3 @@
-//! Policy engine for Role-Based Access Control (RBAC).
-//!
-//! This module implements a tenant-scoped, role-based authorization system.
-//! Policies are the atomic unit of access control: each policy binds a
-//! *domain*, an HTTP *action*, a *resource* path, a *role*, an optional
-//! *source* and *target* resolver, an MFA flag, and an allow/deny verdict.
-//!
-//! ## Core concepts
-//!
-//! - **Domain** — the tenant-scoped auth realm (the request `host`). A policy
-//! only applies when the request domain matches `Policy::domain_id`.
-//! - **Role** — assigned to a user via `UserRole`. A user's roles are embedded
-//! in the JWT (`JwtData::roles`); at verify time the engine iterates every
-//! role and collects matching policies from the in-memory `PolicyCache`.
-//! - **Source** — *who or what the request is acting as*. Resolved from the
-//! JWT (`SourceResolver::User` → the caller's username, `SourceResolver::Domain`
-//! → the caller's domain). A `Nothing` source means the policy applies
-//! independently of identity.
-//! - **Target** — *what the request is acting on*. Resolved from the request
-//! path, query string, or headers. A `Nothing` target means the policy
-//! applies to the resource as a whole.
-//! - **Resource** — a path template (e.g. `"users/{id}/posts"`) stored as
-//! segments. When neither source nor target is set, the request path must
-//! match the template exactly. When a target is configured, template
-//! segments wrapped in `{ braces }` are captured as named parameters.
-//! - **MFA** — when set, the caller must have authenticated with MFA for the
-//! policy to permit access; otherwise the engine signals `expect_mfa`.
-//!
-//! ## Evaluation algorithm
-//!
-//! 1. The request domain, HTTP method, and the caller's roles are compared
-//! against each cached `Policy`.
-//! 2. `Policy::can_access` returns `None` when the request doesn't match the
-//! policy's domain/action/resource shape (the policy is skipped). It
-//! returns `Some(CanAccess)` when the policy is *applicable*, carrying the
-//! allow/deny verdict and any MFA requirement.
-//! 3. In [`crate::utils::validate_token`] applicable policies are iterated per
-//! role: the first explicit *deny* short-circuits to deny, the first
-//! explicit *allow* sets the permitted flag, and `expect_mfa` is OR-ed
-//! across all matched policies.
-//!
-//! ## Caching
-//!
-//! Policies are loaded once per tenant into a [`PolicyCache`]
-//! (`DashMap<domain, DashMap<role, Vec<Policy>>>`) at tenant startup
-//! ([`Tenant::all_policy_entries`]). Create and delete operations keep the
-//! cache in sync so that [`crate::utils::validate_token`] can evaluate without
-//! a DB round-trip on the hot path.
-
 use crate::utils::{ApiProblem, ApiResponse};
 
 use crate::db::HttpMethod;
@@ -64,13 +15,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use toasty::*;
 
-/// How the *source* (the identity acting in the request) is resolved from the
-/// authenticated JWT. Used by a [`Policy`] to decide whether the caller itself
-/// is the target of the rule.
-///
-/// `Nothing` means the policy is identity-independent (it applies to whoever
-/// holds the role). `User`, `Domain`, and `Roles` pull the corresponding field
-/// from the JWT to be compared against the resolved target.
 #[derive(Debug, PartialEq, toasty::Embed, Serialize, Deserialize, ToSchema, Clone)]
 pub enum SourceResolver {
     Nothing,
@@ -79,24 +23,12 @@ pub enum SourceResolver {
     Role,
 }
 
-/// A resolved source value, produced by [`Policy::resolve_source`]. The variant
-/// tells the caller whether to compare a username, domain, or role set
-/// against the resolved target.
 pub enum Source {
     User(String),
     Domain(String),
     Role(String),
 }
 
-/// How the *target* (the resource being accessed) is extracted from the
-/// incoming request so it can be compared against the resolved source.
-///
-/// - `Nothing` — no target extraction; matching is purely path-based.
-/// - `FromPath` — capture a named path parameter (e.g. `{user}`) from the
-/// request path, matched against the policy's `resource` template.
-/// - `FromQuery` — read the target from a named query-string parameter.
-/// - `FromHeader` — read the target from a request header (case-insensitive
-/// lookup).
 #[derive(Debug, PartialEq, toasty::Embed, Serialize, Deserialize, ToSchema, Clone)]
 pub enum TargetResolver {
     Nothing,
@@ -117,18 +49,6 @@ pub struct PolicyDTO {
     pub allowed: bool,
 }
 impl PolicyDTO {
-    // pub async fn from_policy(policy: &Policy) -> Self {
-    // PolicyDTO {
-    // domain: policy.domain_id.clone(),
-    // resource: policy.resource.join("/"),
-    // action: policy.action.clone(),
-    // role: policy.role_id.clone(),
-    // mfa: policy.mfa,
-    // allowed: policy.allowed,
-    // source: policy.source.clone(),
-    // target: policy.target.clone(),
-    // }
-    // }
     pub async fn save(&self, tenant: &mut Tenant) -> Result<()> {
         tenant
             .policy_create(

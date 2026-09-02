@@ -3368,9 +3368,7 @@ pub async fn introspect(req: &mut Request, depot: &mut Depot, res: &mut Response
             Some(p) => p,
             None => {
                 res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiProblem::validation_error(&format!(
-                    "Malformed request",
-                ))));
+                res.render(Json(ApiProblem::validation_error("Malformed request")));
                 return;
             }
         },
