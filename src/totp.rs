@@ -681,7 +681,7 @@ mod tests {
     async fn totp_test_env() -> (crate::server::ServerState, tempfile::TempDir) {
         init_revocation_store().await;
         let tmp = tempfile::tempdir().expect("tempdir");
-        let mut storage = crate::db::Storage::init(tmp.path())
+        let storage = crate::db::Storage::init(tmp.path())
             .await
             .expect("storage init");
         storage.new_tenant("test-tenant").await.expect("tenant");

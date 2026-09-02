@@ -291,17 +291,17 @@ async fn handle_user<'a>(
         )
         .map_err(|e| format!("Invalid verify_url in email config: {e}"))?;
         let content = render_email(&cfg, &email, subject, link.as_str()).unwrap();
-        if let Ok(_) = send(&cfg, &email, subject, content.as_ref()).await {
+        if send(&cfg, &email, subject, content.as_ref()).await.is_ok() {
             MLINK_CACHE
                 .insert(format!("{}:{}", domain, token), user_name)
                 .await
                 .ok();
-            return Ok(token);
+            Ok(token)
         } else {
-            return Err("Fail to send email".to_string());
+            Err("Fail to send email".to_string())
         }
     } else {
-        return Err("Fail to issue JWT".to_string());
+        Err("Fail to issue JWT".to_string())
     }
 }
 
@@ -578,7 +578,7 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     res.render(Json(EmailResponse {
                         ok: true,
                         code: StatusCode::OK.as_u16(),
-                        msg: format!("Success"),
+                        msg: "Success".to_string(),
                         jwt: None,
                     }));
                     return;
@@ -590,7 +590,7 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     res.render(Json(EmailResponse {
         ok: false,
         code: StatusCode::BAD_REQUEST.as_u16(),
-        msg: format!("Failure"),
+        msg: "Failure".to_string(),
         jwt: None,
     }))
 }

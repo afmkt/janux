@@ -160,11 +160,11 @@ pub async fn all_keys(req: &mut Request, depot: &mut Depot, res: &mut Response) 
                                 domain: entry.domain_id.clone(),
                             };
                         }
-                        return KeyEntry {
+                        KeyEntry {
                             name: entry.id.clone(),
                             public: String::from("Invalid public key"),
                             domain: entry.domain_id.clone(),
-                        };
+                        }
                     })
                     .collect::<Vec<_>>(),
             )));
@@ -195,7 +195,7 @@ pub async fn add_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-            if let Ok(_) = tenant.key_create(&body.domain, &body.name).await {
+            if tenant.key_create(&body.domain, &body.name).await.is_ok() {
                 let resp = ApiResponse::ok(());
                 res.status_code(StatusCode::OK);
                 res.render(Json(resp));
@@ -226,7 +226,7 @@ pub async fn delete_key(req: &mut Request, depot: &mut Depot, res: &mut Response
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-            if let Ok(_) = tenant.key_delete(&body.name).await {
+            if tenant.key_delete(&body.name).await.is_ok() {
                 let resp = ApiResponse::ok(());
                 res.status_code(StatusCode::OK);
                 res.render(Json(resp));

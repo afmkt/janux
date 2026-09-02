@@ -494,7 +494,7 @@ pub async fn new_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut Re
     let body = match crate::utils::extract::<NewOauth2Client>(req, None).await {
         Some(b) => b,
         None => {
-            let err = ApiProblem::validation_error(&format!("Failed to parse request body"));
+            let err = ApiProblem::validation_error("Failed to parse request body");
             res.status_code(StatusCode::BAD_REQUEST);
             res.render(Json(err));
             return;
@@ -590,7 +590,7 @@ pub async fn delete_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut
     let body = match crate::utils::extract::<DeleteOauth2Client>(req, None).await {
         Some(b) => b,
         None => {
-            let err = ApiProblem::validation_error(&format!("Failed to parse request body"));
+            let err = ApiProblem::validation_error("Failed to parse request body");
             res.status_code(StatusCode::BAD_REQUEST);
             res.render(Json(err));
             return;

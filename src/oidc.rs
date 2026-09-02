@@ -3143,9 +3143,7 @@ pub async fn revoke(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             Some(p) => p,
             None => {
                 res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiProblem::validation_error(&format!(
-                    "Malformed request",
-                ))));
+                res.render(Json(ApiProblem::validation_error("Malformed request")));
                 return;
             }
         },
@@ -4318,7 +4316,7 @@ mod tests {
         // store stays on the stable process-lifetime directory.
         init_revocation_store().await;
         let tmp = tempfile::tempdir().expect("tempdir");
-        let mut storage = crate::db::Storage::init(tmp.path())
+        let storage = crate::db::Storage::init(tmp.path())
             .await
             .expect("storage init");
         storage.new_tenant("test-tenant").await.expect("tenant");

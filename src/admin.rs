@@ -25,7 +25,7 @@ pub async fn new_tenant(req: &mut Request, depot: &mut Depot, res: &mut Response
     let body = match crate::utils::extract::<NewTenant>(req, None).await {
         Some(b) => b,
         None => {
-            let err = ApiProblem::validation_error(&format!("Failed to parse request body"));
+            let err = ApiProblem::validation_error("Failed to parse request body");
             res.status_code(StatusCode::BAD_REQUEST);
             res.render(Json(err));
             return;
@@ -211,7 +211,7 @@ pub async fn remove_tenant(req: &mut Request, depot: &mut Depot, res: &mut Respo
     let body = match crate::utils::extract::<DeleteTenant>(req, None).await {
         Some(b) => b,
         None => {
-            let err = ApiProblem::validation_error(&format!("Failed to parse request body"));
+            let err = ApiProblem::validation_error("Failed to parse request body");
             res.status_code(StatusCode::BAD_REQUEST);
             res.render(Json(err));
             return;

@@ -193,13 +193,13 @@ impl VHostConfig {
         }
 
         Ok(VHostConfig {
-            acme: if acme.domains.len() > 0 {
+            acme: if !acme.domains.is_empty() {
                 Some(acme)
             } else {
                 None
             },
-            tls: if tls.len() > 0 { Some(tls) } else { None },
-            http: if http.domains.len() > 0 {
+            tls: if !tls.is_empty() { Some(tls) } else { None },
+            http: if !http.domains.is_empty() {
                 Some(http)
             } else {
                 None

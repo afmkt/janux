@@ -22,7 +22,7 @@ pub fn setup_encryption_key(hex_key: &str) -> Result<()> {
         );
     }
     ENCRYPTION_KEY
-        .set(Key::<Aes256Gcm>::from_slice(&bytes).clone())
+        .set(*Key::<Aes256Gcm>::from_slice(&bytes))
         .map_err(|_| anyhow!("encryption key already initialized"))?;
     Ok(())
 }

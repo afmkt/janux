@@ -207,12 +207,12 @@ async fn handle_user<'a>(
                 .insert(format!("{}:{}", domain, token), code)
                 .await
                 .ok();
-            return Ok(token);
+            Ok(token)
         } else {
-            return Err("Fail to send SMS".to_string());
+            Err("Fail to send SMS".to_string())
         }
     } else {
-        return Err("Fail to issue JWT".to_string());
+        Err("Fail to issue JWT".to_string())
     }
 }
 
@@ -483,7 +483,7 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     res.render(Json(MobileResponse {
                         ok: true,
                         code: StatusCode::OK.as_u16(),
-                        msg: format!("Success"),
+                        msg: "Success".to_string(),
                         jwt: None,
                     }));
                     return;
@@ -495,7 +495,7 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     res.render(Json(MobileResponse {
         ok: false,
         code: StatusCode::BAD_REQUEST.as_u16(),
-        msg: format!("Failure"),
+        msg: "Failure".to_string(),
         jwt: None,
     }))
 }
@@ -539,7 +539,7 @@ pub async fn all_mobile(req: &mut Request, depot: &mut Depot, res: &mut Response
             }
         }
     }
-    let err = ApiProblem::validation_error(&format!("Failed to parse request body"));
+    let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err));
 }

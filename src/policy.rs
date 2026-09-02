@@ -262,7 +262,7 @@ impl Policy {
     ) -> Option<CanAccess> {
         let matched: bool = if domain == jwt.domain
             && domain == self.domain_id
-            && (Some(act.clone()) == self.action || None == self.action)
+            && (Some(act.clone()) == self.action || self.action.is_none())
         {
             if self.source == SourceResolver::Nothing && self.target == TargetResolver::Nothing {
                 // path match exactly
@@ -271,7 +271,7 @@ impl Policy {
                 let s = self.resolve_source(jwt);
                 let t = self.resolve_target(path, query, header);
                 match s {
-                    None => t == None,
+                    None => t.is_none(),
                     Some(Source::User(name)) => t.map_or(false, |target_name| target_name == name),
                     Some(Source::Domain(name)) => {
                         t.map_or(false, |target_domain| target_domain == name)

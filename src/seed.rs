@@ -161,7 +161,7 @@ pub async fn bootstrap_tenant(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::server::JanuxConfig;
 
     /// The committed seed.toml is the RBAC bootstrap source of truth
