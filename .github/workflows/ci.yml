@@ -11,6 +11,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   NODE_VERSION: "22"
+  # No debug info in CI: full debuginfo for this dependency tree exceeds
+  # the ~14GB disk of standard GitHub runners ("No space left on device").
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 jobs:
   # ═══════════════ UNIT TESTS ═══════════════
@@ -54,9 +57,6 @@ jobs:
       - name: Clippy lint check
         run: cargo clippy --all-targets --all-features -- -D warnings
         continue-on-error: true  # Warnings don't block CI yet until code is cleaned up
-
-      - name: Build (debug)
-        run: cargo build --verbose
 
       - name: Run unit tests
         run: cargo test --lib --test unit_tests --no-fail-fast
