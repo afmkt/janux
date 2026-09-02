@@ -288,7 +288,7 @@ async fn finish_passkey_login(
 
     if let Some(PasskeyCacheRequestValue(state)) = LOGIN_CACHE.get_one_shot(&key).await {
         webauthn
-            .finish_passkey_authentication(&credential, &state)
+            .finish_passkey_authentication(credential, &state)
             .map_err(Into::into)
     } else {
         Err(anyhow::anyhow!("Unrecognized passkey login token"))
@@ -339,14 +339,13 @@ async fn render_passkey_auth_success(
 pub struct PasskeyRequest(String);
 
 async fn login(domain: &str, origin: &str, creds: &Vec<pk::Passkey>, res: &mut Response) {
-    match start_passkey_login(&creds, domain, origin).await {
+    match start_passkey_login(creds, domain, origin).await {
         Ok((challenge_opts, token)) => {
             res.status_code(StatusCode::OK);
             res.render(Json(PasskeyResponse {
                 public_key_opts: serde_json::to_value(challenge_opts).unwrap_or_default(),
                 token,
             }));
-            return;
         }
         Err(_e) => {
             res.status_code(StatusCode::UNAUTHORIZED);
@@ -371,7 +370,6 @@ async fn register(
                 public_key_opts: serde_json::to_value(challenge_opts).unwrap_or_default(),
                 token,
             }));
-            return;
         }
         Err(_e) => {
             res.status_code(StatusCode::UNAUTHORIZED);
@@ -496,126 +494,120 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
 
-    if let Some(mut tenant) = state.storage.tenant_by_domain(&domain) {
-        if let Some(rqst) = crate::utils::extract::<VerifyRequest>(req, None).await {
-            if let Ok(x) = serde_json::from_value::<pk::RegisterPublicKeyCredential>(
-                rqst.credential_json.clone(),
-            ) {
-                if session.as_ref().map(|s| s.jwt_data.username.as_str())
-                    != Some(rqst.username.as_str())
-                {
-                    res.status_code(StatusCode::UNAUTHORIZED);
-                    res.render(Json(ApiProblem::unauthorized()));
-                    return;
-                }
-                match finish_passkey_registration(&domain, &issuer, rqst.token, &x).await {
-                    Ok(passkey) => {
-                        let credential_bytes = match serde_json::to_vec(&passkey) {
-                            Ok(b) => b,
-                            Err(_e) => {
-                                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                                let err = ApiProblem::server_error("error");
-                                res.render(Json(err));
-                                return;
-                            }
-                        };
-                        let public_key_str = match serde_json::to_string(passkey.get_public_key()) {
-                            Ok(s) => s,
-                            Err(_e) => {
-                                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                                let err = ApiProblem::server_error("error");
-                                res.render(Json(err));
-                                return;
-                            }
-                        };
-                        if tenant
-                            .passkey_create(
-                                &rqst.username,
-                                &domain,
-                                credential_bytes,
-                                public_key_str,
-                            )
-                            .await
-                            .is_err()
-                        {
+    if let Some(mut tenant) = state.storage.tenant_by_domain(&domain)
+        && let Some(rqst) = crate::utils::extract::<VerifyRequest>(req, None).await
+    {
+        if let Ok(x) =
+            serde_json::from_value::<pk::RegisterPublicKeyCredential>(rqst.credential_json.clone())
+        {
+            if session.as_ref().map(|s| s.jwt_data.username.as_str())
+                != Some(rqst.username.as_str())
+            {
+                res.status_code(StatusCode::UNAUTHORIZED);
+                res.render(Json(ApiProblem::unauthorized()));
+                return;
+            }
+            match finish_passkey_registration(&domain, &issuer, rqst.token, &x).await {
+                Ok(passkey) => {
+                    let credential_bytes = match serde_json::to_vec(&passkey) {
+                        Ok(b) => b,
+                        Err(_e) => {
                             res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                            let err = ApiProblem::server_error("Failed to persist passkey");
+                            let err = ApiProblem::server_error("error");
                             res.render(Json(err));
                             return;
                         }
-                        // Registration happens inside a session — carry its
-                        // factors forward (consistency).
-                        let previous_fa = session
-                            .as_ref()
-                            .map(|s| s.jwt_data.mfa.clone())
-                            .unwrap_or_default();
-                        render_passkey_auth_success(
-                            res,
-                            &mut tenant,
-                            &issuer,
-                            &domain,
-                            &rqst.username,
-                            &previous_fa,
-                            rqst.cookie.clone(),
-                        )
-                        .await;
-                        return;
-                    }
-                    Err(_e) => {
-                        res.status_code(StatusCode::UNAUTHORIZED);
-                        let err = ApiProblem::unauthorized();
+                    };
+                    let public_key_str = match serde_json::to_string(passkey.get_public_key()) {
+                        Ok(s) => s,
+                        Err(_e) => {
+                            res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
+                            let err = ApiProblem::server_error("error");
+                            res.render(Json(err));
+                            return;
+                        }
+                    };
+                    if tenant
+                        .passkey_create(&rqst.username, &domain, credential_bytes, public_key_str)
+                        .await
+                        .is_err()
+                    {
+                        res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
+                        let err = ApiProblem::server_error("Failed to persist passkey");
                         res.render(Json(err));
                         return;
                     }
+                    // Registration happens inside a session — carry its
+                    // factors forward (consistency).
+                    let previous_fa = session
+                        .as_ref()
+                        .map(|s| s.jwt_data.mfa.clone())
+                        .unwrap_or_default();
+                    render_passkey_auth_success(
+                        res,
+                        &mut tenant,
+                        &issuer,
+                        &domain,
+                        &rqst.username,
+                        &previous_fa,
+                        rqst.cookie.clone(),
+                    )
+                    .await;
+                    return;
+                }
+                Err(_e) => {
+                    res.status_code(StatusCode::UNAUTHORIZED);
+                    let err = ApiProblem::unauthorized();
+                    res.render(Json(err));
+                    return;
                 }
             }
-            if let Ok(x) = serde_json::from_value::<pk::PublicKeyCredential>(rqst.credential_json) {
-                match finish_passkey_login(&domain, &issuer, rqst.token, &x).await {
-                    Ok(auth_result) => {
-                        if let Ok(stored_passkeys) = tenant
-                            .active_passkey(Some(&rqst.username), Some(&domain))
-                            .await
-                        {
-                            for stored in stored_passkeys {
-                                if let Ok(mut passkey) = stored.get_passkey() {
-                                    if passkey.update_credential(&auth_result).unwrap_or(false) {
-                                        if let Ok(updated_bytes) = serde_json::to_vec(&passkey) {
-                                            let _ = toasty::update!(
+        }
+        if let Ok(x) = serde_json::from_value::<pk::PublicKeyCredential>(rqst.credential_json) {
+            match finish_passkey_login(&domain, &issuer, rqst.token, &x).await {
+                Ok(auth_result) => {
+                    if let Ok(stored_passkeys) = tenant
+                        .active_passkey(Some(&rqst.username), Some(&domain))
+                        .await
+                    {
+                        for stored in stored_passkeys {
+                            if let Ok(mut passkey) = stored.get_passkey()
+                                && passkey.update_credential(&auth_result).unwrap_or(false)
+                                && let Ok(updated_bytes) = serde_json::to_vec(&passkey)
+                            {
+                                let _ = toasty::update!(
                                                 Passkey::filter(Passkey::fields().id().eq(stored.id))
                                             { credential: updated_bytes })
                                             .exec(&mut tenant.database)
                                             .await;
-                                        }
-                                        break;
-                                    }
-                                }
                             }
+                            break;
                         }
-                        // A login completed while already holding a session
-                        // for the same user accumulates factors; an unrelated
-                        // or absent session contributes none.
-                        let previous_fa = session
-                            .as_ref()
-                            .filter(|s| s.jwt_data.username == rqst.username)
-                            .map(|s| s.jwt_data.mfa.clone())
-                            .unwrap_or_default();
-                        render_passkey_auth_success(
-                            res,
-                            &mut tenant,
-                            &issuer,
-                            &domain,
-                            &rqst.username,
-                            &previous_fa,
-                            rqst.cookie.clone(),
-                        )
-                        .await;
-                        return;
                     }
-                    Err(_) => {
-                        res.status_code(StatusCode::UNAUTHORIZED);
-                        res.render(Json(ApiProblem::unauthorized()));
-                        return;
-                    }
+                    // A login completed while already holding a session
+                    // for the same user accumulates factors; an unrelated
+                    // or absent session contributes none.
+                    let previous_fa = session
+                        .as_ref()
+                        .filter(|s| s.jwt_data.username == rqst.username)
+                        .map(|s| s.jwt_data.mfa.clone())
+                        .unwrap_or_default();
+                    render_passkey_auth_success(
+                        res,
+                        &mut tenant,
+                        &issuer,
+                        &domain,
+                        &rqst.username,
+                        &previous_fa,
+                        rqst.cookie.clone(),
+                    )
+                    .await;
+                    return;
+                }
+                Err(_) => {
+                    res.status_code(StatusCode::UNAUTHORIZED);
+                    res.render(Json(ApiProblem::unauthorized()));
+                    return;
                 }
             }
         }

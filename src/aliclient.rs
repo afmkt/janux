@@ -129,7 +129,7 @@ pub async fn call_api(
                 .iter()
                 .flat_map(|(k, v)| match v {
                     FormValue::String(s) => {
-                        vec![format!("{}={}", percent_code(k), percent_code(&s))]
+                        vec![format!("{}={}", percent_code(k), percent_code(s))]
                     }
                     FormValue::Vec(vec) => vec
                         .iter()

@@ -409,114 +409,95 @@ async fn verify_totp(
     res: &mut Response,
 ) {
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
-    if let Some(verify_reqest) = extract::<VerifyTotpRequest>(req, None).await {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-            let check = match verify_reqest.token.as_deref() {
-                Some(token) => {
-                    // enrollment tokens are one-shot — consume before
-                    // validation so a captured token cannot mint a second
-                    // session with a later code.
-                    if TOTP_ENROLL_CACHE
-                        .get_one_shot(&format!("{}:{}", domain, token))
+    if let Some(verify_reqest) = extract::<VerifyTotpRequest>(req, None).await
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+    {
+        let check = match verify_reqest.token.as_deref() {
+            Some(token) => {
+                // enrollment tokens are one-shot — consume before
+                // validation so a captured token cannot mint a second
+                // session with a later code.
+                if TOTP_ENROLL_CACHE
+                    .get_one_shot(&format!("{}:{}", domain, token))
+                    .await
+                    .is_none()
+                {
+                    false
+                } else {
+                    match tenant
+                        .jwt_verify::<TotpEnrollData>(&issuer, &verify_reqest.user, token)
                         .await
-                        .is_none()
                     {
-                        false
-                    } else {
-                        match tenant
-                            .jwt_verify::<TotpEnrollData>(&issuer, &verify_reqest.user, token)
-                            .await
-                        {
-                            // Enrollment tokens bind (domain, user, name); the name
-                            // is enforced when the request supplies one.
-                            Ok(data) => {
-                                data.domain == domain
-                                    && data.user == verify_reqest.user
-                                    && match verify_reqest.name.as_deref() {
-                                        Some(name) => data.name == name,
-                                        None => true,
-                                    }
-                            }
-                            Err(_) => false,
+                        // Enrollment tokens bind (domain, user, name); the name
+                        // is enforced when the request supplies one.
+                        Ok(data) => {
+                            data.domain == domain
+                                && data.user == verify_reqest.user
+                                && match verify_reqest.name.as_deref() {
+                                    Some(name) => data.name == name,
+                                    None => true,
+                                }
                         }
+                        Err(_) => false,
                     }
                 }
-                None => false,
-            };
-            if check {
-                if let Ok(totp) = tenant
-                    .totp_of(&verify_reqest.user, &domain, verify_reqest.name.as_deref())
-                    .await
+            }
+            None => false,
+        };
+        if check
+            && let Ok(totp) = tenant
+                .totp_of(&verify_reqest.user, domain, verify_reqest.name.as_deref())
+                .await
+        {
+            if totp.code_is_fresh(&verify_reqest.code) {
+                if totp.active
+                    || tenant
+                        .active_totp(&verify_reqest.user, &totp.name, &totp.domain_id)
+                        .await
+                        .is_ok()
                 {
-                    // codes are one-shot — `code_is_fresh` refuses a
-                    // step that was already consumed (replay), whether with
-                    // this token or any other.
-                    if totp.code_is_fresh(&verify_reqest.code) {
-                        // First successful confirmation activates the TOTP and only
-                        // then replaces any previously active ones — possession of
-                        // the secret is proven at this point.
-                        if totp.active
-                            || tenant
-                                .active_totp(&verify_reqest.user, &totp.name, &totp.domain_id)
-                                .await
-                                .is_ok()
-                        {
-                            // consume the code's step before minting;
-                            // if the record cannot be updated, fail closed.
-                            if tenant
-                                .totp_mark_used(
-                                    &verify_reqest.user,
-                                    &totp.name,
-                                    &totp.domain_id,
-                                    step_start(),
-                                )
-                                .await
-                                .is_err()
-                            {
-                                res.status_code(StatusCode::UNAUTHORIZED);
-                                res.render(Json(ApiProblem::unauthorized()));
-                                return;
-                            }
-                            // inherit prior factors only from a session
-                            // belonging to the user being authenticated; an
-                            // unrelated session contributes none (passkey
-                            // pattern).
-                            let mut tmp = session
-                                .filter(|(user, _)| user == &verify_reqest.user)
-                                .map(|(_, mfa)| mfa.clone())
-                                .unwrap_or_default();
-                            tmp.insert(AuthType::TOTP.as_str().to_string());
+                    if tenant
+                        .totp_mark_used(
+                            &verify_reqest.user,
+                            &totp.name,
+                            &totp.domain_id,
+                            step_start(),
+                        )
+                        .await
+                        .is_err()
+                    {
+                        res.status_code(StatusCode::UNAUTHORIZED);
+                        res.render(Json(ApiProblem::unauthorized()));
+                        return;
+                    }
+                    let mut tmp = session
+                        .filter(|(user, _)| user == &verify_reqest.user)
+                        .map(|(_, mfa)| mfa.clone())
+                        .unwrap_or_default();
+                    tmp.insert(AuthType::TOTP.as_str().to_string());
 
-                            if let Ok(jwt) = tenant
-                                .authenticate_jwt(
-                                    &tmp,
-                                    &issuer,
-                                    domain.as_ref(),
-                                    &verify_reqest.user,
-                                    15,
-                                )
-                                .await
-                            {
-                                if verify_reqest.cookie.is_some() {
-                                    let name = verify_reqest.cookie.unwrap();
-                                    let cookie = Cookie::build((name, jwt.clone()))
-                                        .path("/")
-                                        .http_only(true)
-                                        .secure(true)
-                                        .same_site(SameSite::Strict)
-                                        .build();
-                                    res.add_cookie(cookie);
-                                }
-                                res.status_code(StatusCode::OK);
-                                res.render(Json(ApiResponse::ok(jwt)));
-                                return;
-                            }
+                    if let Ok(jwt) = tenant
+                        .authenticate_jwt(&tmp, &issuer, domain.as_ref(), &verify_reqest.user, 15)
+                        .await
+                    {
+                        if let Some(name) = verify_reqest.cookie {
+                            let cookie = Cookie::build((name, jwt.clone()))
+                                .path("/")
+                                .http_only(true)
+                                .secure(true)
+                                .same_site(SameSite::Strict)
+                                .build();
+                            res.add_cookie(cookie);
                         }
+                        res.status_code(StatusCode::OK);
+                        res.render(Json(ApiResponse::ok(jwt)));
+                        return;
                     }
                 }
             }
         }
     }
+
     res.status_code(StatusCode::UNAUTHORIZED);
     res.render(Json(ApiProblem::unauthorized()))
 }
@@ -532,7 +513,7 @@ async fn verify_totp(
 
 pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let _err_msg = String::from("");
-    let jwt_verify_wrap = { depot.obtain::<JwtVerify>().ok().map(|a| a.clone()) };
+    let jwt_verify_wrap = { depot.obtain::<JwtVerify>().ok().cloned() };
     if let Some(jwt_verify) = jwt_verify_wrap {
         let state = depot.obtain_mut::<ServerState>().unwrap();
         // the (user, factors) pair is passed through so `verify_totp`
@@ -579,22 +560,22 @@ pub async fn list_totp(req: &mut Request, depot: &mut Depot, res: &mut Response)
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
-    if let Some(req_request) = crate::utils::extract::<AllTotpRequest>(req, None).await {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-            && let Ok(data) = tenant.all_totps(req_request.name.as_deref(), None).await
-        {
-            let tmp: Vec<TotpEntry> = data
-                .iter()
-                .map(|a| TotpEntry {
-                    name: a.name.clone(),
-                    active: a.active,
-                })
-                .collect();
-            res.status_code(StatusCode::OK);
-            res.render(Json(ApiResponse::ok(tmp)));
-            return;
-        }
+    if let Some(req_request) = crate::utils::extract::<AllTotpRequest>(req, None).await
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && let Ok(data) = tenant.all_totps(req_request.name.as_deref(), None).await
+    {
+        let tmp: Vec<TotpEntry> = data
+            .iter()
+            .map(|a| TotpEntry {
+                name: a.name.clone(),
+                active: a.active,
+            })
+            .collect();
+        res.status_code(StatusCode::OK);
+        res.render(Json(ApiResponse::ok(tmp)));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err))
@@ -622,18 +603,17 @@ pub async fn remove_totp(req: &mut Request, depot: &mut Depot, res: &mut Respons
     if let Some(req_request) = crate::utils::extract::<RemoveTotpRequest>(req, None).await
         && !req_request.name.is_empty()
         && !req_request.totp.is_empty()
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && tenant
+            .delete_totp(&req_request.name, &req_request.totp, &domain)
+            .await
+            .is_ok()
     {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-            && tenant
-                .delete_totp(&req_request.name, &req_request.totp, &domain)
-                .await
-                .is_ok()
-        {
-            res.status_code(StatusCode::OK);
-            res.render(Json(ApiResponse::ok(())));
-            return;
-        }
+        res.status_code(StatusCode::OK);
+        res.render(Json(ApiResponse::ok(())));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failure");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err))

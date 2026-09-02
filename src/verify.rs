@@ -56,40 +56,33 @@ pub async fn logout(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Ok(state) = depot.obtain_mut::<crate::server::ServerState>()
         && let Some(domain) = get_domain(req, state)
         && let Some(jwt) = get_jwt(req)
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain)
     {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
-            // Decode BEFORE revoking: the claims identify the user
-            // for the OIDC Back-Channel Logout fan-out. Only a
-            // session token bound to this tenant (iss + aud =
-            // domain) triggers notifications.
-            let issuer = crate::utils::get_issuer(req, state);
-            let decoded = crate::jwt::jwt_decode::<crate::db::JwtData>(jwt, 2, &mut tenant)
-                .await
-                .ok();
-            // Revocation goes through the shared primitive (Step 1.2)
-            // — same store, same guarantees as RFC 7009 `/revoke`.
-            if crate::utils::revoke_token(&mut tenant, jwt, None, "logout")
-                .await
-                .is_ok()
+        let issuer = crate::utils::get_issuer(req, state);
+        let decoded = crate::jwt::jwt_decode::<crate::db::JwtData>(jwt, 2, &mut tenant)
+            .await
+            .ok();
+        if crate::utils::revoke_token(&mut tenant, jwt, None, "logout")
+            .await
+            .is_ok()
+        {
+            if let (Some(issuer), Some(tkn)) = (&issuer, &decoded)
+                && tkn.claims.iss == *issuer
+                && tkn.claims.aud == domain
             {
-                if let (Some(issuer), Some(tkn)) = (&issuer, &decoded)
-                    && tkn.claims.iss == *issuer
-                    && tkn.claims.aud == domain
-                {
-                    let targets = crate::oidc_ext::backchannel_logout_targets(
-                        &mut tenant,
-                        issuer,
-                        domain,
-                        &tkn.claims.sub,
-                    )
-                    .await;
-                    crate::oidc_ext::spawn_backchannel_delivery(targets);
-                }
-
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiResponse::ok(())));
-                return;
+                let targets = crate::oidc_ext::backchannel_logout_targets(
+                    &mut tenant,
+                    issuer,
+                    domain,
+                    &tkn.claims.sub,
+                )
+                .await;
+                crate::oidc_ext::spawn_backchannel_delivery(targets);
             }
+
+            res.status_code(StatusCode::OK);
+            res.render(Json(ApiResponse::ok(())));
+            return;
         }
     }
 

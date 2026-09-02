@@ -507,8 +507,7 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                         )
                         .await
                     {
-                        if verify_reqest.cookie.is_some() {
-                            let name = verify_reqest.cookie.unwrap();
+                        if let Some(name) = verify_reqest.cookie {
                             let cookie = Cookie::build((name, jwt.clone()))
                                 .path("/")
                                 .http_only(true)
@@ -559,23 +558,22 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .to_string();
     if let Some(req_request) = extract::<ReqRequest>(req, None).await
         && !req_request.name.is_empty()
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && tenant
+            .email_delete(&req_request.name, &req_request.email)
+            .await
+            .is_ok()
     {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-            && tenant
-                .email_delete(&req_request.name, &req_request.email)
-                .await
-                .is_ok()
-        {
-            res.status_code(StatusCode::OK);
-            res.render(Json(EmailResponse {
-                ok: true,
-                code: StatusCode::OK.as_u16(),
-                msg: "Success".to_string(),
-                jwt: None,
-            }));
-            return;
-        }
+        res.status_code(StatusCode::OK);
+        res.render(Json(EmailResponse {
+            ok: true,
+            code: StatusCode::OK.as_u16(),
+            msg: "Success".to_string(),
+            jwt: None,
+        }));
+        return;
     }
+
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(EmailResponse {
         ok: false,

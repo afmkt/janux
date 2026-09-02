@@ -378,14 +378,7 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     .await;
                 if data_wrap.is_ok() {
                     let data = data_wrap.unwrap();
-                    // Bind the token to the requested mobile and check the
-                    // single-use code sent over SMS (functional bug: the
-                    // old check compared the mobile number to the code).
                     if data.mobile == verify_reqest.mobile && stored_code == verify_reqest.code {
-                        // the ceremony mode is fixed in the signed
-                        // token. Signup creates the user within the ceremony
-                        // (failing when the name pre-exists); signin only
-                        // resolves the mobile's owner and never attaches.
                         let bound = if data.signup {
                             tenant
                                 .signup_user_mobile(&verify_reqest.name, &verify_reqest.mobile)
@@ -396,8 +389,6 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                                 .await
                         };
                         if bound.is_ok() {
-                            // inherit only if the injected session
-                            // belongs to the user being authenticated.
                             let mut previous_fa = session
                                 .as_ref()
                                 .filter(|(user, _)| user == &verify_reqest.name)
@@ -414,8 +405,7 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                                 )
                                 .await
                             {
-                                if verify_reqest.cookie.is_some() {
-                                    let name = verify_reqest.cookie.unwrap();
+                                if let Some(name) = verify_reqest.cookie {
                                     let cookie = Cookie::build((name, jwt.clone()))
                                         .path("/")
                                         .http_only(true)
@@ -473,22 +463,20 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .to_string();
     if let Some(req_request) = crate::utils::extract::<ReqRequest>(req, None).await
         && !req_request.name.is_empty()
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && tenant
+            .mobile_delete(&req_request.name, &req_request.mobile)
+            .await
+            .is_ok()
     {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-            && tenant
-                .mobile_delete(&req_request.name, &req_request.mobile)
-                .await
-                .is_ok()
-        {
-            res.status_code(StatusCode::OK);
-            res.render(Json(MobileResponse {
-                ok: true,
-                code: StatusCode::OK.as_u16(),
-                msg: "Success".to_string(),
-                jwt: None,
-            }));
-            return;
-        }
+        res.status_code(StatusCode::OK);
+        res.render(Json(MobileResponse {
+            ok: true,
+            code: StatusCode::OK.as_u16(),
+            msg: "Success".to_string(),
+            jwt: None,
+        }));
+        return;
     }
 
     res.status_code(StatusCode::BAD_REQUEST);
@@ -523,22 +511,22 @@ pub async fn all_mobile(req: &mut Request, depot: &mut Depot, res: &mut Response
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
-    if let Some(req_request) = crate::utils::extract::<AllMobileRequest>(req, None).await {
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-            && let Ok(data) = tenant.all_mobiles(req_request.name.as_deref()).await
-        {
-            let tmp: Vec<MobileEntry> = data
-                .iter()
-                .map(|a| MobileEntry {
-                    mobile: a.id.clone(),
-                    name: a.user.get().name.clone(),
-                })
-                .collect();
-            res.status_code(StatusCode::OK);
-            res.render(Json(ApiResponse::ok(tmp)));
-            return;
-        }
+    if let Some(req_request) = crate::utils::extract::<AllMobileRequest>(req, None).await
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+        && let Ok(data) = tenant.all_mobiles(req_request.name.as_deref()).await
+    {
+        let tmp: Vec<MobileEntry> = data
+            .iter()
+            .map(|a| MobileEntry {
+                mobile: a.id.clone(),
+                name: a.user.get().name.clone(),
+            })
+            .collect();
+        res.status_code(StatusCode::OK);
+        res.render(Json(ApiResponse::ok(tmp)));
+        return;
     }
+
     let err = ApiProblem::validation_error("Failed to parse request body");
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(err));
@@ -635,8 +623,6 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         }
         if !req_request.mobile.is_empty() {
             if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                // An owned number is refused outright — ownership disputes
-                // are never settled by whoever asks (class).
                 if tenant.user_by_mobile(&req_request.mobile).await.is_ok() {
                     err_msg = "Mobile already in use".to_string();
                 } else {
@@ -740,8 +726,6 @@ pub async fn add_verify(req: &mut Request, depot: &mut Depot, res: &mut Response
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(verify_request) = crate::utils::extract::<MobileAddVerifyRequest>(req, None).await {
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-            // One-shot consume under the add namespace — login codes can
-            // never be consumed here and vice versa.
             let stored = OTP_CODE_CACHE
                 .get_one_shot(&format!("otp_add:{}:{}", domain, verify_request.token))
                 .await;
@@ -751,9 +735,6 @@ pub async fn add_verify(req: &mut Request, depot: &mut Depot, res: &mut Response
                     .await
                 && stored_code == verify_request.code
             {
-                // Attach to the session's own user; `mobile_create`
-                // refuses a number owned by anyone else, so a raced claim
-                // fails closed.
                 if tenant.mobile_create(&user, &data.mobile).await.is_ok() {
                     res.status_code(StatusCode::OK);
                     res.render(Json(MobileResponse {
