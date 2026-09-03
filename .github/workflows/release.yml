@@ -153,11 +153,17 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Aliyun ACR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.ALIYUN_REGISTRY }}
-          username: ${{ secrets.ALIYUN_USERNAME }}
-          password: ${{ secrets.ALIYUN_PASSWORD }}
+        run: |
+          for i in 1 2 3 4 5; do
+            docker login "$ALIYUN_REGISTRY" -u "$ALIYUN_USERNAME" --password-stdin <<< "$ALIYUN_PASSWORD" && exit 0
+            echo "ACR login attempt $i failed; retrying in 30s..."
+            sleep 30
+          done
+          echo "ACR login failed after 5 attempts" >&2
+          exit 1
+        env:
+          ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
 
       - name: Create and push manifests
         env:
@@ -169,14 +175,25 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             TAGS+=("${GITHUB_REF#refs/tags/}")
           fi
+          # Retry wrapper: the mainland registry link drops requests
+          # intermittently from GitHub runners.
+          retry() {
+            local n
+            for n in 1 2 3 4 5; do
+              "$@" && return 0
+              echo "attempt $n failed: $*; retrying in 30s..."
+              sleep 30
+            done
+            return 1
+          }
           for repo in "$REGISTRY/$IMAGE_NAME" "$ALIYUN_IMAGE"; do
             for tag in "${TAGS[@]}"; do
-              docker buildx imagetools create \
+              retry docker buildx imagetools create \
                 -t "$repo:$tag" \
                 "$repo@$AMD64" \
                 "$repo@$ARM64"
             done
-            docker buildx imagetools inspect "$repo:latest" | head -20
+            retry docker buildx imagetools inspect "$repo:latest" | head -20
           done
 
   # ═══════════════ Native binaries ═══════════════
