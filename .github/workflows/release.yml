@@ -8,9 +8,13 @@
 #     secrets ALIYUN_USERNAME / ALIYUN_PASSWORD (ACR fixed password).
 #
 # Native binaries (GitHub Release assets):
-#   - macOS arm64 (Apple Silicon / M-series)
 #   - Linux amd64, Linux arm64
 #   - Windows amd64, Windows arm64
+#   (macOS is built locally on a Mac — macOS runners require paid
+#   Actions minutes; attach the binary to the release manually:
+#     cd frontend && npm ci && npm run build && cd ..
+#     cargo build --release   # → target/release/janux
+#     gh release upload v1.0.0 target/release/janux#janux-macos-arm64)
 #
 # Triggered by version tags (v1.2.3); workflow_dispatch builds without
 # creating a GitHub Release (artifacts stay on the run).
@@ -204,11 +208,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS (Apple Silicon / M-series) — macos runners are arm64.
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            binary: janux
-            asset: janux-macos-arm64
           # Linux amd64 / arm64.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
@@ -311,5 +310,6 @@ jobs:
             (also tagged `latest` and short-SHA)
 
             ## Binaries
-            Attached assets for macOS arm64, Linux amd64/arm64,
-            Windows amd64/arm64.
+            Attached assets for Linux amd64/arm64,
+            Windows amd64/arm64. macOS arm64: build locally
+            (see workflow header) and attach to this release.
