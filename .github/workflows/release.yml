@@ -1,17 +1,25 @@
 # Multi-platform release pipeline.
 #
+# Docker images (linux/amd64 + linux/arm64, multi-arch manifest):
+#   - GitHub Container Registry (ghcr.io) — public pulls, no extra
+#     accounts or secrets: pushes authenticate with the built-in
+#     GITHUB_TOKEN (needs `packages: write`, set below).
+#   - Aliyun ACR — reliable pulls from mainland China. Requires repo
+#     secrets ALIYUN_USERNAME / ALIYUN_PASSWORD (ACR fixed password).
+#
 # Native binaries (GitHub Release assets):
 #   - macOS arm64 (Apple Silicon / M-series)
 #   - Linux amd64, Linux arm64
 #   - Windows amd64, Windows arm64
 #
-# Docker images are NOT pushed by this workflow: deployment hosts build
-# locally via compose.yml (image janux:latest, pull_policy=build), i.e.
-# `docker compose up --build`. If you later want registry publishing,
-# re-add buildx push jobs and set the registry secrets.
-#
 # Triggered by version tags (v1.2.3); workflow_dispatch builds without
 # creating a GitHub Release (artifacts stay on the run).
+#
+# NOTE: the first time this pushes, GHCR creates the package as
+# PRIVATE. Make it public once:
+#   github.com/users/afmkt/packages/container/janux/settings
+#   → Change visibility → Public
+# (or: gh package edit janux --visibility public)
 
 name: Release
 
@@ -21,9 +29,138 @@ on:
   workflow_dispatch:
 
 env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  ALIYUN_REGISTRY: registry.cn-hangzhou.aliyuncs.com
+  ALIYUN_IMAGE: registry.cn-hangzhou.aliyuncs.com/afmkt/janux
   NODE_VERSION: "22"
 
 jobs:
+  # ═══════════════ Docker: per-arch builds (push by digest) ═══════════════
+
+  docker-amd64:
+    name: Docker image (linux/amd64)
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          # Layer cache (deps-only cargo layer stays warm between builds).
+          cache-from: type=gha,scope=docker-amd64
+          cache-to: type=gha,mode=max,scope=docker-amd64
+          outputs: |
+            type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+            type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+  docker-arm64:
+    name: Docker image (linux/arm64)
+    # Native arm64 runner: no QEMU, so the Rust build is fast.
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          cache-from: type=gha,scope=docker-arm64
+          cache-to: type=gha,mode=max,scope=docker-arm64
+          outputs: |
+            type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+            type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+  # ═══════════════ Docker: multi-arch manifest + tags ═══════════════
+
+  docker-publish:
+    name: Publish multi-arch manifest
+    needs: [docker-amd64, docker-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Create and push manifests
+        env:
+          AMD64: ${{ needs.docker-amd64.outputs.digest }}
+          ARM64: ${{ needs.docker-arm64.outputs.digest }}
+        run: |
+          set -euo pipefail
+          TAGS=("latest" "${GITHUB_SHA::12}")
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAGS+=("${GITHUB_REF#refs/tags/}")
+          fi
+          for repo in "$REGISTRY/$IMAGE_NAME" "$ALIYUN_IMAGE"; do
+            for tag in "${TAGS[@]}"; do
+              docker buildx imagetools create \
+                -t "$repo:$tag" \
+                "$repo@$AMD64" \
+                "$repo@$ARM64"
+            done
+            docker buildx imagetools inspect "$repo:latest" | head -20
+          done
+
   # ═══════════════ Native binaries ═══════════════
 
   binaries:
@@ -115,7 +252,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [binaries]
+    needs: [binaries, docker-publish]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -133,10 +270,11 @@ jobs:
           files: assets/*
           generate_release_notes: true
           body: |
+            ## Docker images (linux/amd64 + linux/arm64)
+            - `docker pull ghcr.io/afmkt/janux:${{ github.ref_name }}`
+            - Aliyun ACR (mainland China): `${{ env.ALIYUN_IMAGE }}:${{ github.ref_name }}`
+            (also tagged `latest` and short-SHA)
+
             ## Binaries
             Attached assets for macOS arm64, Linux amd64/arm64,
             Windows amd64/arm64.
-
-            ## Docker
-            No registry image is published; build locally on the host:
-            `docker compose up --build` (tags `janux:latest`).

@@ -1,9 +1,10 @@
 services:
   auth:
     # Default: build locally and tag as janux:latest (`docker compose up
-    # --build`). If you publish the image to a registry yourself, point at
-    # it instead, e.g. in /etc/environment or the compose env file:
-    #   JANUX_IMAGE=<your-registry>/janux:v1.0.0
+    # --build`). To pull a published multi-arch image instead (e.g. in
+    # /etc/environment or the compose env file):
+    #   JANUX_IMAGE=ghcr.io/afmkt/janux:latest            # global
+    #   JANUX_IMAGE=registry.cn-hangzhou.aliyuncs.com/afmkt/janux:latest  # mainland China
     #   JANUX_PULL=always
     image: ${JANUX_IMAGE:-janux:latest}
     pull_policy: ${JANUX_PULL:-build}
