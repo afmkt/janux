@@ -31,8 +31,8 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  ALIYUN_REGISTRY: registry.cn-hangzhou.aliyuncs.com
-  ALIYUN_IMAGE: registry.cn-hangzhou.aliyuncs.com/afmkt/janux
+  ALIYUN_REGISTRY: crpi-zuhwpd6fwca3b0fc.cn-shanghai.personal.cr.aliyuncs.com
+  ALIYUN_IMAGE: crpi-zuhwpd6fwca3b0fc.cn-shanghai.personal.cr.aliyuncs.com/afmkt/janux
   NODE_VERSION: "22"
 
 jobs:

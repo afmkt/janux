@@ -4,7 +4,7 @@ services:
     # --build`). To pull a published multi-arch image instead (e.g. in
     # /etc/environment or the compose env file):
     #   JANUX_IMAGE=ghcr.io/afmkt/janux:latest            # global
-    #   JANUX_IMAGE=registry.cn-hangzhou.aliyuncs.com/afmkt/janux:latest  # mainland China
+    #   JANUX_IMAGE=crpi-zuhwpd6fwca3b0fc.cn-shanghai.personal.cr.aliyuncs.com/afmkt/janux:latest  # mainland China
     #   JANUX_PULL=always
     image: ${JANUX_IMAGE:-janux:latest}
     pull_policy: ${JANUX_PULL:-build}
