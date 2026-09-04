@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use toasty::*;
 
 /// OAuth2/OIDC Client registration — tenant-scoped
-/// Gapped from gaps.md as G8. Implements RFC 6749 §2 + §4.1.1 client management.
+/// Implements RFC 6749 §2 + §4.1.1 client management.
 #[derive(Debug, toasty::Model, Clone)]
 pub struct OAuth2Client {
     /// Unique opaque client identifier (RFC 6749 §2)

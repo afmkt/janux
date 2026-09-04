@@ -1,4 +1,6 @@
-Here's a manual, step-by-step integration guide. It's designed so you do each step yourself and understand *why* — I give you the exact API shapes (reference facts from the code), not the implementation.
+# Janux — Hands-on Integration Guide
+
+A manual, step-by-step integration guide. It is designed so you do each step yourself and understand *why* — it gives the exact API shapes (reference facts from the code), not the implementation.
 
 ---
 
@@ -15,9 +17,9 @@ Tenants are resolved from the request `Host` header. `seed.toml` bootstraps tena
 
 ## Phase 1 — Run Janux standalone
 
-1. `cd auth && just run` (builds the frontend into `frontend/dist`, then `cargo run`). Server binds `0.0.0.0:8080` (`base.toml`).
+1. `just run` (builds the frontend into `frontend/dist`, then `cargo run`). Server binds `0.0.0.0:8080` (`base.toml`).
 2. Before this works cleanly, fix two config gotchas:
-   - `base.toml` has `trust_forwarded_headers = true` — that mode assumes a reverse proxy in front. Since you're hitting the server directly, create `auth/janux.toml` (gitignored, highest precedence — see `src/server.rs` config layering) with `trust_forwarded_headers = false`, and run `cargo run -- -c base -c seed -c janux` (or check `src/main.rs:48` for the exact flag handling).
+   - `base.toml` has `trust_forwarded_headers = true` — that mode assumes a reverse proxy in front. Since you're hitting the server directly, create `janux.toml` (gitignored, highest precedence — see `src/server.rs` config layering) with `trust_forwarded_headers = false`, and run `cargo run -- -c base -c seed -c janux` (or check `src/main.rs:48` for the exact flag handling).
    - `seed.toml` `[seed.resend] verify_url` is `http://localhost/api/v1/auth/email/landing` (port 80). Your server runs on 8080 — change it to `http://localhost:8080/api/v1/auth/email/landing` so magic links point at your running instance.
 3. Verify discovery: `curl -s http://localhost:8080/.well-known/openid-configuration | jq`. The `issuer` must be `http://localhost:8080` (derived from Host, `src/utils.rs:312`). Note the `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `jwks_uri`.
 4. Verify JWKS: `curl -s http://localhost:8080/.well-known/jwks.json` — you should see an RSA key. That's what RPs use to verify tokens.
@@ -34,7 +36,7 @@ Tenants are resolved from the request `Host` header. `seed.toml` bootstraps tena
      -H 'Content-Type: application/json' \
      -d '{"name":"admin","email":"<your real inbox>"}'
    ```
-   (`ReqRequest` shape: `src/email.rs:126`. The seed has a live Resend key, so a real email arrives.)
+   (`ReqRequest` shape: `src/email.rs:126`. If your `seed.toml` configures a live mail provider, a real email arrives.)
 2. Open the email and click the link → hits `/api/v1/auth/email/landing` → verifies → this **attaches the email credential to user `admin`** and mints a session. Observe the response: a JWT and a `Set-Cookie`.
 3. Save the JWT — it's your Bearer token for the admin API. Decode it (`jwt.io` or `jq` on the base64 parts) and look at the claims: `sub`, `iss`, `exp`, roles. This is the same token format RPs will later validate.
 
@@ -66,7 +68,7 @@ Understand each field against RFC 6749: `grant_types` is what `/token` will acce
 
 ## Phase 4 — Build the sample RP (this is the learning part)
 
-Create a new small service, e.g. `sample_rp/` — a single-file FastAPI app on port 3000 is ideal (the repo already standardizes on FastAPI/uv). Dependencies you'll need: `fastapi`, `uvicorn`, `httpx`, and a JWT library with JWKS support (e.g. `pyjwt[crypto]` + fetching JWKS yourself, or `authlib`). Write it yourself; here is the spec:
+Create a new small service, e.g. `sample_rp/` — a single-file FastAPI app on port 3000 is ideal. Dependencies you'll need: `fastapi`, `uvicorn`, `httpx`, and a JWT library with JWKS support (e.g. `pyjwt[crypto]` + fetching JWKS yourself, or `authlib`). Write it yourself; here is the spec:
 
 **Endpoint 1: `GET /login`** — start the flow.
 - Generate a random `state` and a PKCE `code_verifier` (43–128 chars of `[A-Za-z0-9-._~]`); compute `code_challenge = BASE64URL(SHA256(code_verifier))` — no padding. Store both in a short-lived signed/encrypted cookie or server-side dict keyed by `state`.
@@ -95,26 +97,26 @@ Create a new small service, e.g. `sample_rp/` — a single-file FastAPI app on p
 
 ## Phase 5 — Optional: wire into the existing system
 
-Once the loop works standalone, containerize: Dockerfile for `auth/` (multi-stage: node build frontend → cargo build → slim runtime with `data/` volume), `auth/compose.yml`, add to root `compose.yml`, and route it through caddy using the reserved block at `caddy/Caddyfile:5` (e.g. `auth.sparkpos.cn`). Then flip `trust_forwarded_headers` back to `true` (now it genuinely sits behind caddy), update `verify_url`/redirect URIs to the public hostnames, and re-register the client's `redirect_uri` for the RP's public URL. Note G-87: ceremony state is process-local, so keep janux to one instance.
+Once the loop works standalone, containerize: the `Dockerfile` (multi-stage: node build frontend → cargo build → slim runtime with `data/` volume), `compose.yml`, and route it through your reverse proxy (e.g. `auth.example.com`). Then flip `trust_forwarded_headers` back to `true` (now it genuinely sits behind the proxy), update `verify_url`/redirect URIs to the public hostnames, and re-register the client's `redirect_uri` for the RP's public URL. Note G-87: ceremony state is process-local, so keep janux to one instance.
 
 ---
 
-Two warnings for the road: rate limits are tight for manual testing (6/min on `/api/v1/auth/*`, 12/min on protocol endpoints — `src/router.rs:71`, `src/router.rs:360`), and everything you need is also in `auth/frontend/openapi.json` if you want to browse the exact API schemas.
+Two warnings for the road: rate limits are tight for manual testing (6/min on `/api/v1/auth/*`, 12/min on protocol endpoints — `src/router.rs:71`, `src/router.rs:360`), and everything you need is also in `frontend/openapi.json` if you want to browse the exact API schemas.
 
 
-Hosted pages: `/login` (also `/signup`), `/admin`, `/consent`, `/device-login` (`auth/src/router.rs:50-54`). Assuming the server is on `http://localhost:8080`:
+Hosted pages: `/login` (also `/signup`), `/admin`, `/consent`, `/device-login` (`src/router.rs:50-54`). Assuming the server is on `http://localhost:8080`:
 
 ## 1. Sign in via `/login` (magic link)
 
 1. Open `http://localhost:8080/login`.
 2. Enter username `admin`, select the **Email** factor, type a real inbox you control, submit.
-3. Open the inbox, click the magic link. It returns to the login page, auto-verifies, and shows "Signed in." — the session JWT is stored in `sessionStorage` (`auth/frontend/src/shared/session.ts`).
+3. Open the inbox, click the magic link. It returns to the login page, auto-verifies, and shows "Signed in." — the session JWT is stored in `sessionStorage` (`frontend/src/shared/session.ts`).
    - Prerequisite from the earlier guide: `verify_url` in `seed.toml` must point at the same host:port you're browsing, or the emailed link hits a dead port.
 4. Repeat with username `demo` in a **different browser/profile** later — it exercises the same flow for a non-admin user.
 
 ## 2. Sign in via SMS OTP (optional)
 
-Same page, **SMS** factor: username + mobile number → enter the code that arrives (seed.toml has a live Aliyun SMS config). Confirms the second factor end-to-end.
+Same page, **SMS** factor: username + mobile number → enter the code that arrives (if your `seed.toml` configures an SMS provider). Confirms the second factor end-to-end.
 
 ## 3. Admin UI at `/admin`
 

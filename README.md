@@ -2,108 +2,94 @@
 
 Multi-tenant passwordless authentication server and OpenID Connect provider.
 
-Stack: Rust · Salvo (HTTP) · Toasty (ORM, per-tenant schema) · webauthn-rs · RSA-signed JWT.
+Stack: Rust · Salvo (HTTP) · Toasty (ORM, per-tenant schema) · webauthn-rs · RSA-signed JWT · Vite/React hosted UI.
 
-This document records the design decisions. When reviewing this codebase, treat the sections below as **intentional design** — if one of them looks wrong, that is a design discussion, not a gap to file.
+> **Status**: pre-1.0, single-instance by design (see G-87). The design rationale lives in [docs/DESIGN.md](docs/DESIGN.md); open issues and residuals in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
----
+## Features
 
-## 1. Passwordless: signin and signup are one flow
+- **Passwordless factors** — magic-link email, SMS OTP, social/OIDC federation, passkeys (WebAuthn), TOTP as step-up MFA. One unified `request`/`verify` flow: signin and signup are the same ceremony ([design §1](docs/DESIGN.md)).
+- **OIDC provider** — authorization code + PKCE, refresh rotation with reuse detection, `/userinfo`, JWKS, introspection/revocation (RFC 7662/7009), device flow, dynamic client registration (RFC 7591, opt-in), RP-initiated and back-channel logout.
+- **Multi-tenancy** — tenants resolved from the request `Host`, each with its own database schema, signing keys, policies, and provider config.
+- **RBAC** — bounded role hierarchy with a level gate that closes privilege escalation by construction; default-deny authorization on every endpoint.
+- **SCIM 2.0** — `/scim/v2/*` provisioning surface driven by a `client_credentials` machine principal.
+- **Hosted UI** — one unified login page (username → factor picker → verify), plus admin, consent, and device-login pages, generated from the OpenAPI spec.
 
-Janux has no passwords and no signin/signup distinction. Every factor follows the same two-phase pattern:
+## Quickstart (development)
 
-1. `POST /api/v1/auth/{factor}/request` — username + chosen factor. If the user does not exist, they are provisioned here (`ensure_user_*`); if they exist, the challenge is issued. **The response is identical in both cases.**
-2. `POST /api/v1/auth/{factor}/verify` — prove the challenge; factors accumulate, a JWT is minted, the session cookie is set.
+Prerequisites: Rust (stable), Node 22, [just](https://github.com/casey/just).
 
-Why this is deliberate and safe:
+```sh
+cp base.example.toml base.toml      # edit bind/data_dir/encryption_key
+cp seed.example.toml seed.toml      # bootstrap tenant: roles, users, policies, providers
+cp .env.example .env                # provider credentials (mail, SMS, social OAuth)
 
-- **Possession is the identity proof.** A magic link proves control of the email inbox, SMS OTP proves control of the phone, social delegates to an external IdP, passkeys attest the authenticator. Whoever passes `verify` owns the identifier, so auto-provisioning on first successful verification is the point of passwordless.
-- **Enumeration resistance falls out for free.** `request` never reveals whether the account existed. Do not add existence signals "for UX".
-- **Do not re-introduce a per-request `mode: signin|signup` field.** An explicit signup mode was proposed during API consolidation and superseded by this design: it would duplicate a provisioning decision the unified flow already makes, and a default-`signin` mode would break first-time users.
+just dev           # backend + frontend dev servers
+just run           # build frontend, run server
+just openapi       # regenerate frontend/openapi.json + TS client
+just test          # unit + integration + e2e
+```
 
-Invariants that keep the unified flow safe:
+With no providers configured in `.env`/`seed.toml`, the corresponding factors simply don't activate; the server still runs and serves the OIDC/admin/SCIM surfaces.
 
-- **Bootstrap-capable factors**: magic link, SMS OTP, social, passkey. **TOTP can never provision a user** — it proves nothing out-of-band; it is enrollment/step-up for existing accounts only.
-- **Signup gating is a tenant-level concern** (config/policy deciding whether self-provisioning is allowed at all, e.g. invite-only deployments) — never a per-request body field.
-- **The passkey ceremony branches server-side** (registration vs assertion based on existing credentials, `src/passkey.rs`); the client API stays `request`/`verify`.
-- Provisioning must attach the credential to the real user record (G-40 was a bug against this invariant — the social flow attached the email to a provider-named user — not an argument against the unified flow).
+## Docker
 
-## 2. Stateless JWTs; activeness enforced at stateful boundaries
+```sh
+docker compose up --build           # builds and tags janux:latest locally
+```
 
-`verify_jwt` / `decode_session` deliberately never consult live user state: JWTs are stateless and a distributed verifier has no central authority to check activeness. `user.active` is enforced at the stateful boundaries — login (`authenticate_jwt`) and refresh (`Tenant::refresh_jwt`, OIDC `handle_refresh`) — so a deactivated account's tokens die within one token lifetime (refresh is the only extension point and re-checks). Do not add live-state lookups to the verification path; if the propagation window is too wide, shorten token lifetimes instead (G-9).
+Published multi-arch images (linux/amd64 + linux/arm64) are built by the `Release Docker` workflow on version tags:
 
-## 3. Bounded role hierarchy (privilege escalation closed by construction)
+```sh
+docker pull ghcr.io/afmkt/janux:latest                                        # global
+docker pull crpi-zuhwpd6fwca3b0fc.cn-shanghai.personal.cr.aliyuncs.com/afmkt/janux:latest  # mainland China
+```
 
-Every `Role` carries a `level` and a `builtin` flag; the builtin catalog is fixed in code (`root`=100, `admin`=80, `user`=40, `guest`=20 — `BUILTIN_ROLES`, `src/role.rs`). One gate — `Tenant::require_below` — enforces that a caller may create/grant/revoke/empower/delete a role only when that role's level is strictly below the caller's effective level; all six role/policy mutation functions funnel through it. A policy can widen *which* endpoints are callable, never *what power* they confer. `root` is seed-only; builtin roles are undeletable and their names reserved (G-10).
+Point a deployment at a published image via `JANUX_IMAGE` / `JANUX_PULL=always` (see `compose.yml`).
 
-## 4. Default-deny authorization
+### Deployment notes
 
-The `protect` hoop (`src/router.rs`) rejects anything without an explicit allow policy. The `tenant/*` lifecycle endpoints are bound to `root` only (G-11); root operating across all tenants is intended — root is the cross-tenant lifecycle role. Policy writes derive their domain from the request `Host` (the resolved tenant domain), never from a client-supplied body field (G-56).
+- Put the server behind a reverse proxy that sets `X-Forwarded-*` and keep `trust_forwarded_headers = true`; if it is directly reachable, set it to `false` (a gitignored `janux.toml` override works well).
+- Run **one instance** per data dir: ceremony state (magic links, OTP codes, challenges, rate limits) is process-local (G-87).
+- Persist the `data/` volume — it holds every tenant schema and the signing keys.
 
-## 5. Multi-tenancy
+## Configuration
 
-A tenant is resolved from the request `Host`/domain and gets its own database schema (`push_schema`). `seed.toml` seeds the bootstrap tenant (builtin role catalog + users + admin policies); runtime tenants created via `admin/tenant/create` are bootstrapped with the same catalog + standard admin policies + optional first admin/domain (`bootstrap_tenant`, `src/seed.rs`) so they are operable immediately. Seeding runs as `Caller::Bootstrap`, which is exempt from the level gate. The `seed.toml` shape is pinned by the `seed_toml_bootstraps_builtin_roles` test so a typo fails at `cargo test` time instead of as a lockout on first boot.
+Layered TOML: `janux -c base -c seed` (later files override; `JANUX_*` env vars override everything).
 
-## 6. Per-tenant serialization: one request at a time per tenant
+| File | Purpose | Tracked? |
+|---|---|---|
+| `base.example.toml` / `base.toml` | bind address, data dir, encryption key, proxy trust | example tracked, local gitignored |
+| `seed.example.toml` / `seed.toml` | bootstrap tenant (roles, users, policies, provider config) | example tracked, local gitignored |
+| `.env.example` / `.env` | provider credentials (Aliyun SMS/mail, Resend, GitHub OAuth, JWT secret) | example tracked, local gitignored |
+| `tests/test_config.toml` | test config with dummy values | tracked |
 
-Same-tenant requests never run concurrently within a process. The mechanism is `Storage::tenant_by_domain` / `tenant_by_id` (`src/db.rs`): they return a DashMap `RefMut` — a shard **write lock** on the tenant map — and every handler holds that guard from tenant resolution to the end of the request, across every `.await`. This serialization is what the check-then-act sequences rely on: identity claims (email/mobile/social/passkey), `user.active` transitions and the level gates (§3, G-66), the refresh-rotation single-winner, and the key/policy caches against their per-tenant databases. Tenant/domain lifecycle mutations run outside any tenant guard and are serialized separately by the `Storage::topology` mutex.
+The seed shape is pinned by the `seed_toml_bootstraps_builtin_roles` test, so a typo fails at `cargo test` time instead of as a lockout on first boot.
 
-Rules for code that touches a tenant:
+## Testing
 
-- **Hold the guard across the entire multi-step flow.** Dropping it mid-flow and re-borrowing reopens every race the design closes.
-- **Never use `tenants.get()` (a read ref) in a flow that mutates.** Mutation flows go through `get_mut`.
-- **Do not clone a `toasty::Db` handle out of the guard and mutate the tenant elsewhere.** The one exception is the revocation store (`InvalidJwt`): it is process-wide, keyed by token, and takes `&self` by design — its within-instance safety rests on the *caller's* tenant guard, its cross-instance safety on the `jwt.db` primary key (G-71).
-
-Accepted costs: a slow SMS/email send holds the lock, so other requests for the tenant queue behind it (head-of-line blocking); tenants hashing to the same DashMap shard serialize together — a throughput concern, never a correctness one.
-
-Scope: the guarantee is per-process. Process-wide caches that are not keyed by tenant (`SEND_THROTTLE`, the per-IP limiters) are NOT covered by the guard and must be concurrency-safe on their own (G-119). Nothing here extends across instances sharing a data dir — horizontal scaling means moving the commit points into the shared store (G-87), after which this guard degrades to a fast path.
-
-## 7. SCIM-first user management
-
-External user lifecycle (provisioning, deactivation, rename) belongs to the SCIM 2.0 surface (`/scim/v2/*`, `src/scim.rs`), not the RPC-style admin API: IdPs drive it under a machine principal minted by the `client_credentials` grant and carrying the builtin `scim` role (level 60 — above `user` so the G-66 gate lets it manage regular accounts, below `admin` so it can never administer administrators). Identity model: `User.id` is an opaque UUIDv7 surrogate key (SCIM resource id, JWT `sub`, every FK); `User.name` is the unique, mutable login name (SCIM `userName`); `User.external_id` persists the IdP join key. Custom admin endpoints remain only for what SCIM does not cover (role grants, factor administration). Open residuals: G-123, G-124.
-
-## 8. OIDC beyond Basic/Config: dynamic registration and logout (`src/oidc_ext.rs`)
-
-The OP implements three profiles on top of Basic + Config, and deliberately stops there:
-
-- **Dynamic Client Registration** — RFC 7591 `POST /register` plus the RFC 7592 §4 read (`GET /register/{client_id}`, client-authenticated). Gated by a per-tenant switch (`oidc.dcr` in the tenant config store, `admin/oidc/config`), default **off**: open registration lets anyone mint client rows, so each tenant opts in. Self-service registration stays bounded: `client_credentials` is excluded (no self-minted service identities), the scope vocabulary cannot widen beyond `KNOWN_SCOPES`, and implicit/hybrid response types are never registered (deprecated by the OAuth 2.1 BCP, same reason the server is code-flow-only).
-- **RP-Initiated Logout 1.0** — `GET|POST /end_session`. Validates `id_token_hint`/`client_id`, refuses any `post_logout_redirect_uri` that is not registered for that client (direct 400, never a redirect to an unvalidated URI), revokes the session presented to it, and answers 302 (with the RP's `state`) or 200.
-- **Back-Channel Logout 1.0** — on logout (`/end_session` and first-party `auth/logout`) every RP of the user that registered a `backchannel_logout_uri` receives a form-encoded `logout_token`. Delivery is fire-and-forget with bounded retries — logout never fails because one RP is unreachable.
-
-Two spec mechanisms adapt to the stateless-session design (§2), and this is deliberate:
-
-- **No `sid` anywhere.** There is no server-side session registry, so logout tokens identify the user by `sub` only and discovery advertises `backchannel_logout_session_supported: false`. The RP set to notify comes from the user's non-revoked consent grants (`AuthGrant`) — the only durable record of where a user holds an active OIDC authorization.
-- **`/end_session` terminates the session presented to it (Bearer JWT), not a cookie.** Login factors set cookies under client-chosen names (§1-era API), so no fixed session cookie exists for the OP to clear.
-
-Extended client metadata (`backchannel_logout_uri`, `post_logout_redirect_uris`, `client_name`, dynamic provenance) lives in the tenant `Config` store under `oidc.client.<client_id>`, not in `OAuth2Client` columns: tenant databases created before a feature tolerate `push_schema` failures on existing tables, so a new column would silently never appear there while queries reference it. Admin surface: `admin/oauth2client/meta` sets the metadata for statically created clients. Open residuals: G-125, G-126.
-
-
----
+```sh
+just unit          # unit tests
+just integration   # integration tests (single-threaded)
+just e2e-setup     # once: install Playwright browsers
+just e2e           # Playwright-driven e2e against an auto-started server
+```
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| `src/` | Server: `router.rs`, factors (`email`, `otp`, `totp`, `passkey`, `social`), OIDC IdP (`oidc.rs`), RBAC (`role.rs`, `policy.rs`), tenancy (`db.rs`, `domain.rs`, `seed.rs`) |
-| `frontend/` | Vite + React multi-entry app (`login`, `admin`, `consent`, `device`) with a generated OpenAPI client (`src/api/`). One unified login page per §1 — username → factor picker → verify — with `signup` an alias, not a separate flow |
+| `src/` | Server: `router.rs`, factors (`email`, `otp`, `totp`, `passkey`, `social`), OIDC IdP (`oidc.rs`, `oidc_ext.rs`), RBAC (`role.rs`, `policy.rs`), tenancy (`db.rs`, `domain.rs`, `seed.rs`) |
+| `frontend/` | Vite + React multi-entry app (`login`, `admin`, `consent`, `device`) with a generated OpenAPI client (`src/api/`) |
 | `tests/` | `unit_tests`, `z_integration_tests`, Playwright-driven e2e (`all_tests`) |
-| `docs/` | Reference specs (OIDC Core, RFC 6749/6750, SCIM, SAML) |
+| `docs/` | Design decisions, integration guide, reference specs (OIDC Core, RFC 6749/6750, SCIM, SAML) |
 
-## Development
+## Documentation
 
-```sh
-just dev           # backend + frontend dev servers
-just run           # build frontend, run server
-just openapi       # regenerate frontend/openapi.json + TS client
-just unit          # unit tests
-just integration   # integration tests (single-threaded)
-just e2e           # Playwright e2e (just e2e-setup once for browsers)
-just test          # all of the above
-```
+- [docs/DESIGN.md](docs/DESIGN.md) — the design decisions (unified passwordless flow, stateless JWTs, role hierarchy, tenancy, serialization guarantees, SCIM, OIDC extensions).
+- [docs/INTEGRATION.md](docs/INTEGRATION.md) — hands-on walkthrough: run the server, get an admin session, register a relying party, build a sample OIDC client end-to-end.
+- [KNOWN_ISSUES.md](KNOWN_ISSUES.md) — open gaps (`G-*` IDs) and roadmap.
 
-Config is layered: `janux -c base -c seed`. `base.toml`, `seed.toml`, and `janux.toml` are local-only (gitignored) — copy `base.example.toml` → `base.toml` and `seed.example.toml` → `seed.toml`, then fill in your credentials (see `.env.example` for the env-var surface). `tests/test_config.toml` is the tracked test config with dummy values. With `trust_forwarded_headers = true` the server must sit behind a reverse proxy and must not be directly reachable.
+## License
 
-## Companion documents
-
-- `gaps.md` — open issues (G-\* IDs); resolutions for closed ones are recorded inline.
-- `int.md` — hands-on walkthrough of the auth service (phases, checkpoints, curl recipes).
+No license is granted yet — all rights reserved.

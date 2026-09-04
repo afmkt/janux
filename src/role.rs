@@ -7,7 +7,7 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use toasty::*;
 
-/// The built-in role catalog (gaps.md ..).
+/// The built-in role catalog.
 ///
 /// Levels are the privilege ladder of the system: higher = more privileged.
 /// They are fixed in code rather than config because the role-administration

@@ -7,7 +7,7 @@
 # config. Seeding is idempotent — roles/users/policies are upserted,
 # so the server can reboot against the same file.
 #
-# Built-in role model (gaps.md G-10..G-12, x.md):
+# Built-in role model:
 #   root  — cross-tenant platform operator: tenant lifecycle only.
 #   admin — per-tenant operator: everything inside its own tenant.
 #   user  — regular account: self-service endpoints.

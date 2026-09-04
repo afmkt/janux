@@ -1,3 +1,9 @@
+# Project documentation
+
+- [DESIGN.md](DESIGN.md) — design decisions behind Janux.
+- [INTEGRATION.md](INTEGRATION.md) — hands-on integration walkthrough (OIDC relying party, hosted pages, admin UI).
+- [../KNOWN_ISSUES.md](../KNOWN_ISSUES.md) — open gaps and roadmap.
+
 # Standards
 ## OpenID Connect & OAuth 2.0, must have
 * [The OAuth 2.0 Authorization Framework](https://datatracker.ietf.org/doc/html/rfc6749)
