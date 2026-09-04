@@ -73,12 +73,16 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          # ACR Personal Edition rejects buildx attestation manifests
+          # (application/vnd.oci.empty.v1+json) — disable them.
+          provenance: false
+          sbom: false
           # Layer cache (deps-only cargo layer stays warm between builds).
           cache-from: type=gha,scope=docker-amd64
           cache-to: type=gha,mode=max,scope=docker-amd64
           outputs: |
             type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-            type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+            type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
 
   docker-arm64:
     name: Docker image (linux/arm64)
@@ -122,11 +126,15 @@ jobs:
         with:
           context: .
           platforms: linux/arm64
+          # ACR Personal Edition rejects buildx attestation manifests
+          # (application/vnd.oci.empty.v1+json) — disable them.
+          provenance: false
+          sbom: false
           cache-from: type=gha,scope=docker-arm64
           cache-to: type=gha,mode=max,scope=docker-arm64
           outputs: |
             type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-            type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+            type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
 
   # ═══════════════ Multi-arch manifest + tags ═══════════════
 
