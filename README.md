@@ -92,4 +92,4 @@ just e2e           # Playwright-driven e2e against an auto-started server
 
 ## License
 
-No license is granted yet — all rights reserved.
+Copyright 2026 the Janux authors. Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE).
