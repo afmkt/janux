@@ -77,9 +77,11 @@ jobs:
           # (application/vnd.oci.empty.v1+json) — disable them.
           provenance: false
           sbom: false
-          # Layer cache (deps-only cargo layer stays warm between builds).
-          cache-from: type=gha,scope=docker-amd64
-          cache-to: type=gha,mode=max,scope=docker-amd64
+          # Layer cache lives in GHCR (no 10GB GHA-cache cap, shared
+          # across tags/branches): only the janux crate recompiles when
+          # sources change; deps rebuild only when Cargo.toml/lock do.
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-amd64
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-amd64,mode=max
           outputs: |
             type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
             type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
@@ -130,8 +132,8 @@ jobs:
           # (application/vnd.oci.empty.v1+json) — disable them.
           provenance: false
           sbom: false
-          cache-from: type=gha,scope=docker-arm64
-          cache-to: type=gha,mode=max,scope=docker-arm64
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-arm64
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-arm64,mode=max
           outputs: |
             type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
             type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
