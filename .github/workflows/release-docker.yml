@@ -84,7 +84,7 @@ jobs:
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-amd64,mode=max
           outputs: |
             type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-            type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
+            type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
   docker-arm64:
     name: Docker image (linux/arm64)
@@ -136,7 +136,7 @@ jobs:
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-arm64,mode=max
           outputs: |
             type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-            type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
+            type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
   # ═══════════════ Multi-arch manifest + tags ═══════════════
 
