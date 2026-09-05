@@ -575,6 +575,7 @@ async fn mint_token_response(
         .encode(&sha2::Sha256::digest(access_token.as_bytes())[..16]);
     let at_entry = serde_json::json!({
         "type": "access",
+        "iss": issuer,
         "client_id": client.id.as_str(),
         "user_id": user_id,
         "scope": scope.as_str(),
@@ -2523,6 +2524,7 @@ async fn handle_auth_code(
         .encode(&sha2::Sha256::digest(access_token.as_bytes())[..16]);
     let at_entry = serde_json::json!({
         "type": "access",
+        "iss": issuer,
         "client_id": client.id.as_str(),
         "user_id": user_id.as_str(),
         "scope": scope.as_str(),
@@ -2843,6 +2845,7 @@ async fn handle_refresh(
         .encode(&sha2::Sha256::digest(access_token.as_bytes())[..16]);
     let at_entry = serde_json::json!({
         "type": "access",
+        "iss": issuer,
         "client_id": client.id.as_str(),
         "user_id": user_id.as_str(),
         "scope": scope.as_str(),
@@ -3461,7 +3464,14 @@ pub async fn introspect(req: &mut Request, depot: &mut Depot, res: &mut Response
             .get("client_id")
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        // The cache is process-wide but tokens are tenant-scoped: an entry
+        // minted by another tenant must never validate here (the same
+        // client_id can be registered in several tenants), so the recorded
+        // issuer is compared with the requesting tenant's — a missing or
+        // mismatched `iss` fails closed.
+        let entry_issuer = entry.get("iss").and_then(|v| v.as_str()).unwrap_or("");
         if now >= exp
+            || entry_issuer != issuer
             || entry_client_id != client.id.as_str()
             || invalid_jwt.is_valid(&params.token).await
         {
@@ -4746,6 +4756,7 @@ mod tests {
                 format!("token:access:{opaque}"),
                 serde_json::json!({
                     "type": "access",
+                    "iss": TEST_ISSUER,
                     "client_id": "client-a",
                     "user_id": "user1",
                     "scope": "openid",
@@ -4770,6 +4781,82 @@ mod tests {
         assert_eq!(body["scope"], "openid");
         assert_eq!(body["iss"], TEST_ISSUER);
         assert_eq!(body["token_type"], "Bearer");
+    }
+
+    #[tokio::test]
+    async fn introspect_cached_token_from_another_tenant_is_inactive() {
+        let (state, _tmp) = revoke_test_env().await;
+        let service = introspect_service(state.clone());
+        // The token cache is process-wide and the same client_id can exist
+        // in several tenants: an entry minted under a different issuer must
+        // not validate through this tenant's fast path.
+        let foreign = format!("opaque-{}", uuid::Uuid::new_v4());
+        let now = Timestamp::now().as_second();
+        OIDC_TOKEN_CACHE
+            .insert(
+                format!("token:access:{foreign}"),
+                serde_json::json!({
+                    "type": "access",
+                    "iss": "https://other-tenant.example.com",
+                    "client_id": "client-a",
+                    "user_id": "user1",
+                    "scope": "openid",
+                    "jti": uuid::Uuid::new_v4().to_string(),
+                    "iat": now,
+                    "exp": now + 3600,
+                }),
+            )
+            .await
+            .expect("cache insert");
+
+        let (status, body) = post_introspect(
+            &service,
+            &format!("token={foreign}&client_id=client-a&client_secret=secret-a"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            serde_json::json!({"active": false}),
+            "a cached token issued by another tenant must be inactive"
+        );
+    }
+
+    #[tokio::test]
+    async fn introspect_cached_token_without_issuer_is_inactive() {
+        let (state, _tmp) = revoke_test_env().await;
+        let service = introspect_service(state.clone());
+        // Fail closed: an entry that does not record its issuer cannot be
+        // attributed to this tenant and must not validate.
+        let legacy = format!("opaque-{}", uuid::Uuid::new_v4());
+        let now = Timestamp::now().as_second();
+        OIDC_TOKEN_CACHE
+            .insert(
+                format!("token:access:{legacy}"),
+                serde_json::json!({
+                    "type": "access",
+                    "client_id": "client-a",
+                    "user_id": "user1",
+                    "scope": "openid",
+                    "jti": uuid::Uuid::new_v4().to_string(),
+                    "iat": now,
+                    "exp": now + 3600,
+                }),
+            )
+            .await
+            .expect("cache insert");
+
+        let (status, body) = post_introspect(
+            &service,
+            &format!("token={legacy}&client_id=client-a&client_secret=secret-a"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            serde_json::json!({"active": false}),
+            "a cached entry without an issuer must fail closed"
+        );
     }
 
     // ── refresh grant re-checks user.active ────────────────────────────
