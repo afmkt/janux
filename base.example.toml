@@ -3,6 +3,11 @@
 data_dir = "./data"
 # 64 hex chars (32 bytes) for AES-256-GCM. Generate your own, e.g.:
 #   openssl rand -hex 32
+# RECOVERY-CRITICAL: this key encrypts secrets at rest (social provider
+# secrets, TOTP secrets, Resend/Aliyun delivery keys). Losing it renders
+# those secrets permanently undecryptable — TOTP users must re-enroll and
+# provider credentials must be re-entered. Rotating it requires
+# decrypting and re-encrypting every stored secret under the new key.
 encryption_key = "1234567812345678123456781234567812345678123456781234567812345678"
 # true  = behind a reverse proxy (Caddy/Traefik/...): trust X-Forwarded-* headers
 # false = standalone: ignore X-Forwarded-* headers, use Host and the real URI

@@ -27,14 +27,14 @@ pub fn setup_encryption_key(hex_key: &str) -> Result<()> {
     Ok(())
 }
 
-fn get_encryption_key() -> &'static Key<Aes256Gcm> {
-    ENCRYPTION_KEY.get_or_init(|| {
-        panic!("JANUX_ENCRYPTION_KEY must be set before encrypting/decrypting client secrets");
+fn get_encryption_key() -> Result<&'static Key<Aes256Gcm>> {
+    ENCRYPTION_KEY.get().ok_or_else(|| {
+        anyhow!("JANUX_ENCRYPTION_KEY is not set; secrets at rest cannot be protected")
     })
 }
 
-pub fn encrypt_client_secret(plaintext: &str) -> Result<String> {
-    let cipher = Aes256Gcm::new(get_encryption_key());
+pub fn encrypt_secret(plaintext: &str) -> Result<String> {
+    let cipher = Aes256Gcm::new(get_encryption_key()?);
     let nonce: [u8; 12] = rand::random();
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce), plaintext.as_bytes())
@@ -45,8 +45,8 @@ pub fn encrypt_client_secret(plaintext: &str) -> Result<String> {
     Ok(BASE64.encode(out))
 }
 
-pub fn decrypt_client_secret(encrypted: &str) -> Result<String> {
-    let cipher = Aes256Gcm::new(get_encryption_key());
+pub fn decrypt_secret(encrypted: &str) -> Result<String> {
+    let cipher = Aes256Gcm::new(get_encryption_key()?);
     let data = BASE64
         .decode(encrypted)
         .map_err(|e| anyhow!("invalid ciphertext: {e}"))?;
@@ -62,4 +62,15 @@ pub fn decrypt_client_secret(encrypted: &str) -> Result<String> {
         .map_err(|e| anyhow!("decryption failed: {e}"))?;
 
     String::from_utf8(plaintext).map_err(|e| anyhow!("UTF-8 decode failed: {e}"))
+}
+
+/// Decrypt a stored secret, falling back to the stored value itself for
+/// rows written before encryption at rest. The fallback is unambiguous:
+/// the AES-GCM auth tag makes it cryptographically impossible for a
+/// legacy plaintext to "decrypt successfully", so a decryption failure
+/// means the value is not ciphertext. (A ciphertext written under a
+/// different key also lands in the fallback — key stability is already
+/// required, since social provider secrets fail hard without it.)
+pub fn decrypt_secret_or_legacy(stored: &str) -> String {
+    decrypt_secret(stored).unwrap_or_else(|_| stored.to_string())
 }

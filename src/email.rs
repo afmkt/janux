@@ -1385,6 +1385,9 @@ mod tests {
     /// Tenant whose Resend config points at the given base URL.
     async fn email_request_env(base_url: &str) -> (crate::server::ServerState, tempfile::TempDir) {
         init_revocation_store().await;
+        // Provider keys are encrypted at rest on save; the key is
+        // process-wide and first-call-wins, matching the social test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = crate::db::Storage::init(tmp.path())
             .await
@@ -1749,5 +1752,36 @@ mod tests {
             StatusCode::UNAUTHORIZED,
             "the login ceremony must not consume an add token"
         );
+    }
+
+    /// regression: the Resend API key is a send-capable credential — the
+    /// config table must hold ciphertext, `ResendDTO::load` must still
+    /// hand consumers plaintext, and legacy plaintext values must keep
+    /// loading through the fallback.
+    #[tokio::test]
+    async fn resend_key_is_encrypted_at_rest() {
+        let (state, _tmp) = email_request_env("http://127.0.0.1:1").await;
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+
+        // The env seeds a legacy plaintext key; load falls back.
+        let legacy = ResendDTO::load(&mut tenant).await.expect("legacy load");
+        assert_eq!(legacy.resend_key, "re_test_key");
+
+        // Re-saving encrypts at rest.
+        legacy.save(&mut tenant).await.expect("save");
+        let raw = tenant.config_get("resend.key").await.expect("raw value");
+        let raw = raw.as_str().expect("string");
+        assert_ne!(
+            raw, "re_test_key",
+            "the config table must hold ciphertext"
+        );
+        assert_eq!(
+            crate::crypto::decrypt_secret(raw).expect("ciphertext"),
+            "re_test_key"
+        );
+
+        // And load round-trips back to plaintext for consumers.
+        let reloaded = ResendDTO::load(&mut tenant).await.expect("reload");
+        assert_eq!(reloaded.resend_key, "re_test_key");
     }
 }

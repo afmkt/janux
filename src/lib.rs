@@ -73,7 +73,7 @@ pub mod verify;
 
 // Re-export types needed by the unit test harness (tests/unit_tests)
 pub use crate::cache::EphemCache;
-pub use crate::crypto::{decrypt_client_secret, encrypt_client_secret, setup_encryption_key};
+pub use crate::crypto::{decrypt_secret, encrypt_secret, setup_encryption_key};
 pub use crate::db::HttpMethod;
 pub use crate::db::JwtData;
 pub use crate::policy::{CanAccess, Policy, PolicyDTO, SourceResolver, TargetResolver};

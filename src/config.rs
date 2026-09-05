@@ -117,7 +117,11 @@ impl ResendDTO {
 
         Some(Self {
             from: from.as_str()?.to_string(),
-            resend_key: key.as_str()?.to_string(),
+            // The API key is a send-capable credential (mail quota,
+            // phishing reach under the tenant's from address), so it is
+            // stored encrypted; values written before encryption at rest
+            // load through the legacy fallback.
+            resend_key: crate::crypto::decrypt_secret_or_legacy(key.as_str()?),
             template: template.as_str()?.to_string(),
             verify_url: verify_url.as_str()?.to_string(),
             base_url,
@@ -128,7 +132,10 @@ impl ResendDTO {
             .config_set(RESEND_FROM, serde_json::json!(&self.from))
             .await?;
         tenant
-            .config_set(RESEND_KEY, serde_json::json!(&self.resend_key))
+            .config_set(
+                RESEND_KEY,
+                serde_json::json!(crate::crypto::encrypt_secret(&self.resend_key)?),
+            )
             .await?;
         tenant
             .config_set(RESEND_TEMPLATE, serde_json::json!(&self.template))
@@ -174,8 +181,11 @@ impl OTPDTO {
         let endpoint = tenant.config_get(OTP_ENDPOINT).await?;
 
         Some(Self {
-            api_secret: api_secret.as_str()?.to_string(),
-            api_key: api_key.as_str()?.to_string(),
+            // Send-capable SMS credentials — stored encrypted, with the
+            // legacy fallback for values written before encryption at
+            // rest (see ResendDTO::load).
+            api_secret: crate::crypto::decrypt_secret_or_legacy(api_secret.as_str()?),
+            api_key: crate::crypto::decrypt_secret_or_legacy(api_key.as_str()?),
             template_code: template_code.as_str()?.to_string(),
             sign_name: sign_name.as_str()?.to_string(),
             region_id: region_id.as_str()?.to_string(),
@@ -184,10 +194,16 @@ impl OTPDTO {
     }
     pub async fn save(&self, tenant: &mut Tenant) -> Result<()> {
         tenant
-            .config_set(OTP_API_SECRET, serde_json::json!(&self.api_secret))
+            .config_set(
+                OTP_API_SECRET,
+                serde_json::json!(crate::crypto::encrypt_secret(&self.api_secret)?),
+            )
             .await?;
         tenant
-            .config_set(OTP_API_KEY, serde_json::json!(&self.api_key))
+            .config_set(
+                OTP_API_KEY,
+                serde_json::json!(crate::crypto::encrypt_secret(&self.api_key)?),
+            )
             .await?;
         tenant
             .config_set(OTP_TEMPLATE_CODE, serde_json::json!(&self.template_code))

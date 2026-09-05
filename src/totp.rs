@@ -66,12 +66,16 @@ pub struct Totp {
 
 impl Totp {
     fn totp(&self) -> Result<TOTP> {
+        // The secret is bearer-equivalent (it generates valid codes), so
+        // the row stores ciphertext; rows written before encryption at
+        // rest hold plaintext and load through the legacy fallback.
+        let secret = crate::crypto::decrypt_secret_or_legacy(&self.secret);
         TOTP::new(
             Algorithm::SHA1,
             6,
             1,
             30,
-            Secret::Raw(self.secret.as_bytes().to_vec())
+            Secret::Raw(secret.as_bytes().to_vec())
                 .to_bytes()
                 .unwrap(),
             Some(self.domain_id.clone()),
@@ -153,7 +157,9 @@ impl Tenant {
                 .exec(&mut self.database)
                 .await?;
             if !ts.is_empty() {
-                Ok(ts[0].clone())
+                let mut totp = ts[0].clone();
+                self.ensure_secret_encrypted(&mut totp).await;
+                Ok(totp)
             } else {
                 Err(anyhow::anyhow!("User doesn't have TOTP"))
             }
@@ -168,10 +174,39 @@ impl Tenant {
                 .exec(&mut self.database)
                 .await?;
             if !ts.is_empty() {
-                Ok(ts[0].clone())
+                let mut totp = ts[0].clone();
+                self.ensure_secret_encrypted(&mut totp).await;
+                Ok(totp)
             } else {
                 Err(anyhow::anyhow!("User doesn't have TOTP"))
             }
+        }
+    }
+
+    /// Rows written before encryption at rest hold the plaintext secret;
+    /// the first read through `totp_of` (the verify/enroll choke point)
+    /// re-encrypts them in place, so the database converges to ciphertext
+    /// without a migration script. Best effort: without a configured key
+    /// or on a write failure the row is left untouched — reads keep
+    /// working through the legacy fallback in `Totp::totp`.
+    async fn ensure_secret_encrypted(&mut self, totp: &mut Totp) {
+        if crate::crypto::decrypt_secret(&totp.secret).is_ok() {
+            return; // already ciphertext
+        }
+        let Ok(encrypted) = crate::crypto::encrypt_secret(&totp.secret) else {
+            return;
+        };
+        let updated = toasty::update!(Totp::filter(
+            Totp::fields()
+                .user_id()
+                .eq(totp.user_id.clone())
+                .and(Totp::fields().name().eq(totp.name.clone()))
+                .and(Totp::fields().domain_id().eq(totp.domain_id.clone()))
+        ) { secret: encrypted.clone() })
+        .exec(&mut self.database)
+        .await;
+        if updated.is_ok() {
+            totp.secret = encrypted;
         }
     }
     pub async fn new_totp(&mut self, user: &str, name: &str, domain: &str) -> Result<Totp> {
@@ -191,7 +226,7 @@ impl Tenant {
             user_id: user.id,
             domain_id: domain.to_string(),
             active: false,
-            secret: secret.to_string(),
+            secret: crate::crypto::encrypt_secret(secret)?,
             // epoch = "never used"; the first accepted code records
             // its step here.
             last_used: jiff::Timestamp::from_second(0).expect("epoch")
@@ -712,6 +747,9 @@ mod tests {
     /// In-process tenant with a signing key and one user.
     async fn totp_test_env() -> (crate::server::ServerState, tempfile::TempDir) {
         init_revocation_store().await;
+        // TOTP secrets are encrypted at rest; the key is process-wide and
+        // first-call-wins, matching the social test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         // The verify-failure gate is process-wide; wrong-code tests record
         // against the fixture account, so each env starts with it cleared
         // to keep tests independent.
@@ -1340,6 +1378,121 @@ mod tests {
             status,
             StatusCode::UNAUTHORIZED,
             "the re-enroll possession code must be consumed"
+        );
+    }
+
+    /// regression: TOTP secrets are bearer-equivalent (they generate
+    /// valid second-factor codes), so the DB row must hold ciphertext —
+    /// the plaintext only ever leaves through the enrollment URI/QR, and
+    /// codes must still verify from the encrypted row.
+    #[tokio::test]
+    async fn totp_secret_is_encrypted_at_rest() {
+        let (state, _tmp) = totp_test_env().await;
+        let service = totp_service(state.clone());
+
+        let (status, body) =
+            post_enroll(&service, &serde_json::json!({ "name": "device1" })).await;
+        assert_eq!(status, StatusCode::OK);
+        let uri = body["data"]["uri"].as_str().expect("uri").to_string();
+
+        let record = totp_record(&state, "device1").await.expect("totp");
+        let plaintext = crate::crypto::decrypt_secret(&record.secret)
+            .expect("the stored secret must be ciphertext");
+        assert_ne!(
+            record.secret, plaintext,
+            "the row must not store the plaintext secret"
+        );
+        assert!(
+            !uri.contains(&record.secret),
+            "the enrollment URI must not carry the ciphertext"
+        );
+
+        // The decrypted secret is the RIGHT plaintext: an independent
+        // TOTP built from it generates the same current code as the row.
+        let independent = TOTP::new(
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
+            Secret::Raw(plaintext.as_bytes().to_vec())
+                .to_bytes()
+                .expect("raw"),
+            Some(DOMAIN.to_string()),
+            "alice".to_string(),
+        )
+        .expect("totp");
+        assert_eq!(
+            record.code().expect("code"),
+            independent.generate_current().expect("code"),
+            "decrypt(encrypt(secret)) must round-trip to the original secret"
+        );
+    }
+
+    /// regression: rows written before encryption at rest hold the
+    /// plaintext secret; they must keep verifying (legacy fallback) and
+    /// be re-encrypted in place on the first read through `totp_of`, so
+    /// the database converges to ciphertext without a migration script.
+    #[tokio::test]
+    async fn legacy_plaintext_totp_secret_still_verifies_and_upgrades() {
+        let (state, _tmp) = totp_test_env().await;
+        let plaintext = "JBSWY3DPEHPK3PXP";
+        {
+            let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+            let alice = tenant.user("alice").await.expect("alice");
+            toasty::create!(Totp {
+                name: "legacy".to_string(),
+                user_id: alice.id,
+                domain_id: DOMAIN.to_string(),
+                active: true,
+                secret: plaintext.to_string(),
+                last_used: jiff::Timestamp::from_second(0).expect("epoch")
+            })
+            .exec(&mut tenant.database)
+            .await
+            .expect("legacy row");
+        }
+
+        // The code an authenticator would show, computed independently
+        // from the plaintext secret.
+        let expected = TOTP::new(
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
+            Secret::Raw(plaintext.as_bytes().to_vec())
+                .to_bytes()
+                .expect("raw"),
+            Some(DOMAIN.to_string()),
+            "alice".to_string(),
+        )
+        .expect("totp")
+        .generate_current()
+        .expect("code");
+
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let record = tenant
+            .totp_of("alice", DOMAIN, Some("legacy"))
+            .await
+            .expect("legacy row reads");
+        assert!(
+            record.code_is_fresh(&expected),
+            "a legacy plaintext secret must still verify"
+        );
+        assert_eq!(
+            crate::crypto::decrypt_secret(&record.secret).expect("ciphertext"),
+            plaintext,
+            "totp_of must re-encrypt the legacy row in place"
+        );
+
+        // The upgrade persisted to the database.
+        let reread = tenant
+            .totp_of("alice", DOMAIN, Some("legacy"))
+            .await
+            .expect("reread");
+        assert_eq!(
+            crate::crypto::decrypt_secret(&reread.secret).expect("ciphertext"),
+            plaintext,
+            "the upgrade must be visible to the next reader"
         );
     }
 }

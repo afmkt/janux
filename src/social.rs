@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use dashmap::DashMap;
 
-use crate::crypto::{decrypt_client_secret, encrypt_client_secret};
+use crate::crypto::{decrypt_secret, encrypt_secret};
 use crate::db::JwtVerify;
 use crate::db::Tenant;
 use crate::server::ServerState;
@@ -154,7 +154,7 @@ impl SocialProvider {
             .cloned()
             .ok_or_else(|| anyhow!("provider metadata is missing a token endpoint"))?;
 
-        let plaintext_secret = decrypt_client_secret(&self.client_secret)?;
+        let plaintext_secret = decrypt_secret(&self.client_secret)?;
 
         Ok(Client::from_provider_metadata(
             provider_metadata,
@@ -235,7 +235,7 @@ impl Tenant {
         client_secret: &str,
         issuer_url: &str,
     ) -> Result<SocialProvider> {
-        let encrypted = encrypt_client_secret(client_secret)?;
+        let encrypted = encrypt_secret(client_secret)?;
         toasty::create!(SocialProvider {
             id,
             client_id,

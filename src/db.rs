@@ -1930,6 +1930,9 @@ mod tests {
     #[tokio::test]
     async fn user_delete_cascades_credentials() {
         init_revocation_store().await;
+        // new_totp encrypts the secret at rest; the key is process-wide
+        // and first-call-wins, matching the social test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = Storage::init(tmp.path()).await.expect("storage init");
         storage.new_tenant("test-tenant").await.expect("tenant");

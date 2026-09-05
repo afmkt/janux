@@ -879,6 +879,9 @@ mod tests {
     /// In-process tenant with a signing key and one user.
     async fn otp_test_env() -> (crate::server::ServerState, tempfile::TempDir) {
         init_revocation_store().await;
+        // Provider keys are encrypted at rest on save; the key is
+        // process-wide and first-call-wins, matching the social test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         // The verify-failure gate is process-wide; wrong-code tests record
         // against the fixture account, so each env starts with it cleared
         // to keep tests independent.
@@ -1645,5 +1648,38 @@ mod tests {
             StatusCode::UNAUTHORIZED,
             "the login ceremony must not consume an add token"
         );
+    }
+
+    /// regression: provider credentials are send-capable secrets — the
+    /// config table must hold ciphertext, `OTPDTO::load` must still hand
+    /// consumers plaintext, and legacy plaintext values must keep loading
+    /// through the fallback.
+    #[tokio::test]
+    async fn otp_provider_keys_are_encrypted_at_rest() {
+        let (state, _tmp) = otp_test_env().await;
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+
+        // The env seeds legacy plaintext values; load falls back.
+        let legacy = OTPDTO::load(&mut tenant).await.expect("legacy load");
+        assert_eq!(legacy.api_secret, "secret");
+        assert_eq!(legacy.api_key, "key");
+
+        // Re-saving encrypts at rest.
+        legacy.save(&mut tenant).await.expect("save");
+        let raw = tenant
+            .config_get("otp.api_secret")
+            .await
+            .expect("raw value");
+        let raw = raw.as_str().expect("string");
+        assert_ne!(raw, "secret", "the config table must hold ciphertext");
+        assert_eq!(
+            crate::crypto::decrypt_secret(raw).expect("ciphertext"),
+            "secret"
+        );
+
+        // And load round-trips back to plaintext for consumers.
+        let reloaded = OTPDTO::load(&mut tenant).await.expect("reload");
+        assert_eq!(reloaded.api_secret, "secret");
+        assert_eq!(reloaded.api_key, "key");
     }
 }
