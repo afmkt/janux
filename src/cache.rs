@@ -60,35 +60,37 @@ where
         self.inner.remove(key).await.map(|arc| (*arc).clone())
     }
 
-    /// Mutable access to a cached value. moka stores values behind
-    /// `Arc<V>` and never hands out references into the cache (entries
-    /// can be evicted at any time), so a true `&mut V` cannot exist —
-    /// instead the current value is cloned out, handed to `f` mutably,
-    /// and written back atomically: moka serializes concurrent computes
-    /// on the same key, so no update is lost (a get → mutate → insert
-    /// sequence would race).
-    ///
-    /// Returns `Some(f's result)` when the key exists, `None` when it
-    /// does not (nothing is inserted then) — so the `Option` doubles as
-    /// the existence check.
-    pub async fn get_mut<Q, F, R>(&self, key: &Q, f: F) -> Option<R>
+    /// Shared per-key compute machinery for [`Self::get_mut`] and
+    /// [`Self::compute_or_insert`]. moka stores values behind `Arc<V>` and
+    /// never hands out references into the cache (entries can be evicted
+    /// at any time), so a true `&mut V` cannot exist — instead the value
+    /// (existing, or created by `init` when absent) is handed to `f`
+    /// mutably and written back inside moka's per-key compute, which
+    /// serializes concurrent computes on the same key so no update is
+    /// lost (a get → mutate → insert sequence would race). `f` runs
+    /// during the await, so its result is parked in a slot the closure
+    /// can reach. Returns `None` when the key was absent and no `init`
+    /// was provided (nothing is inserted then).
+    async fn compute_with_slot<Q, FI, F, R>(&self, key: &Q, init: Option<FI>, f: F) -> Option<R>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        FI: FnOnce() -> V,
         F: FnOnce(&mut V) -> R,
         R: Send,
     {
-        // `f` runs inside moka's per-key compute, i.e. during the await
-        // below, so its result is parked in a slot the closure can reach.
         let slot = Arc::new(std::sync::Mutex::new(None::<R>));
         let out = slot.clone();
         self.inner
             .entry_by_ref(key)
             .and_compute_with(move |entry| {
-                let op = match entry {
-                    Some(e) => {
-                        let mut value = e.into_value().as_ref().clone();
-                        *slot.lock().expect("get_mut slot poisoned") = Some(f(&mut value));
+                let computed = match entry {
+                    Some(e) => Some(e.into_value().as_ref().clone()),
+                    None => init.map(|mk| mk()),
+                };
+                let op = match computed {
+                    Some(mut value) => {
+                        *slot.lock().expect("cache compute slot poisoned") = Some(f(&mut value));
                         moka::ops::compute::Op::Put(Arc::new(value))
                     }
                     None => moka::ops::compute::Op::Nop,
@@ -97,9 +99,43 @@ where
             })
             .await;
         Arc::into_inner(out)
-            .expect("get_mut slot is uniquely owned")
+            .expect("cache compute slot is uniquely owned")
             .into_inner()
-            .expect("get_mut slot poisoned")
+            .expect("cache compute slot poisoned")
+    }
+
+    /// Mutable access to a cached value, atomic under moka's per-key
+    /// compute. Returns `Some(f's result)` when the key exists, `None`
+    /// when it does not (nothing is inserted then) — so the `Option`
+    /// doubles as the existence check.
+    pub async fn get_mut<Q, F, R>(&self, key: &Q, f: F) -> Option<R>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        F: FnOnce(&mut V) -> R,
+        R: Send,
+    {
+        self.compute_with_slot::<Q, fn() -> V, F, R>(key, None, f)
+            .await
+    }
+
+    /// Atomic create-or-update. Like [`Self::get_mut`], but an absent key
+    /// is created by `init` in the same per-key compute instead of being
+    /// skipped, so create-and-increment is one atomic step: concurrent
+    /// first hits on a cold key serialize and every update lands (a
+    /// get-then-insert pair races, letting a burst of first hits all
+    /// observe absence).
+    pub async fn compute_or_insert<Q, FI, F, R>(&self, key: &Q, init: FI, f: F) -> R
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        FI: FnOnce() -> V,
+        F: FnOnce(&mut V) -> R,
+        R: Send,
+    {
+        self.compute_with_slot(key, Some(init), f)
+            .await
+            .expect("compute_or_insert always computes")
     }
 
     pub async fn contains_key<Q>(&self, key: &Q) -> bool

@@ -558,7 +558,6 @@
         "type": "object"
       },
       "openapi.policy.SourceResolver": {
-        "description": "How the *source* (the identity acting in the request) is resolved from the\nauthenticated JWT. Used by a [`Policy`] to decide whether the caller itself\nis the target of the rule.\n\n`Nothing` means the policy is identity-independent (it applies to whoever\nholds the role). `User`, `Domain`, and `Roles` pull the corresponding field\nfrom the JWT to be compared against the resolved target.",
         "enum": [
           "Nothing",
           "User",
@@ -568,7 +567,6 @@
         "type": "string"
       },
       "openapi.policy.TargetResolver": {
-        "description": "How the *target* (the resource being accessed) is extracted from the\nincoming request so it can be compared against the resolved source.\n\n- `Nothing` — no target extraction; matching is purely path-based.\n- `FromPath` — capture a named path parameter (e.g. `{user}`) from the\nrequest path, matched against the policy's `resource` template.\n- `FromQuery` — read the target from a named query-string parameter.\n- `FromHeader` — read the target from a request header (case-insensitive\nlookup).",
         "oneOf": [
           {
             "enum": [
@@ -2993,7 +2991,7 @@
                 }
               }
             },
-            "description": "Per-recipient dispatch budget exhausted"
+            "description": "Dispatch budget exhausted, or account locked after repeated verify failures"
           }
         },
         "summary": "Request OTP"
@@ -3060,6 +3058,16 @@
               }
             },
             "description": "Failed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.otp.MobileResponse"
+                }
+              }
+            },
+            "description": "Account locked after repeated verify failures"
           }
         },
         "summary": "Verify OTP"
@@ -3392,6 +3400,16 @@
               }
             },
             "description": "Failed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Account locked after repeated verify failures"
           }
         },
         "summary": "Enroll TOTP"
@@ -3428,6 +3446,16 @@
               }
             },
             "description": "Failed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Account locked after repeated verify failures"
           }
         },
         "summary": "Enroll TOTP"
@@ -3466,6 +3494,16 @@
               }
             },
             "description": "Failed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Account locked after repeated verify failures"
           }
         },
         "summary": "Request Magic Link"
@@ -3502,6 +3540,16 @@
               }
             },
             "description": "Failed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Account locked after repeated verify failures"
           }
         },
         "summary": "Request Magic Link"

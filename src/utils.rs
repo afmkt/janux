@@ -50,6 +50,13 @@ impl ApiProblem {
             detail: None,
         }
     }
+    pub fn too_many_requests(detail: &str) -> Self {
+        ApiProblem {
+            status: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+            r#type: "too_many_requests".into(),
+            detail: Some(detail.into()),
+        }
+    }
     pub fn forbidden() -> Self {
         ApiProblem {
             status: StatusCode::FORBIDDEN.as_u16(),
@@ -755,35 +762,128 @@ static SEND_THROTTLE: LazyLock<crate::cache::EphemCache<String, (i64, u64)>> =
 /// requests in the current 60 s window. The identifier is only known after
 /// body extraction, so this runs inside the handlers (a hoop issuer cannot
 /// read the body without consuming it).
+///
+/// The cold-key path runs inside the same per-key compute as the update:
+/// create-and-increment is one atomic step, so N concurrent first hits
+/// (first ever, or after the TTL) cannot all observe absence and all pass
+/// — the budget holds even for a coordinated burst on an idle key.
 pub async fn send_throttle_allows(key: &str, limit: u64) -> bool {
     let now = jiff::Timestamp::now().as_second();
     let window = now - now.rem_euclid(60);
-    match SEND_THROTTLE
-        .get_mut(key, |entry| {
-            if entry.0 != window {
-                *entry = (window, 1);
-                return true;
-            }
-            if entry.1 >= limit {
-                return false;
-            }
-            entry.1 += 1;
-            true
-        })
+    SEND_THROTTLE
+        .compute_or_insert(
+            key,
+            || (window, 0),
+            |entry| {
+                if entry.0 != window {
+                    *entry = (window, 1);
+                    return true;
+                }
+                if entry.1 >= limit {
+                    return false;
+                }
+                entry.1 += 1;
+                true
+            },
+        )
         .await
-    {
-        Some(allowed) => allowed,
-        None => {
-            // First hit in this window. A racing insert may overwrite
-            // this one — the budget is approximate under concurrency by
-            // design (the IP quota still bounds every single source).
-            SEND_THROTTLE
-                .insert(key.to_string(), (window, 1))
-                .await
-                .ok();
-            true
-        }
+}
+
+/// Per-account verify-failure state: the current fixed window and the
+/// failures counted in it, the lockout deadline, and how many lockout
+/// cycles have fired (drives the exponential backoff).
+#[derive(Clone)]
+struct VerifyFailures {
+    window: i64,
+    failures: u32,
+    locked_until: i64,
+    cycles: u32,
+}
+
+/// Per-account budget on the code-verify paths. The per-IP quota on
+/// `/api/v1/auth` bounds a single source only; this budget binds to the
+/// account, so a distributed attacker cannot multiply guesses by rotating
+/// IPs. `VERIFY_FAILURE_LIMIT` failed verifies in a
+/// `VERIFY_FAILURE_WINDOW_SEC` window lock the account's code ceremonies
+/// (verify AND the matching code-issuing request) for
+/// `VERIFY_LOCKOUT_BASE_SEC`, doubling per repeated cycle up to
+/// `VERIFY_LOCKOUT_CAP_SEC`. A successful verify clears the state.
+/// The lock covers only guessable-code ceremonies — magic links,
+/// passkeys, and social dances are not gated — so a deliberate lockout
+/// cannot deny the victim every factor.
+const VERIFY_FAILURE_LIMIT: u32 = 5;
+const VERIFY_FAILURE_WINDOW_SEC: i64 = 15 * 60;
+const VERIFY_LOCKOUT_BASE_SEC: i64 = 15 * 60;
+const VERIFY_LOCKOUT_CAP_SEC: i64 = 24 * 60 * 60;
+
+static VERIFY_FAILURES: LazyLock<crate::cache::EphemCache<String, VerifyFailures>> =
+    LazyLock::new(|| {
+        // The TTL must outlive the longest lockout, or expiry would
+        // silently lift the lock; every write refreshes it. The capacity
+        // is sized well above the default so an attacker flooding junk
+        // keys cannot evict a victim's live lockout (failures are also
+        // only recorded for identities tied to a real ceremony, which
+        // bounds how cheaply entries can be created).
+        crate::cache::EphemCache::with_capacity("verify_failures", Some(25 * 3600), 200_000)
+    });
+
+/// The gate key: the account a code ceremony targets, scoped by tenant.
+pub fn verify_gate_key(domain: &str, user: &str) -> String {
+    format!("verify:{domain}:{user}")
+}
+
+/// Whether the account's code-verify path is open. Checked at handler
+/// entry (the identity is only known after body extraction) BEFORE any
+/// one-shot ceremony secret is consumed, so a locked-out attacker cannot
+/// burn a code just issued to the legitimate user.
+pub async fn verify_gate_allows(key: &str) -> bool {
+    match VERIFY_FAILURES.get(key).await {
+        Some(state) => jiff::Timestamp::now().as_second() >= state.locked_until,
+        None => true,
     }
+}
+
+/// Record one failed code verify against the account. Failures count
+/// across ceremonies within a fixed window; reaching the limit arms the
+/// lockout and escalates the backoff for the next cycle. The
+/// create-and-increment runs inside the cache's per-key compute, so
+/// concurrent failures on a cold key cannot lose counts.
+pub async fn record_verify_failure(key: &str) {
+    let now = jiff::Timestamp::now().as_second();
+    let window = now - now.rem_euclid(VERIFY_FAILURE_WINDOW_SEC);
+    VERIFY_FAILURES
+        .compute_or_insert(
+            key,
+            || VerifyFailures {
+                window,
+                failures: 0,
+                locked_until: 0,
+                cycles: 0,
+            },
+            |state| {
+                if state.window != window {
+                    state.window = window;
+                    state.failures = 0;
+                }
+                state.failures += 1;
+                if state.failures >= VERIFY_FAILURE_LIMIT {
+                    // Exponential backoff per lockout cycle, capped; the
+                    // shift is bounded so the multiply cannot overflow.
+                    let backoff = VERIFY_LOCKOUT_BASE_SEC
+                        .saturating_mul(1i64 << state.cycles.min(16))
+                        .min(VERIFY_LOCKOUT_CAP_SEC);
+                    state.locked_until = now + backoff;
+                    state.cycles += 1;
+                    state.failures = 0;
+                }
+            },
+        )
+        .await;
+}
+
+/// Clear the account's failure state after a successful verify.
+pub async fn clear_verify_failures(key: &str) {
+    VERIFY_FAILURES.remove(key).await;
 }
 
 #[cfg(test)]
@@ -1418,5 +1518,116 @@ mod tests {
             send_throttle_allows(&key, 3).await,
             "a new window must reset the budget"
         );
+    }
+
+    /// regression: on a cold key (first ever hit, or after the TTL), N
+    /// concurrent requests must not all observe absence and all pass —
+    /// create-and-increment is one atomic per-key compute, so the budget
+    /// holds even for a coordinated burst on an idle key.
+    #[tokio::test]
+    async fn send_throttle_cold_key_burst_respects_the_limit() {
+        let key = format!("g119:{}", uuid::Uuid::new_v4());
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let key = key.clone();
+            handles.push(tokio::spawn(
+                async move { send_throttle_allows(&key, 3).await },
+            ));
+        }
+        let mut allowed = 0;
+        for h in handles {
+            if h.await.expect("task") {
+                allowed += 1;
+            }
+        }
+        assert_eq!(
+            allowed, 3,
+            "a concurrent burst on a cold key must not exceed the budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_gate_locks_after_repeated_failures() {
+        let key = verify_gate_key("localhost", &format!("g104-{}", uuid::Uuid::new_v4()));
+        for _ in 0..(VERIFY_FAILURE_LIMIT - 1) {
+            record_verify_failure(&key).await;
+            assert!(
+                verify_gate_allows(&key).await,
+                "under the limit the gate stays open"
+            );
+        }
+        record_verify_failure(&key).await;
+        assert!(
+            !verify_gate_allows(&key).await,
+            "reaching the limit must lock the account's verify path"
+        );
+
+        // Another account has its own budget.
+        let other = verify_gate_key("localhost", &format!("g104-{}", uuid::Uuid::new_v4()));
+        assert!(verify_gate_allows(&other).await);
+
+        // A successful verify clears the lock.
+        clear_verify_failures(&key).await;
+        assert!(verify_gate_allows(&key).await);
+    }
+
+    #[tokio::test]
+    async fn verify_gate_backoff_escalates_per_cycle() {
+        let key = verify_gate_key("localhost", &format!("g104-{}", uuid::Uuid::new_v4()));
+        for _ in 0..VERIFY_FAILURE_LIMIT {
+            record_verify_failure(&key).await;
+        }
+        let state = VERIFY_FAILURES.get(&key).await.expect("state");
+        assert_eq!(state.cycles, 1);
+        let now = jiff::Timestamp::now().as_second();
+        assert!(
+            (now + VERIFY_LOCKOUT_BASE_SEC - 5..=now + VERIFY_LOCKOUT_BASE_SEC + 5)
+                .contains(&state.locked_until),
+            "first lockout lasts the base backoff"
+        );
+
+        // Simulate the first lockout expiring, then trip the limit again.
+        VERIFY_FAILURES
+            .get_mut(&key, |s| {
+                s.locked_until = 0;
+            })
+            .await;
+        for _ in 0..VERIFY_FAILURE_LIMIT {
+            record_verify_failure(&key).await;
+        }
+        let state = VERIFY_FAILURES.get(&key).await.expect("state");
+        assert_eq!(state.cycles, 2, "each lockout cycle must escalate");
+        assert!(
+            (now + 2 * VERIFY_LOCKOUT_BASE_SEC - 5..=now + 2 * VERIFY_LOCKOUT_BASE_SEC + 5)
+                .contains(&state.locked_until),
+            "second lockout lasts twice the base backoff"
+        );
+        clear_verify_failures(&key).await;
+    }
+
+    #[tokio::test]
+    async fn verify_gate_window_reset_drops_stale_failures() {
+        let key = verify_gate_key("localhost", &format!("g104-{}", uuid::Uuid::new_v4()));
+        // Seed a nearly-exhausted budget from a long-gone window.
+        VERIFY_FAILURES
+            .insert(
+                key.clone(),
+                VerifyFailures {
+                    window: 0,
+                    failures: VERIFY_FAILURE_LIMIT - 1,
+                    locked_until: 0,
+                    cycles: 0,
+                },
+            )
+            .await
+            .expect("seed");
+        record_verify_failure(&key).await;
+        assert!(
+            verify_gate_allows(&key).await,
+            "a new window must reset the failure count"
+        );
+        let state = VERIFY_FAILURES.get(&key).await.expect("state");
+        assert_eq!(state.failures, 1);
+        clear_verify_failures(&key).await;
     }
 }

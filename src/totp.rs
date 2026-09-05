@@ -301,7 +301,8 @@ struct EnrollTotpResponse {
     request_body = EnrollTotpRequest,
     responses(
         (status_code = 200, description = "Success", body = EnrollTotpResponse),
-        (status_code = 401, description = "Failed", body = ApiProblem)
+        (status_code = 401, description = "Failed", body = ApiProblem),
+        (status_code = 429, description = "Account locked after repeated verify failures", body = ApiProblem)
     )
 )]
 pub async fn enroll(req: &mut Request, depot: &mut Depot, res: &mut Response) {
@@ -335,20 +336,40 @@ pub async fn enroll(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                 // holds no working credential, so re-issuing its QR is
                 // harmless.
                 if existing.active {
+                    // The possession check on an active record is a
+                    // 6-digit code-guessing surface that re-exposes the
+                    // live secret on a hit — it sits behind the same
+                    // per-account gate as `verify`, and a locked-out
+                    // account gets 429 before any code is checked.
+                    let gate_key = crate::utils::verify_gate_key(&domain, &user);
+                    if !crate::utils::verify_gate_allows(&gate_key).await {
+                        res.status_code(StatusCode::TOO_MANY_REQUESTS);
+                        res.render(Json(ApiProblem::too_many_requests(
+                            "Too many failed attempts; try again later",
+                        )));
+                        return;
+                    }
                     let possessed = req_request
                         .code
                         .as_deref()
                         .is_some_and(|c| existing.code_is_fresh(c));
-                    if !possessed
-                        || tenant
-                            .totp_mark_used(&user, &req_request.name, &domain, step_start())
-                            .await
-                            .is_err()
-                    {
+                    if !possessed {
+                        crate::utils::record_verify_failure(&gate_key).await;
                         res.status_code(StatusCode::UNAUTHORIZED);
                         res.render(Json(ApiProblem::unauthorized()));
                         return;
                     }
+                    if tenant
+                        .totp_mark_used(&user, &req_request.name, &domain, step_start())
+                        .await
+                        .is_err()
+                    {
+                        // Server-side failure — not charged to the account.
+                        res.status_code(StatusCode::UNAUTHORIZED);
+                        res.render(Json(ApiProblem::unauthorized()));
+                        return;
+                    }
+                    crate::utils::clear_verify_failures(&gate_key).await;
                 }
             }
             if let Ok(tp) = totp {
@@ -409,92 +430,124 @@ async fn verify_totp(
     res: &mut Response,
 ) {
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
-    if let Some(verify_reqest) = extract::<VerifyTotpRequest>(req, None).await
-        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-    {
-        let check = match verify_reqest.token.as_deref() {
-            Some(token) => {
-                // enrollment tokens are one-shot — consume before
-                // validation so a captured token cannot mint a second
-                // session with a later code.
-                if TOTP_ENROLL_CACHE
-                    .get_one_shot(&format!("{}:{}", domain, token))
-                    .await
-                    .is_none()
-                {
-                    false
-                } else {
-                    match tenant
-                        .jwt_verify::<TotpEnrollData>(&issuer, &verify_reqest.user, token)
+    // Set once the claimed identity is known; the failure fall-through at
+    // the bottom records against it — but only when the enrollment token
+    // validated for that identity (`ceremony_valid`), so junk bodies
+    // cannot create lockout entries for arbitrary names and server-side
+    // failures are not charged to the account.
+    let mut gate_key: Option<String> = None;
+    let mut ceremony_valid = false;
+    if let Some(verify_reqest) = extract::<VerifyTotpRequest>(req, None).await {
+        // The account gate is checked BEFORE the one-shot enrollment token
+        // is consumed: a locked-out attacker must not be able to burn the
+        // token just issued to the legitimate user.
+        let key = crate::utils::verify_gate_key(domain, &verify_reqest.user);
+        if !crate::utils::verify_gate_allows(&key).await {
+            res.status_code(StatusCode::TOO_MANY_REQUESTS);
+            res.render(Json(ApiProblem::too_many_requests(
+                "Too many failed attempts; try again later",
+            )));
+            return;
+        }
+        gate_key = Some(key);
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
+            let check = match verify_reqest.token.as_deref() {
+                Some(token) => {
+                    // enrollment tokens are one-shot — consume before
+                    // validation so a captured token cannot mint a second
+                    // session with a later code.
+                    if TOTP_ENROLL_CACHE
+                        .get_one_shot(&format!("{}:{}", domain, token))
                         .await
+                        .is_none()
                     {
-                        // Enrollment tokens bind (domain, user, name); the name
-                        // is enforced when the request supplies one.
-                        Ok(data) => {
-                            data.domain == domain
-                                && data.user == verify_reqest.user
-                                && match verify_reqest.name.as_deref() {
-                                    Some(name) => data.name == name,
-                                    None => true,
-                                }
+                        false
+                    } else {
+                        match tenant
+                            .jwt_verify::<TotpEnrollData>(&issuer, &verify_reqest.user, token)
+                            .await
+                        {
+                            // Enrollment tokens bind (domain, user, name); the name
+                            // is enforced when the request supplies one.
+                            Ok(data) => {
+                                data.domain == domain
+                                    && data.user == verify_reqest.user
+                                    && match verify_reqest.name.as_deref() {
+                                        Some(name) => data.name == name,
+                                        None => true,
+                                    }
+                            }
+                            Err(_) => false,
                         }
-                        Err(_) => false,
                     }
                 }
-            }
-            None => false,
-        };
-        if check
-            && let Ok(totp) = tenant
-                .totp_of(&verify_reqest.user, domain, verify_reqest.name.as_deref())
-                .await
-            && totp.code_is_fresh(&verify_reqest.code)
-            && (totp.active
-                || tenant
-                    .active_totp(&verify_reqest.user, &totp.name, &totp.domain_id)
+                None => false,
+            };
+            ceremony_valid = check;
+            if check
+                && let Ok(totp) = tenant
+                    .totp_of(&verify_reqest.user, domain, verify_reqest.name.as_deref())
                     .await
-                    .is_ok())
-        {
-            if tenant
-                .totp_mark_used(
-                    &verify_reqest.user,
-                    &totp.name,
-                    &totp.domain_id,
-                    step_start(),
-                )
-                .await
-                .is_err()
+                && totp.code_is_fresh(&verify_reqest.code)
+                && (totp.active
+                    || tenant
+                        .active_totp(&verify_reqest.user, &totp.name, &totp.domain_id)
+                        .await
+                        .is_ok())
             {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiProblem::unauthorized()));
-                return;
-            }
-            let mut tmp = session
-                .filter(|(user, _)| user == &verify_reqest.user)
-                .map(|(_, mfa)| mfa.clone())
-                .unwrap_or_default();
-            tmp.insert(AuthType::TOTP.as_str().to_string());
-
-            if let Ok(jwt) = tenant
-                .authenticate_jwt(&tmp, &issuer, domain.as_ref(), &verify_reqest.user, 15)
-                .await
-            {
-                if let Some(name) = verify_reqest.cookie {
-                    let cookie = Cookie::build((name, jwt.clone()))
-                        .path("/")
-                        .http_only(true)
-                        .secure(true)
-                        .same_site(SameSite::Strict)
-                        .build();
-                    res.add_cookie(cookie);
+                if tenant
+                    .totp_mark_used(
+                        &verify_reqest.user,
+                        &totp.name,
+                        &totp.domain_id,
+                        step_start(),
+                    )
+                    .await
+                    .is_err()
+                {
+                    res.status_code(StatusCode::UNAUTHORIZED);
+                    res.render(Json(ApiProblem::unauthorized()));
+                    return;
                 }
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiResponse::ok(jwt)));
-                return;
+                let mut tmp = session
+                    .filter(|(user, _)| user == &verify_reqest.user)
+                    .map(|(_, mfa)| mfa.clone())
+                    .unwrap_or_default();
+                tmp.insert(AuthType::TOTP.as_str().to_string());
+
+                if let Ok(jwt) = tenant
+                    .authenticate_jwt(&tmp, &issuer, domain.as_ref(), &verify_reqest.user, 15)
+                    .await
+                {
+                    if let Some(key) = &gate_key {
+                        crate::utils::clear_verify_failures(key).await;
+                    }
+                    if let Some(name) = verify_reqest.cookie {
+                        let cookie = Cookie::build((name, jwt.clone()))
+                            .path("/")
+                            .http_only(true)
+                            .secure(true)
+                            .same_site(SameSite::Strict)
+                            .build();
+                        res.add_cookie(cookie);
+                    }
+                    res.status_code(StatusCode::OK);
+                    res.render(Json(ApiResponse::ok(jwt)));
+                    return;
+                }
             }
         }
     }
 
+    // Every failed verify of a VALID ceremony counts against the account,
+    // across ceremonies: the one-shot enrollment token bounds guesses per
+    // ceremony, this bounds the enroll→verify loop itself. Attempts
+    // without a token valid for the claimed identity are not recorded —
+    // they guess nothing, and recording them would let junk traffic flood
+    // the lockout cache.
+    if ceremony_valid && let Some(key) = &gate_key {
+        crate::utils::record_verify_failure(key).await;
+    }
     res.status_code(StatusCode::UNAUTHORIZED);
     res.render(Json(ApiProblem::unauthorized()))
 }
@@ -504,7 +557,8 @@ async fn verify_totp(
     request_body = VerifyTotpRequest,
     responses(
         (status_code = 200, description = "Success", body = ApiResponse<String>),
-        (status_code = 401, description = "Failed", body = ApiProblem)
+        (status_code = 401, description = "Failed", body = ApiProblem),
+        (status_code = 429, description = "Account locked after repeated verify failures", body = ApiProblem)
     )
 )]
 
@@ -658,6 +712,10 @@ mod tests {
     /// In-process tenant with a signing key and one user.
     async fn totp_test_env() -> (crate::server::ServerState, tempfile::TempDir) {
         init_revocation_store().await;
+        // The verify-failure gate is process-wide; wrong-code tests record
+        // against the fixture account, so each env starts with it cleared
+        // to keep tests independent.
+        crate::utils::clear_verify_failures(&crate::utils::verify_gate_key(DOMAIN, "alice")).await;
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = crate::db::Storage::init(tmp.path())
             .await
@@ -970,6 +1028,112 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert!(!totp_record(&state, "device1").await.expect("totp").active);
+    }
+
+    /// regression: verify failures count against the account ACROSS
+    /// ceremonies — after the budget (5) is exhausted even a valid
+    /// enrollment token + correct code gets 429, and the gated attempt
+    /// must not consume the one-shot enrollment token. Only failures of
+    /// VALID ceremonies count (junk bodies must not flood the lockout
+    /// cache), so each attempt carries a fresh enrollment token.
+    #[tokio::test]
+    async fn verify_locks_after_repeated_wrong_codes() {
+        let (state, _tmp) = totp_test_env().await;
+        let service = totp_service(state.clone());
+
+        for _ in 0..5 {
+            let (_status, body) =
+                post_enroll(&service, &serde_json::json!({ "name": "device1" })).await;
+            let token = body["data"]["token"].as_str().expect("token").to_string();
+            let (status, _body) = post_verify(
+                &service,
+                &serde_json::json!({ "user": "alice", "name": "device1", "code": "000000", "token": token }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+        }
+
+        // Tokenless junk verifies guess nothing and must not extend the
+        // lockout accounting either way.
+        let (status, _body) = post_verify(
+            &service,
+            &serde_json::json!({ "user": "alice", "code": "000000" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "gate runs first");
+
+        let (_status, body) =
+            post_enroll(&service, &serde_json::json!({ "name": "device1" })).await;
+        let token = body["data"]["token"].as_str().expect("token").to_string();
+        let code = current_code(&totp_record(&state, "device1").await.expect("totp"));
+
+        let (status, _body) = post_verify(
+            &service,
+            &serde_json::json!({ "user": "alice", "name": "device1", "code": code, "token": token }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "a locked-out account must be refused before the token is consumed"
+        );
+
+        // The gated attempt must not have consumed the enrollment token:
+        // after the lock clears, the same ceremony completes.
+        crate::utils::clear_verify_failures(&crate::utils::verify_gate_key(DOMAIN, "alice")).await;
+        let (status, _body) = post_verify(
+            &service,
+            &serde_json::json!({ "user": "alice", "name": "device1", "code": code, "token": token }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    /// regression: the re-enrollment possession check on an ACTIVE record
+    /// re-exposes the live TOTP secret on a hit, so it is a code-guessing
+    /// surface that must sit behind the same per-account gate as verify.
+    #[tokio::test]
+    async fn enroll_reenrollment_code_checks_are_gated() {
+        let (state, _tmp) = totp_test_env().await;
+        let service = totp_service(state.clone());
+
+        // Activate a TOTP through the normal enroll → verify ceremony.
+        let (_status, body) =
+            post_enroll(&service, &serde_json::json!({ "name": "device1" })).await;
+        let token = body["data"]["token"].as_str().expect("token").to_string();
+        let code = current_code(&totp_record(&state, "device1").await.expect("totp"));
+        let (status, _body) = post_verify(
+            &service,
+            &serde_json::json!({ "user": "alice", "name": "device1", "code": code, "token": token }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Failed possession checks on the now-ACTIVE record count against
+        // the same account budget as verify failures.
+        for _ in 0..5 {
+            let (status, _body) = post_enroll(
+                &service,
+                &serde_json::json!({ "name": "device1", "code": "000000" }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+        }
+
+        // While locked, even the CORRECT code must not re-expose the secret.
+        let code = current_code(&totp_record(&state, "device1").await.expect("totp"));
+        let (status, _body) = post_enroll(
+            &service,
+            &serde_json::json!({ "name": "device1", "code": code }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "a locked-out account must not re-expose the live TOTP secret"
+        );
+
+        crate::utils::clear_verify_failures(&crate::utils::verify_gate_key(DOMAIN, "alice")).await;
     }
 
     #[tokio::test]

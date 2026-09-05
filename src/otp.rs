@@ -198,7 +198,12 @@ async fn handle_user<'a>(
         let mut digits = String::with_capacity(6);
         while digits.len() < 6 {
             rng.fill_bytes(&mut buf);
-            digits.push(char::from((buf[0] % 10) + b'0'));
+            // Rejection sampling: 256 is not a multiple of 10, so a bare
+            // `buf[0] % 10` would bias digits 0-5 (26/256) over 6-9
+            // (25/256) and shrink the effective code space.
+            if buf[0] < 250 {
+                digits.push(char::from((buf[0] % 10) + b'0'));
+            }
         }
         let code = digits;
 
@@ -223,7 +228,7 @@ async fn handle_user<'a>(
     responses(
         (status_code = 200, description = "Success", body = MobileResponse),
         (status_code = 401, description = "Failed", body = MobileResponse),
-        (status_code = 429, description = "Per-recipient dispatch budget exhausted", body = MobileResponse)
+        (status_code = 429, description = "Dispatch budget exhausted, or account locked after repeated verify failures", body = MobileResponse)
     )
 )]
 pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
@@ -254,12 +259,42 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             return;
         }
         if !req_request.name.is_empty() {
+            // A locked-out account gets no fresh codes: issuing one would
+            // burn the recipient's dispatch budget for a ceremony that
+            // cannot be verified anyway.
+            let gate_key = crate::utils::verify_gate_key(&domain, &req_request.name);
+            if !crate::utils::verify_gate_allows(&gate_key).await {
+                res.status_code(StatusCode::TOO_MANY_REQUESTS);
+                res.render(Json(MobileResponse {
+                    ok: false,
+                    code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                    msg: "Too many failed attempts; try again later".to_string(),
+                    jwt: None,
+                }));
+                return;
+            }
             if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
                 let cfg = OTPDTO::load(&mut tenant)
                     .await
                     .ok_or("Failed to load OTP config")
                     .unwrap();
                 if let Ok(user) = tenant.user_by_mobile(&req_request.mobile).await {
+                    // The signin ceremony binds to the RESOLVED account,
+                    // not the claimed name — re-check the gate on the
+                    // identity the token will carry, so claiming a
+                    // throwaway name with a locked-out account's mobile
+                    // cannot keep codes flowing to that phone.
+                    let resolved_key = crate::utils::verify_gate_key(&domain, &user.name);
+                    if !crate::utils::verify_gate_allows(&resolved_key).await {
+                        res.status_code(StatusCode::TOO_MANY_REQUESTS);
+                        res.render(Json(MobileResponse {
+                            ok: false,
+                            code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                            msg: "Too many failed attempts; try again later".to_string(),
+                            jwt: None,
+                        }));
+                        return;
+                    }
                     // Existing credential: signin ceremony (— verify
                     // will resolve, never attach).
                     match handle_user(
@@ -345,7 +380,8 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     ),
     responses(
         (status_code = 200, description = "Success", body = MobileResponse),
-        (status_code = 401, description = "Failed", body = MobileResponse)
+        (status_code = 401, description = "Failed", body = MobileResponse),
+        (status_code = 429, description = "Account locked after repeated verify failures", body = MobileResponse)
     )
 )]
 pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
@@ -364,7 +400,29 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .unwrap_or("")
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
+    // Set once the claimed identity is known; the failure fall-through at
+    // the bottom records against it — but only when the ceremony token
+    // validated for that identity (`ceremony_valid`), so junk bodies
+    // cannot create lockout entries for arbitrary names and server-side
+    // failures are not charged to the account.
+    let mut gate_key: Option<String> = None;
+    let mut ceremony_valid = false;
     if let Some(verify_reqest) = crate::utils::extract::<VerifyRequest>(req, None).await {
+        // The account gate is checked BEFORE the one-shot code is
+        // consumed: a locked-out attacker must not be able to burn the
+        // code just issued to the legitimate user.
+        let key = crate::utils::verify_gate_key(&domain, &verify_reqest.name);
+        if !crate::utils::verify_gate_allows(&key).await {
+            res.status_code(StatusCode::TOO_MANY_REQUESTS);
+            res.render(Json(MobileResponse {
+                ok: false,
+                code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                msg: "Too many failed attempts; try again later".to_string(),
+                jwt: None,
+            }));
+            return;
+        }
+        gate_key = Some(key);
         if let Some(stored_code) = OTP_CODE_CACHE
             .get_one_shot(&format!("{}:{}", domain, verify_reqest.token))
             .await
@@ -378,6 +436,7 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     )
                     .await;
                 if data_wrap.is_ok() {
+                    ceremony_valid = true;
                     let data = data_wrap.unwrap();
                     if data.mobile == verify_reqest.mobile && stored_code == verify_reqest.code {
                         let bound = if data.signup {
@@ -406,6 +465,9 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                                 )
                                 .await
                             {
+                                if let Some(key) = &gate_key {
+                                    crate::utils::clear_verify_failures(key).await;
+                                }
                                 if let Some(name) = verify_reqest.cookie {
                                     let cookie = Cookie::build((name, jwt.clone()))
                                         .path("/")
@@ -435,6 +497,15 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         }
     } else {
         err_msg = "Invalid request".to_string();
+    }
+    // Every failed verify of a VALID ceremony counts against the account,
+    // across ceremonies: the one-shot code bounds guesses per ceremony,
+    // this bounds the request→verify loop itself. Attempts without a
+    // token valid for the claimed identity are not recorded — they guess
+    // nothing, and recording them would let junk traffic flood the
+    // lockout cache.
+    if ceremony_valid && let Some(key) = &gate_key {
+        crate::utils::record_verify_failure(key).await;
     }
     res.status_code(StatusCode::UNAUTHORIZED);
     res.render(Json(MobileResponse {
@@ -808,6 +879,10 @@ mod tests {
     /// In-process tenant with a signing key and one user.
     async fn otp_test_env() -> (crate::server::ServerState, tempfile::TempDir) {
         init_revocation_store().await;
+        // The verify-failure gate is process-wide; wrong-code tests record
+        // against the fixture account, so each env starts with it cleared
+        // to keep tests independent.
+        crate::utils::clear_verify_failures(&crate::utils::verify_gate_key(DOMAIN, "alice")).await;
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = crate::db::Storage::init(tmp.path())
             .await
@@ -960,6 +1035,67 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_ne!(body["ok"], true);
+    }
+
+    /// regression: verify failures count against the account ACROSS
+    /// ceremonies — after the budget (5) is exhausted the account locks
+    /// out with 429 even for a correct code, and the gated attempt must
+    /// not consume the one-shot code.
+    #[tokio::test]
+    async fn verify_locks_the_account_after_repeated_failures() {
+        let (state, _tmp) = otp_test_env().await;
+        let service = otp_service(state.clone());
+
+        // Each wrong-code attempt burns one ceremony (the code is
+        // one-shot), so every failure needs a fresh token — exactly the
+        // distributed request→verify loop the per-account gate bounds.
+        for _ in 0..5 {
+            let token = issue_ceremony(&state, "123456").await;
+            let (status, _body) = post_verify(
+                &service,
+                &serde_json::json!({
+                    "token": token,
+                    "name": "alice",
+                    "mobile": MOBILE,
+                    "code": "000000",
+                }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+        }
+
+        let token = issue_ceremony(&state, "123456").await;
+        let (status, _body) = post_verify(
+            &service,
+            &serde_json::json!({
+                "token": token,
+                "name": "alice",
+                "mobile": MOBILE,
+                "code": "123456",
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "a locked-out account must be refused before the code is checked"
+        );
+
+        // The gated attempt must not have consumed the one-shot code:
+        // after the lock clears, the same ceremony completes.
+        crate::utils::clear_verify_failures(&crate::utils::verify_gate_key(DOMAIN, "alice")).await;
+        let (status, body) = post_verify(
+            &service,
+            &serde_json::json!({
+                "token": token,
+                "name": "alice",
+                "mobile": MOBILE,
+                "code": "123456",
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
     }
 
     /// The one-shot code is consumed on first use; a replay of the same

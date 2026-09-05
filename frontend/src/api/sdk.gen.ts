@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { OpenapiAdminAddDomainData, OpenapiAdminAddDomainErrors, OpenapiAdminAddDomainResponses, OpenapiAdminAllDomainsData, OpenapiAdminAllDomainsErrors, OpenapiAdminAllDomainsResponses, OpenapiAdminAllTenantsData, OpenapiAdminAllTenantsErrors, OpenapiAdminAllTenantsResponses, OpenapiAdminDeleteDomainData, OpenapiAdminDeleteDomainErrors, OpenapiAdminDeleteDomainResponses, OpenapiAdminNewTenantData, OpenapiAdminNewTenantErrors, OpenapiAdminNewTenantResponses, OpenapiAdminRemoveTenantData, OpenapiAdminRemoveTenantErrors, OpenapiAdminRemoveTenantResponses, OpenapiEmailRemoveData, OpenapiEmailRemoveErrors, OpenapiEmailRemoveResponses, OpenapiEmailRequestData, OpenapiEmailRequestErrors, OpenapiEmailRequestResponses, OpenapiEmailVerifyData, OpenapiEmailVerifyErrors, OpenapiEmailVerifyResponses, OpenapiIdpDeleteOauth2ClientData, OpenapiIdpDeleteOauth2ClientErrors, OpenapiIdpDeleteOauth2ClientResponses, OpenapiIdpListOauth2ClientsData, OpenapiIdpListOauth2ClientsErrors, OpenapiIdpListOauth2ClientsResponses, OpenapiIdpNewOauth2ClientData, OpenapiIdpNewOauth2ClientErrors, OpenapiIdpNewOauth2ClientResponses, OpenapiKeyAddKeyData, OpenapiKeyAddKeyErrors, OpenapiKeyAddKeyResponses, OpenapiKeyAllKeysData, OpenapiKeyAllKeysErrors, OpenapiKeyAllKeysResponses, OpenapiKeyDeleteKeyData, OpenapiKeyDeleteKeyErrors, OpenapiKeyDeleteKeyResponses, OpenapiOtpRemoveData, OpenapiOtpRemoveErrors, OpenapiOtpRemoveResponses, OpenapiOtpRequestData, OpenapiOtpRequestErrors, OpenapiOtpRequestResponses, OpenapiOtpVerifyData, OpenapiOtpVerifyErrors, OpenapiOtpVerifyResponses, OpenapiPasskeyRemoveData, OpenapiPasskeyRemoveErrors, OpenapiPasskeyRemoveResponses, OpenapiPasskeyRequestData, OpenapiPasskeyRequestErrors, OpenapiPasskeyRequestResponses, OpenapiPasskeyVerifyData, OpenapiPasskeyVerifyErrors, OpenapiPasskeyVerifyResponses, OpenapiPolicyAddPolicyData, OpenapiPolicyAddPolicyErrors, OpenapiPolicyAddPolicyResponses, OpenapiPolicyAllPoliciesData, OpenapiPolicyAllPoliciesErrors, OpenapiPolicyAllPoliciesResponses, OpenapiPolicyDeletePolicyData, OpenapiPolicyDeletePolicyErrors, OpenapiPolicyDeletePolicyResponses, OpenapiRoleAddRoleData, OpenapiRoleAddRoleErrors, OpenapiRoleAddRoleResponses, OpenapiRoleAllRolesData, OpenapiRoleAllRolesErrors, OpenapiRoleAllRolesResponses, OpenapiRoleDeleteRoleData, OpenapiRoleDeleteRoleErrors, OpenapiRoleDeleteRoleResponses, OpenapiRouterHealthyData, OpenapiRouterHealthyResponses, OpenapiSocialAddProviderData, OpenapiSocialAddProviderErrors, OpenapiSocialAddProviderResponses, OpenapiSocialAllProvidersData, OpenapiSocialAllProvidersErrors, OpenapiSocialAllProvidersResponses, OpenapiSocialRedeemData, OpenapiSocialRedeemErrors, OpenapiSocialRedeemResponses, OpenapiSocialRemoveData, OpenapiSocialRemoveErrors, OpenapiSocialRemoveProviderData, OpenapiSocialRemoveProviderErrors, OpenapiSocialRemoveProviderResponses, OpenapiSocialRemoveResponses, OpenapiSocialRequest2Data, OpenapiSocialRequestData, OpenapiSocialVerify2Data, OpenapiSocialVerify2Errors, OpenapiSocialVerifyData, OpenapiSocialVerifyErrors, OpenapiTotpEnroll2Data, OpenapiTotpEnroll2Errors, OpenapiTotpEnroll2Responses, OpenapiTotpEnrollData, OpenapiTotpEnrollErrors, OpenapiTotpEnrollResponses, OpenapiTotpListTotpData, OpenapiTotpListTotpErrors, OpenapiTotpListTotpResponses, OpenapiTotpRemoveTotpData, OpenapiTotpRemoveTotpErrors, OpenapiTotpRemoveTotpResponses, OpenapiTotpVerify2Data, OpenapiTotpVerify2Errors, OpenapiTotpVerify2Responses, OpenapiTotpVerifyData, OpenapiTotpVerifyErrors, OpenapiTotpVerifyResponses, OpenapiUserActivateSelfData, OpenapiUserActivateSelfErrors, OpenapiUserActivateSelfResponses, OpenapiUserActivateUserData, OpenapiUserActivateUserErrors, OpenapiUserActivateUserResponses, OpenapiUserAddRoleData, OpenapiUserAddRoleErrors, OpenapiUserAddRoleResponses, OpenapiUserAddUserData, OpenapiUserAddUserErrors, OpenapiUserAddUserResponses, OpenapiUserAllUsersData, OpenapiUserAllUsersErrors, OpenapiUserAllUsersResponses, OpenapiUserDeleteSelfData, OpenapiUserDeleteSelfErrors, OpenapiUserDeleteSelfResponses, OpenapiUserDeleteUserData, OpenapiUserDeleteUserErrors, OpenapiUserDeleteUserResponses, OpenapiUserRemoveRoleData, OpenapiUserRemoveRoleErrors, OpenapiUserRemoveRoleResponses, OpenapiUserUserRolesData, OpenapiUserUserRolesErrors, OpenapiUserUserRolesResponses, OpenapiVerifyLogoutData, OpenapiVerifyLogoutErrors, OpenapiVerifyLogoutResponses, OpenapiVerifyRefreshData, OpenapiVerifyRefreshErrors, OpenapiVerifyRefreshResponses, OpenapiVerifyVerify2Data, OpenapiVerifyVerify2Errors, OpenapiVerifyVerify2Responses, OpenapiVerifyVerifyData, OpenapiVerifyVerifyErrors, OpenapiVerifyVerifyResponses } from './types.gen';
+import type { OpenapiAdminAddDomainData, OpenapiAdminAddDomainErrors, OpenapiAdminAddDomainResponses, OpenapiAdminAllDomainsData, OpenapiAdminAllDomainsErrors, OpenapiAdminAllDomainsResponses, OpenapiAdminAllTenantsData, OpenapiAdminAllTenantsErrors, OpenapiAdminAllTenantsResponses, OpenapiAdminDeleteDomainData, OpenapiAdminDeleteDomainErrors, OpenapiAdminDeleteDomainResponses, OpenapiAdminNewTenantData, OpenapiAdminNewTenantErrors, OpenapiAdminNewTenantResponses, OpenapiAdminRemoveTenantData, OpenapiAdminRemoveTenantErrors, OpenapiAdminRemoveTenantResponses, OpenapiEmailAddData, OpenapiEmailAddErrors, OpenapiEmailAddResponses, OpenapiEmailAddVerifyData, OpenapiEmailAddVerifyErrors, OpenapiEmailAddVerifyResponses, OpenapiEmailRemoveData, OpenapiEmailRemoveErrors, OpenapiEmailRemoveResponses, OpenapiEmailRequestData, OpenapiEmailRequestErrors, OpenapiEmailRequestResponses, OpenapiEmailVerifyData, OpenapiEmailVerifyErrors, OpenapiEmailVerifyResponses, OpenapiIdpDeleteOauth2ClientData, OpenapiIdpDeleteOauth2ClientErrors, OpenapiIdpDeleteOauth2ClientResponses, OpenapiIdpListOauth2ClientsData, OpenapiIdpListOauth2ClientsErrors, OpenapiIdpListOauth2ClientsResponses, OpenapiIdpNewOauth2ClientData, OpenapiIdpNewOauth2ClientErrors, OpenapiIdpNewOauth2ClientResponses, OpenapiKeyAddKeyData, OpenapiKeyAddKeyErrors, OpenapiKeyAddKeyResponses, OpenapiKeyAllKeysData, OpenapiKeyAllKeysErrors, OpenapiKeyAllKeysResponses, OpenapiKeyDeleteKeyData, OpenapiKeyDeleteKeyErrors, OpenapiKeyDeleteKeyResponses, OpenapiOidcExtOidcConfigData, OpenapiOidcExtOidcConfigErrors, OpenapiOidcExtOidcConfigResponses, OpenapiOidcExtSetClientMetaData, OpenapiOidcExtSetClientMetaErrors, OpenapiOidcExtSetClientMetaResponses, OpenapiOidcExtSetOidcConfigData, OpenapiOidcExtSetOidcConfigErrors, OpenapiOidcExtSetOidcConfigResponses, OpenapiOpsHealthyData, OpenapiOpsHealthyResponses, OpenapiOpsLiveData, OpenapiOpsLiveResponses, OpenapiOpsMetricsData, OpenapiOpsMetricsResponses, OpenapiOpsReadyData, OpenapiOpsReadyErrors, OpenapiOpsReadyResponses, OpenapiOtpAddData, OpenapiOtpAddErrors, OpenapiOtpAddResponses, OpenapiOtpAddVerifyData, OpenapiOtpAddVerifyErrors, OpenapiOtpAddVerifyResponses, OpenapiOtpRemoveData, OpenapiOtpRemoveErrors, OpenapiOtpRemoveResponses, OpenapiOtpRequestData, OpenapiOtpRequestErrors, OpenapiOtpRequestResponses, OpenapiOtpVerifyData, OpenapiOtpVerifyErrors, OpenapiOtpVerifyResponses, OpenapiPasskeyRemoveData, OpenapiPasskeyRemoveErrors, OpenapiPasskeyRemoveResponses, OpenapiPasskeyRequestData, OpenapiPasskeyRequestErrors, OpenapiPasskeyRequestResponses, OpenapiPasskeyVerifyData, OpenapiPasskeyVerifyErrors, OpenapiPasskeyVerifyResponses, OpenapiPolicyAddPolicyData, OpenapiPolicyAddPolicyErrors, OpenapiPolicyAddPolicyResponses, OpenapiPolicyAllPoliciesData, OpenapiPolicyAllPoliciesErrors, OpenapiPolicyAllPoliciesResponses, OpenapiPolicyDeletePolicyData, OpenapiPolicyDeletePolicyErrors, OpenapiPolicyDeletePolicyResponses, OpenapiRoleAddRoleData, OpenapiRoleAddRoleErrors, OpenapiRoleAddRoleResponses, OpenapiRoleAllRolesData, OpenapiRoleAllRolesErrors, OpenapiRoleAllRolesResponses, OpenapiRoleDeleteRoleData, OpenapiRoleDeleteRoleErrors, OpenapiRoleDeleteRoleResponses, OpenapiSocialAddProviderData, OpenapiSocialAddProviderErrors, OpenapiSocialAddProviderResponses, OpenapiSocialAllProvidersData, OpenapiSocialAllProvidersErrors, OpenapiSocialAllProvidersResponses, OpenapiSocialLink2Data, OpenapiSocialLink2Errors, OpenapiSocialLinkData, OpenapiSocialLinkErrors, OpenapiSocialRedeemData, OpenapiSocialRedeemErrors, OpenapiSocialRedeemResponses, OpenapiSocialRemoveData, OpenapiSocialRemoveErrors, OpenapiSocialRemoveProviderData, OpenapiSocialRemoveProviderErrors, OpenapiSocialRemoveProviderResponses, OpenapiSocialRemoveResponses, OpenapiSocialRequest2Data, OpenapiSocialRequestData, OpenapiSocialVerify2Data, OpenapiSocialVerify2Errors, OpenapiSocialVerifyData, OpenapiSocialVerifyErrors, OpenapiTotpEnroll2Data, OpenapiTotpEnroll2Errors, OpenapiTotpEnroll2Responses, OpenapiTotpEnrollData, OpenapiTotpEnrollErrors, OpenapiTotpEnrollResponses, OpenapiTotpListTotpData, OpenapiTotpListTotpErrors, OpenapiTotpListTotpResponses, OpenapiTotpRemoveTotpData, OpenapiTotpRemoveTotpErrors, OpenapiTotpRemoveTotpResponses, OpenapiTotpVerify2Data, OpenapiTotpVerify2Errors, OpenapiTotpVerify2Responses, OpenapiTotpVerifyData, OpenapiTotpVerifyErrors, OpenapiTotpVerifyResponses, OpenapiUserActivateSelfData, OpenapiUserActivateSelfErrors, OpenapiUserActivateSelfResponses, OpenapiUserActivateUserData, OpenapiUserActivateUserErrors, OpenapiUserActivateUserResponses, OpenapiUserAddRoleData, OpenapiUserAddRoleErrors, OpenapiUserAddRoleResponses, OpenapiUserAddUserData, OpenapiUserAddUserErrors, OpenapiUserAddUserResponses, OpenapiUserAllUsersData, OpenapiUserAllUsersErrors, OpenapiUserAllUsersResponses, OpenapiUserDeleteSelfData, OpenapiUserDeleteSelfErrors, OpenapiUserDeleteSelfResponses, OpenapiUserDeleteUserData, OpenapiUserDeleteUserErrors, OpenapiUserDeleteUserResponses, OpenapiUserRemoveRoleData, OpenapiUserRemoveRoleErrors, OpenapiUserRemoveRoleResponses, OpenapiUserUserRolesData, OpenapiUserUserRolesErrors, OpenapiUserUserRolesResponses, OpenapiVerifyLogoutData, OpenapiVerifyLogoutErrors, OpenapiVerifyLogoutResponses, OpenapiVerifyRefreshData, OpenapiVerifyRefreshErrors, OpenapiVerifyRefreshResponses, OpenapiVerifyVerify2Data, OpenapiVerifyVerify2Errors, OpenapiVerifyVerify2Responses, OpenapiVerifyVerifyData, OpenapiVerifyVerifyErrors, OpenapiVerifyVerifyResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -77,6 +77,11 @@ export const openapiKeyDeleteKey = <ThrowOnError extends boolean = false>(option
 export const openapiKeyAllKeys = <ThrowOnError extends boolean = false>(options?: Options<OpenapiKeyAllKeysData, ThrowOnError>): RequestResult<OpenapiKeyAllKeysResponses, OpenapiKeyAllKeysErrors, ThrowOnError> => (options?.client ?? client).get<OpenapiKeyAllKeysResponses, OpenapiKeyAllKeysErrors, ThrowOnError>({ url: '/api/v1/admin/key/list', ...options });
 
 /**
+ * Prometheus metrics (process-global, admin-gated)
+ */
+export const openapiOpsMetrics = <ThrowOnError extends boolean = false>(options?: Options<OpenapiOpsMetricsData, ThrowOnError>): RequestResult<OpenapiOpsMetricsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<OpenapiOpsMetricsResponses, unknown, ThrowOnError>({ url: '/api/v1/admin/metrics', ...options });
+
+/**
  * Create a new OAuth2 client
  */
 export const openapiIdpNewOauth2Client = <ThrowOnError extends boolean = false>(options: Options<OpenapiIdpNewOauth2ClientData, ThrowOnError>): RequestResult<OpenapiIdpNewOauth2ClientResponses, OpenapiIdpNewOauth2ClientErrors, ThrowOnError> => (options.client ?? client).post<OpenapiIdpNewOauth2ClientResponses, OpenapiIdpNewOauth2ClientErrors, ThrowOnError>({
@@ -106,10 +111,39 @@ export const openapiIdpDeleteOauth2Client = <ThrowOnError extends boolean = fals
 export const openapiIdpListOauth2Clients = <ThrowOnError extends boolean = false>(options?: Options<OpenapiIdpListOauth2ClientsData, ThrowOnError>): RequestResult<OpenapiIdpListOauth2ClientsResponses, OpenapiIdpListOauth2ClientsErrors, ThrowOnError> => (options?.client ?? client).get<OpenapiIdpListOauth2ClientsResponses, OpenapiIdpListOauth2ClientsErrors, ThrowOnError>({ url: '/api/v1/admin/oauth2client/list', ...options });
 
 /**
+ * Set extended OIDC metadata for an OAuth2 client
+ */
+export const openapiOidcExtSetClientMeta = <ThrowOnError extends boolean = false>(options: Options<OpenapiOidcExtSetClientMetaData, ThrowOnError>): RequestResult<OpenapiOidcExtSetClientMetaResponses, OpenapiOidcExtSetClientMetaErrors, ThrowOnError> => (options.client ?? client).post<OpenapiOidcExtSetClientMetaResponses, OpenapiOidcExtSetClientMetaErrors, ThrowOnError>({
+    url: '/api/v1/admin/oauth2client/meta',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Read tenant OIDC feature configuration
+ */
+export const openapiOidcExtOidcConfig = <ThrowOnError extends boolean = false>(options?: Options<OpenapiOidcExtOidcConfigData, ThrowOnError>): RequestResult<OpenapiOidcExtOidcConfigResponses, OpenapiOidcExtOidcConfigErrors, ThrowOnError> => (options?.client ?? client).get<OpenapiOidcExtOidcConfigResponses, OpenapiOidcExtOidcConfigErrors, ThrowOnError>({ url: '/api/v1/admin/oidc/config', ...options });
+
+/**
+ * Update tenant OIDC feature configuration
+ */
+export const openapiOidcExtSetOidcConfig = <ThrowOnError extends boolean = false>(options: Options<OpenapiOidcExtSetOidcConfigData, ThrowOnError>): RequestResult<OpenapiOidcExtSetOidcConfigResponses, OpenapiOidcExtSetOidcConfigErrors, ThrowOnError> => (options.client ?? client).post<OpenapiOidcExtSetOidcConfigResponses, OpenapiOidcExtSetOidcConfigErrors, ThrowOnError>({
+    url: '/api/v1/admin/oidc/config',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Add policy to tenant
  *
  * The policy's domain is always the domain resolved from the request
- * `Host` — any `domain` supplied in the body is ignored (G-56), so a
+ * `Host` — any `domain` supplied in the body is ignored, so a
  * policy-admin of one domain cannot write policies naming another domain
  * served by the same tenant.
  *
@@ -130,7 +164,7 @@ export const openapiPolicyAddPolicy = <ThrowOnError extends boolean = false>(opt
  * Remove a policy from tenant
  *
  * The policy is matched within the domain resolved from the request
- * `Host` (G-56), never a client-supplied domain string.
+ * `Host`, never a client-supplied domain string.
  *
  * Deletes from the DB and evicts from the in-memory cache, keeping both
  * in sync.
@@ -374,6 +408,30 @@ export const openapiUserUserRoles = <ThrowOnError extends boolean = false>(optio
 });
 
 /**
+ * Add an email address to the session's own account
+ */
+export const openapiEmailAdd = <ThrowOnError extends boolean = false>(options: Options<OpenapiEmailAddData, ThrowOnError>): RequestResult<OpenapiEmailAddResponses, OpenapiEmailAddErrors, ThrowOnError> => (options.client ?? client).post<OpenapiEmailAddResponses, OpenapiEmailAddErrors, ThrowOnError>({
+    url: '/api/v1/auth/email/add',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Complete a session-gated email add
+ */
+export const openapiEmailAddVerify = <ThrowOnError extends boolean = false>(options: Options<OpenapiEmailAddVerifyData, ThrowOnError>): RequestResult<OpenapiEmailAddVerifyResponses, OpenapiEmailAddVerifyErrors, ThrowOnError> => (options.client ?? client).post<OpenapiEmailAddVerifyResponses, OpenapiEmailAddVerifyErrors, ThrowOnError>({
+    url: '/api/v1/auth/email/add/verify',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Request Magic Link
  */
 export const openapiEmailRequest = <ThrowOnError extends boolean = false>(options: Options<OpenapiEmailRequestData, ThrowOnError>): RequestResult<OpenapiEmailRequestResponses, OpenapiEmailRequestErrors, ThrowOnError> => (options.client ?? client).post<OpenapiEmailRequestResponses, OpenapiEmailRequestErrors, ThrowOnError>({
@@ -394,6 +452,30 @@ export const openapiEmailVerify = <ThrowOnError extends boolean = false>(options
  * Logout, invalidate JWT
  */
 export const openapiVerifyLogout = <ThrowOnError extends boolean = false>(options?: Options<OpenapiVerifyLogoutData, ThrowOnError>): RequestResult<OpenapiVerifyLogoutResponses, OpenapiVerifyLogoutErrors, ThrowOnError> => (options?.client ?? client).post<OpenapiVerifyLogoutResponses, OpenapiVerifyLogoutErrors, ThrowOnError>({ url: '/api/v1/auth/logout', ...options });
+
+/**
+ * Add a mobile number to the session's own account
+ */
+export const openapiOtpAdd = <ThrowOnError extends boolean = false>(options: Options<OpenapiOtpAddData, ThrowOnError>): RequestResult<OpenapiOtpAddResponses, OpenapiOtpAddErrors, ThrowOnError> => (options.client ?? client).post<OpenapiOtpAddResponses, OpenapiOtpAddErrors, ThrowOnError>({
+    url: '/api/v1/auth/otp/add',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Complete a session-gated mobile add
+ */
+export const openapiOtpAddVerify = <ThrowOnError extends boolean = false>(options: Options<OpenapiOtpAddVerifyData, ThrowOnError>): RequestResult<OpenapiOtpAddVerifyResponses, OpenapiOtpAddVerifyErrors, ThrowOnError> => (options.client ?? client).post<OpenapiOtpAddVerifyResponses, OpenapiOtpAddVerifyErrors, ThrowOnError>({
+    url: '/api/v1/auth/otp/add/verify',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * Request OTP
@@ -463,6 +545,16 @@ export const openapiSocialRedeem = <ThrowOnError extends boolean = false>(option
         ...options.headers
     }
 });
+
+/**
+ * Link an IdP identity to the session's own account
+ */
+export const openapiSocialLink = <ThrowOnError extends boolean = false>(options: Options<OpenapiSocialLinkData, ThrowOnError>): RequestResult<unknown, OpenapiSocialLinkErrors, ThrowOnError> => (options.client ?? client).get<unknown, OpenapiSocialLinkErrors, ThrowOnError>({ url: '/api/v1/auth/social/{id}/link', ...options });
+
+/**
+ * Link an IdP identity to the session's own account
+ */
+export const openapiSocialLink2 = <ThrowOnError extends boolean = false>(options: Options<OpenapiSocialLink2Data, ThrowOnError>): RequestResult<unknown, OpenapiSocialLink2Errors, ThrowOnError> => (options.client ?? client).post<unknown, OpenapiSocialLink2Errors, ThrowOnError>({ url: '/api/v1/auth/social/{id}/link', ...options });
 
 /**
  * Start social (OAuth2/OIDC) login via redirect to IdP
@@ -542,4 +634,21 @@ export const openapiVerifyVerify = <ThrowOnError extends boolean = false>(option
  */
 export const openapiVerifyVerify2 = <ThrowOnError extends boolean = false>(options?: Options<OpenapiVerifyVerify2Data, ThrowOnError>): RequestResult<OpenapiVerifyVerify2Responses, OpenapiVerifyVerify2Errors, ThrowOnError> => (options?.client ?? client).post<OpenapiVerifyVerify2Responses, OpenapiVerifyVerify2Errors, ThrowOnError>({ url: '/api/v1/auth/verify', ...options });
 
-export const openapiRouterHealthy = <ThrowOnError extends boolean = false>(options?: Options<OpenapiRouterHealthyData, ThrowOnError>): RequestResult<OpenapiRouterHealthyResponses, unknown, ThrowOnError> => (options?.client ?? client).get<OpenapiRouterHealthyResponses, unknown, ThrowOnError>({ url: '/api/v1/healthy', ...options });
+/**
+ * Liveness probe
+ */
+export const openapiOpsLive = <ThrowOnError extends boolean = false>(options?: Options<OpenapiOpsLiveData, ThrowOnError>): RequestResult<OpenapiOpsLiveResponses, unknown, ThrowOnError> => (options?.client ?? client).get<OpenapiOpsLiveResponses, unknown, ThrowOnError>({ url: '/api/v1/health/live', ...options });
+
+/**
+ * Readiness probe
+ *
+ * Deliberately takes NO tenant guard (README §6): probes must not
+ * serialize behind in-flight tenant requests, so this checks the
+ * tenant map without borrowing any tenant.
+ */
+export const openapiOpsReady = <ThrowOnError extends boolean = false>(options?: Options<OpenapiOpsReadyData, ThrowOnError>): RequestResult<OpenapiOpsReadyResponses, OpenapiOpsReadyErrors, ThrowOnError> => (options?.client ?? client).get<OpenapiOpsReadyResponses, OpenapiOpsReadyErrors, ThrowOnError>({ url: '/api/v1/health/ready', ...options });
+
+/**
+ * Shallow health check
+ */
+export const openapiOpsHealthy = <ThrowOnError extends boolean = false>(options?: Options<OpenapiOpsHealthyData, ThrowOnError>): RequestResult<OpenapiOpsHealthyResponses, unknown, ThrowOnError> => (options?.client ?? client).get<OpenapiOpsHealthyResponses, unknown, ThrowOnError>({ url: '/api/v1/healthy', ...options });

@@ -25,7 +25,7 @@ export type OpenapiAdminNewTenant = {
     admin?: string | null;
     /**
      * First domain of the new tenant; the standard admin policy set is
-     * bound to it (`g10-privilege-escalation.md` §4). Without a domain the
+     * bound to it. Without a domain the
      * tenant stays default-deny locked until one is added.
      */
     domain?: string | null;
@@ -33,6 +33,15 @@ export type OpenapiAdminNewTenant = {
 };
 
 export type OpenapiDbHttpMethod = 'GET' | 'POST' | 'PUT' | 'OPTIONS' | 'DELETE' | 'PATCH' | 'CONNECT' | 'HEAD' | 'TRACE';
+
+export type OpenapiEmailEmailAddRequest = {
+    email: string;
+};
+
+export type OpenapiEmailEmailAddVerifyRequest = {
+    email: string;
+    token: string;
+};
 
 export type OpenapiEmailEmailResponse = {
     code: number;
@@ -42,8 +51,18 @@ export type OpenapiEmailEmailResponse = {
 };
 
 export type OpenapiEmailReqRequest = {
+    /**
+     * Return context parked on the login page: an in-flight OIDC
+     * `/authorize` (client_id + state) or a plain same-origin redirect.
+     * Embedded in the emailed link so the magic-link round-trip can resume
+     * it after verify — safe because resume/redirect targets are validated
+     * server-side (parked authorize) or same-origin-checked client-side.
+     */
+    client_id?: string | null;
     email: string;
     name: string;
+    redirect_uri?: string | null;
+    state?: string | null;
 };
 
 export type OpenapiIdpDeleteOauth2Client = {
@@ -89,6 +108,30 @@ export type OpenapiKeyKeyEntry = {
     public: string;
 };
 
+export type OpenapiOidcExtClientMetaRequest = {
+    backchannel_logout_uri?: string | null;
+    client_id: string;
+    client_name?: string | null;
+    post_logout_redirect_uris?: Array<string> | null;
+};
+
+export type OpenapiOidcExtOidcTenantConfig = {
+    dcr_enabled: boolean;
+};
+
+export type OpenapiOpsHealthyResponse = {
+    ok: boolean;
+};
+
+export type OpenapiOtpMobileAddRequest = {
+    mobile: string;
+};
+
+export type OpenapiOtpMobileAddVerifyRequest = {
+    code: string;
+    token: string;
+};
+
 export type OpenapiOtpMobileResponse = {
     code: number;
     jwt?: string | null;
@@ -109,8 +152,8 @@ export type OpenapiPasskeyPasskeyRequest = string;
 export type OpenapiPasskeyPasskeyResponse = {
     publicKey: unknown;
     /**
-     * Opaque per-flow handle the client must echo back to `verify`
-     * (G-20). Replaces the old username-derived cache key.
+     *  Opaque per-flow handle the client must echo back to `verify`
+     * . Replaces the old username-derived cache key.
      */
     token: string;
 };
@@ -119,7 +162,7 @@ export type OpenapiPasskeyVerifyRequest = {
     cookie?: string | null;
     credential: unknown;
     /**
-     * Flow handle from `passkey/request` (G-20): selects the cached
+     * Flow handle from `passkey/request`: selects the cached
      * challenge. Required — without it no ceremony can be completed.
      */
     token: string;
@@ -129,7 +172,7 @@ export type OpenapiPasskeyVerifyRequest = {
 /**
  * Request body for [`delete_policy`] — identifies a policy by its
  * resource template, HTTP method, and role. The domain is always the one
- * resolved from the request `Host` (G-56); a `domain` field present in
+ * resolved from the request `Host`; a `domain` field present in
  * the body is ignored.
  */
 export type OpenapiPolicyDeletePolicy = {
@@ -155,28 +198,8 @@ export type OpenapiPolicyPolicyEntry = {
     target: OpenapiPolicyTargetResolver;
 };
 
-/**
- * How the *source* (the identity acting in the request) is resolved from the
- * authenticated JWT. Used by a [`Policy`] to decide whether the caller itself
- * is the target of the rule.
- *
- * `Nothing` means the policy is identity-independent (it applies to whoever
- * holds the role). `User`, `Domain`, and `Roles` pull the corresponding field
- * from the JWT to be compared against the resolved target.
- */
 export type OpenapiPolicySourceResolver = 'Nothing' | 'User' | 'Domain' | 'Role';
 
-/**
- * How the *target* (the resource being accessed) is extracted from the
- * incoming request so it can be compared against the resolved source.
- *
- * - `Nothing`      — no target extraction; matching is purely path-based.
- * - `FromPath`     — capture a named path parameter (e.g. `{user}`) from the
- * request path, matched against the policy's `resource` template.
- * - `FromQuery`    — read the target from a named query-string parameter.
- * - `FromHeader`   — read the target from a request header (case-insensitive
- * lookup).
- */
 export type OpenapiPolicyTargetResolver = 'Nothing' | {
     FromPath: {
         pname: string;
@@ -209,10 +232,6 @@ export type OpenapiRoleRoleEntry = {
     name: string;
 };
 
-export type OpenapiRouterHealthyResponse = {
-    ok: boolean;
-};
-
 export type OpenapiSocialAddProvider = {
     client_id: string;
     client_secret: string;
@@ -241,6 +260,12 @@ export type OpenapiTotpAllTotpRequest = {
 };
 
 export type OpenapiTotpEnrollTotpRequest = {
+    /**
+     * Required when a TOTP with this name is already ACTIVE: a valid
+     * current code proving possession before the active secret is
+     * re-exposed. The code is consumed.
+     */
+    code?: string | null;
     name: string;
     user?: string | null;
 };
@@ -351,6 +376,11 @@ export type OpenapiUtilsApiResponse_allocVecVec_openapiSocialSocialProvider__ = 
 
 export type OpenapiUtilsApiResponse_allocVecVec_openapiTotpTotpEntry__ = {
     data: Array<OpenapiTotpTotpEntry>;
+    ok: boolean;
+};
+
+export type OpenapiUtilsApiResponse_openapiOidcExtOidcTenantConfig_ = {
+    data: OpenapiOidcExtOidcTenantConfig;
     ok: boolean;
 };
 
@@ -504,6 +534,22 @@ export type OpenapiKeyAllKeysResponses = {
 
 export type OpenapiKeyAllKeysResponse = OpenapiKeyAllKeysResponses[keyof OpenapiKeyAllKeysResponses];
 
+export type OpenapiOpsMetricsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/admin/metrics';
+};
+
+export type OpenapiOpsMetricsResponses = {
+    /**
+     * Prometheus text exposition format
+     */
+    200: string;
+};
+
+export type OpenapiOpsMetricsResponse = OpenapiOpsMetricsResponses[keyof OpenapiOpsMetricsResponses];
+
 export type OpenapiIdpNewOauth2ClientData = {
     body: OpenapiIdpNewOauth2Client;
     path?: never;
@@ -578,6 +624,81 @@ export type OpenapiIdpListOauth2ClientsResponses = {
 };
 
 export type OpenapiIdpListOauth2ClientsResponse = OpenapiIdpListOauth2ClientsResponses[keyof OpenapiIdpListOauth2ClientsResponses];
+
+export type OpenapiOidcExtSetClientMetaData = {
+    body: OpenapiOidcExtClientMetaRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/admin/oauth2client/meta';
+};
+
+export type OpenapiOidcExtSetClientMetaErrors = {
+    /**
+     * Bad request
+     */
+    400: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiOidcExtSetClientMetaError = OpenapiOidcExtSetClientMetaErrors[keyof OpenapiOidcExtSetClientMetaErrors];
+
+export type OpenapiOidcExtSetClientMetaResponses = {
+    /**
+     * Metadata saved
+     */
+    200: OpenapiUtilsApiResponse____;
+};
+
+export type OpenapiOidcExtSetClientMetaResponse = OpenapiOidcExtSetClientMetaResponses[keyof OpenapiOidcExtSetClientMetaResponses];
+
+export type OpenapiOidcExtOidcConfigData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/admin/oidc/config';
+};
+
+export type OpenapiOidcExtOidcConfigErrors = {
+    /**
+     * Bad request
+     */
+    400: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiOidcExtOidcConfigError = OpenapiOidcExtOidcConfigErrors[keyof OpenapiOidcExtOidcConfigErrors];
+
+export type OpenapiOidcExtOidcConfigResponses = {
+    /**
+     * Current configuration
+     */
+    200: OpenapiUtilsApiResponse_openapiOidcExtOidcTenantConfig_;
+};
+
+export type OpenapiOidcExtOidcConfigResponse = OpenapiOidcExtOidcConfigResponses[keyof OpenapiOidcExtOidcConfigResponses];
+
+export type OpenapiOidcExtSetOidcConfigData = {
+    body: OpenapiOidcExtOidcTenantConfig;
+    path?: never;
+    query?: never;
+    url: '/api/v1/admin/oidc/config';
+};
+
+export type OpenapiOidcExtSetOidcConfigErrors = {
+    /**
+     * Bad request
+     */
+    400: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiOidcExtSetOidcConfigError = OpenapiOidcExtSetOidcConfigErrors[keyof OpenapiOidcExtSetOidcConfigErrors];
+
+export type OpenapiOidcExtSetOidcConfigResponses = {
+    /**
+     * Configuration updated
+     */
+    200: OpenapiUtilsApiResponse____;
+};
+
+export type OpenapiOidcExtSetOidcConfigResponse = OpenapiOidcExtSetOidcConfigResponses[keyof OpenapiOidcExtSetOidcConfigResponses];
 
 export type OpenapiPolicyAddPolicyData = {
     body: OpenapiPolicyPolicyEntry;
@@ -961,6 +1082,14 @@ export type OpenapiUserActivateUserErrors = {
      * Bad request
      */
     400: OpenapiUtilsApiProblem;
+    /**
+     * No verified session
+     */
+    401: OpenapiUtilsApiProblem;
+    /**
+     * Level gate refused the target user
+     */
+    403: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiUserActivateUserError = OpenapiUserActivateUserErrors[keyof OpenapiUserActivateUserErrors];
@@ -1065,6 +1194,14 @@ export type OpenapiUserDeleteUserErrors = {
      * Bad request
      */
     400: OpenapiUtilsApiProblem;
+    /**
+     * No verified session
+     */
+    401: OpenapiUtilsApiProblem;
+    /**
+     * Level gate refused the target user
+     */
+    403: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiUserDeleteUserError = OpenapiUserDeleteUserErrors[keyof OpenapiUserDeleteUserErrors];
@@ -1271,6 +1408,60 @@ export type OpenapiUserUserRolesResponses = {
 
 export type OpenapiUserUserRolesResponse = OpenapiUserUserRolesResponses[keyof OpenapiUserUserRolesResponses];
 
+export type OpenapiEmailAddData = {
+    body: OpenapiEmailEmailAddRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/email/add';
+};
+
+export type OpenapiEmailAddErrors = {
+    /**
+     * No valid session or failed
+     */
+    401: OpenapiEmailEmailResponse;
+    /**
+     * Per-recipient dispatch budget exhausted
+     */
+    429: OpenapiEmailEmailResponse;
+};
+
+export type OpenapiEmailAddError = OpenapiEmailAddErrors[keyof OpenapiEmailAddErrors];
+
+export type OpenapiEmailAddResponses = {
+    /**
+     * Success — confirmation link sent
+     */
+    200: OpenapiEmailEmailResponse;
+};
+
+export type OpenapiEmailAddResponse = OpenapiEmailAddResponses[keyof OpenapiEmailAddResponses];
+
+export type OpenapiEmailAddVerifyData = {
+    body: OpenapiEmailEmailAddVerifyRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/email/add/verify';
+};
+
+export type OpenapiEmailAddVerifyErrors = {
+    /**
+     * No valid session, unknown/consumed token, or the email was claimed in the meantime
+     */
+    401: OpenapiEmailEmailResponse;
+};
+
+export type OpenapiEmailAddVerifyError = OpenapiEmailAddVerifyErrors[keyof OpenapiEmailAddVerifyErrors];
+
+export type OpenapiEmailAddVerifyResponses = {
+    /**
+     * Success — email attached to the session's account
+     */
+    200: OpenapiEmailEmailResponse;
+};
+
+export type OpenapiEmailAddVerifyResponse = OpenapiEmailAddVerifyResponses[keyof OpenapiEmailAddVerifyResponses];
+
 export type OpenapiEmailRequestData = {
     body: OpenapiEmailReqRequest;
     path?: never;
@@ -1283,6 +1474,10 @@ export type OpenapiEmailRequestErrors = {
      * Failed
      */
     401: OpenapiEmailEmailResponse;
+    /**
+     * Per-recipient dispatch budget exhausted
+     */
+    429: OpenapiEmailEmailResponse;
 };
 
 export type OpenapiEmailRequestError = OpenapiEmailRequestErrors[keyof OpenapiEmailRequestErrors];
@@ -1359,6 +1554,60 @@ export type OpenapiVerifyLogoutResponses = {
 
 export type OpenapiVerifyLogoutResponse = OpenapiVerifyLogoutResponses[keyof OpenapiVerifyLogoutResponses];
 
+export type OpenapiOtpAddData = {
+    body: OpenapiOtpMobileAddRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/otp/add';
+};
+
+export type OpenapiOtpAddErrors = {
+    /**
+     * No valid session or failed
+     */
+    401: OpenapiOtpMobileResponse;
+    /**
+     * Per-recipient dispatch budget exhausted
+     */
+    429: OpenapiOtpMobileResponse;
+};
+
+export type OpenapiOtpAddError = OpenapiOtpAddErrors[keyof OpenapiOtpAddErrors];
+
+export type OpenapiOtpAddResponses = {
+    /**
+     * Success — SMS code sent
+     */
+    200: OpenapiOtpMobileResponse;
+};
+
+export type OpenapiOtpAddResponse = OpenapiOtpAddResponses[keyof OpenapiOtpAddResponses];
+
+export type OpenapiOtpAddVerifyData = {
+    body: OpenapiOtpMobileAddVerifyRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/otp/add/verify';
+};
+
+export type OpenapiOtpAddVerifyErrors = {
+    /**
+     * No valid session, unknown/consumed token, wrong code, or the number was claimed in the meantime
+     */
+    401: OpenapiOtpMobileResponse;
+};
+
+export type OpenapiOtpAddVerifyError = OpenapiOtpAddVerifyErrors[keyof OpenapiOtpAddVerifyErrors];
+
+export type OpenapiOtpAddVerifyResponses = {
+    /**
+     * Success — mobile attached to the session's account
+     */
+    200: OpenapiOtpMobileResponse;
+};
+
+export type OpenapiOtpAddVerifyResponse = OpenapiOtpAddVerifyResponses[keyof OpenapiOtpAddVerifyResponses];
+
 export type OpenapiOtpRequestData = {
     body: OpenapiOtpReqRequest;
     path?: never;
@@ -1371,6 +1620,10 @@ export type OpenapiOtpRequestErrors = {
      * Failed
      */
     401: OpenapiOtpMobileResponse;
+    /**
+     * Dispatch budget exhausted, or account locked after repeated verify failures
+     */
+    429: OpenapiOtpMobileResponse;
 };
 
 export type OpenapiOtpRequestError = OpenapiOtpRequestErrors[keyof OpenapiOtpRequestErrors];
@@ -1413,6 +1666,10 @@ export type OpenapiOtpVerifyErrors = {
      * Failed
      */
     401: OpenapiOtpMobileResponse;
+    /**
+     * Account locked after repeated verify failures
+     */
+    429: OpenapiOtpMobileResponse;
 };
 
 export type OpenapiOtpVerifyError = OpenapiOtpVerifyErrors[keyof OpenapiOtpVerifyErrors];
@@ -1541,6 +1798,48 @@ export type OpenapiSocialRedeemResponses = {
     200: unknown;
 };
 
+export type OpenapiSocialLinkData = {
+    body?: never;
+    path: {
+        /**
+         * Provider id, e.g. `github`
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/auth/social/{id}/link';
+};
+
+export type OpenapiSocialLinkErrors = {
+    /**
+     * No valid session
+     */
+    401: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiSocialLinkError = OpenapiSocialLinkErrors[keyof OpenapiSocialLinkErrors];
+
+export type OpenapiSocialLink2Data = {
+    body?: never;
+    path: {
+        /**
+         * Provider id, e.g. `github`
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/auth/social/{id}/link';
+};
+
+export type OpenapiSocialLink2Errors = {
+    /**
+     * No valid session
+     */
+    401: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiSocialLink2Error = OpenapiSocialLink2Errors[keyof OpenapiSocialLink2Errors];
+
 export type OpenapiSocialRequestData = {
     body?: never;
     path: {
@@ -1617,6 +1916,10 @@ export type OpenapiTotpEnrollErrors = {
      * Failed
      */
     401: OpenapiUtilsApiProblem;
+    /**
+     * Account locked after repeated verify failures
+     */
+    429: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiTotpEnrollError = OpenapiTotpEnrollErrors[keyof OpenapiTotpEnrollErrors];
@@ -1642,6 +1945,10 @@ export type OpenapiTotpEnroll2Errors = {
      * Failed
      */
     401: OpenapiUtilsApiProblem;
+    /**
+     * Account locked after repeated verify failures
+     */
+    429: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiTotpEnroll2Error = OpenapiTotpEnroll2Errors[keyof OpenapiTotpEnroll2Errors];
@@ -1667,6 +1974,10 @@ export type OpenapiTotpVerifyErrors = {
      * Failed
      */
     401: OpenapiUtilsApiProblem;
+    /**
+     * Account locked after repeated verify failures
+     */
+    429: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiTotpVerifyError = OpenapiTotpVerifyErrors[keyof OpenapiTotpVerifyErrors];
@@ -1692,6 +2003,10 @@ export type OpenapiTotpVerify2Errors = {
      * Failed
      */
     401: OpenapiUtilsApiProblem;
+    /**
+     * Account locked after repeated verify failures
+     */
+    429: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiTotpVerify2Error = OpenapiTotpVerify2Errors[keyof OpenapiTotpVerify2Errors];
@@ -1747,18 +2062,59 @@ export type OpenapiVerifyVerify2Responses = {
     200: unknown;
 };
 
-export type OpenapiRouterHealthyData = {
+export type OpenapiOpsLiveData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/health/live';
+};
+
+export type OpenapiOpsLiveResponses = {
+    /**
+     * Process is alive
+     */
+    200: OpenapiOpsHealthyResponse;
+};
+
+export type OpenapiOpsLiveResponse = OpenapiOpsLiveResponses[keyof OpenapiOpsLiveResponses];
+
+export type OpenapiOpsReadyData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/health/ready';
+};
+
+export type OpenapiOpsReadyErrors = {
+    /**
+     * Not ready
+     */
+    503: OpenapiOpsHealthyResponse;
+};
+
+export type OpenapiOpsReadyError = OpenapiOpsReadyErrors[keyof OpenapiOpsReadyErrors];
+
+export type OpenapiOpsReadyResponses = {
+    /**
+     * Ready to serve
+     */
+    200: OpenapiOpsHealthyResponse;
+};
+
+export type OpenapiOpsReadyResponse = OpenapiOpsReadyResponses[keyof OpenapiOpsReadyResponses];
+
+export type OpenapiOpsHealthyData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/v1/healthy';
 };
 
-export type OpenapiRouterHealthyResponses = {
+export type OpenapiOpsHealthyResponses = {
     /**
-     * Response with json format data
+     * Server is up
      */
-    200: OpenapiRouterHealthyResponse;
+    200: OpenapiOpsHealthyResponse;
 };
 
-export type OpenapiRouterHealthyResponse2 = OpenapiRouterHealthyResponses[keyof OpenapiRouterHealthyResponses];
+export type OpenapiOpsHealthyResponse2 = OpenapiOpsHealthyResponses[keyof OpenapiOpsHealthyResponses];
