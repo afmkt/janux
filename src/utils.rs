@@ -457,7 +457,7 @@ where
     if crate::jwt::InvalidJwt::global().is_valid(jwt).await {
         return Err(TokenReject::Revoked);
     }
-    let all_data = crate::jwt::jwt_decode::<T>(jwt, 2, tenant)
+    let all_data = crate::jwt::jwt_decode::<T>(jwt, crate::jwt::VERIFICATION_GRACE_MINUTES, tenant)
         .await
         .map_err(|_| TokenReject::Invalid)?;
     if all_data.claims.iss != issuer {

@@ -168,6 +168,14 @@ fn compute_at_hash(access_token: &str) -> Option<String> {
     Some(URL_SAFE_NO_PAD.encode(&digest[..16]))
 }
 
+/// The clock-skew leeway, in minutes, that every token verification path
+/// accepts (callers of `jwt_decode` pass it as `grace`). Revocation records
+/// must outlive this window past a token's expiry: verification accepts the
+/// token until `exp + leeway`, so a record dropped at `exp` would let a
+/// revoked or already-rotated token verify — or rotate — again during the
+/// window tail after a gc tick or a restart.
+pub const VERIFICATION_GRACE_MINUTES: i32 = 2;
+
 pub async fn jwt_decode<T>(
     token: &str,
     grace: i32,
@@ -309,7 +317,8 @@ impl InvalidJwt {
     /// exactly one of several concurrent callers racing on the same token
     /// (e.g. competing refresh-token rotations) observes `true`.
     pub async fn invalid(&self, token: &str, tenant: &mut crate::db::Tenant) -> Result<bool> {
-        let tkn = jwt_decode::<serde_json::Value>(token, 2, tenant).await?;
+        let tkn =
+            jwt_decode::<serde_json::Value>(token, VERIFICATION_GRACE_MINUTES, tenant).await?;
         let exp_ts = jiff::Timestamp::from_second(tkn.claims.exp as i64)?;
         self.invalid_raw(token, exp_ts).await
     }
@@ -326,6 +335,19 @@ impl InvalidJwt {
     /// family over a transient persistence error.
     pub async fn invalid_raw(&self, id: &str, expire_at: jiff::Timestamp) -> Result<bool> {
         let key = Self::revocation_id(id);
+        // Retain the record for the token's full verification window: the
+        // token is accepted until `expire_at + leeway`, and every prune path
+        // (gc, restart hydration, read-through) drops records at their
+        // `expire_at`, so storing the extended deadline keeps a revoked or
+        // rotated token rejected for as long as it can still verify. The
+        // extra second covers the JWT clock's whole-second truncation:
+        // verification accepts through the entire boundary second
+        // `[exp + leeway, exp + leeway + 1s)`, which a sub-second prune
+        // comparison would otherwise cut short.
+        let extended = expire_at
+            .checked_add(VERIFICATION_GRACE_MINUTES.minutes())
+            .unwrap_or(expire_at);
+        let expire_at = extended.checked_add(1.second()).unwrap_or(extended);
         if self.cache.insert(key.clone(), expire_at).await.is_err() {
             return Ok(false);
         }
@@ -426,6 +448,52 @@ mod tests {
         assert!(
             !a.is_valid("g71-never-revoked").await,
             "an unknown identifier must stay accepted"
+        );
+    }
+
+    /// regression: verification accepts tokens until `exp + leeway`, so a
+    /// revocation record must survive gc ticks and restart hydration for
+    /// that whole window — a record pruned at bare `exp` would let a
+    /// revoked token verify (or rotate) again during the leeway tail.
+    /// Records whose retention deadline (`exp + leeway`) has fully passed
+    /// must still be pruned.
+    #[tokio::test]
+    async fn revocation_survives_gc_and_restart_through_the_leeway_window() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = InvalidJwt::create(tmp.path()).await.expect("store");
+
+        let token = "g120-expired-within-leeway";
+        let exp = jiff::Timestamp::now()
+            .checked_sub(1.minutes())
+            .expect("past expiry");
+        assert!(store.invalid_raw(token, exp).await.expect("revoke"));
+
+        store.gc().await.expect("gc");
+        assert!(
+            store.is_valid(token).await,
+            "gc must retain the record while the token can still verify (exp + leeway)"
+        );
+
+        // A fresh instance on the same directory is the restart path:
+        // hydration skips records at `expire_at < now`, so the extended
+        // deadline is what keeps this revocation alive.
+        let restarted = InvalidJwt::create(tmp.path())
+            .await
+            .expect("restarted store");
+        assert!(
+            restarted.is_valid(token).await,
+            "restart hydration must retain the record through the leeway window"
+        );
+
+        let old = "g120-expired-beyond-leeway";
+        let old_exp = jiff::Timestamp::now()
+            .checked_sub((VERIFICATION_GRACE_MINUTES + 1).minutes())
+            .expect("past expiry");
+        assert!(store.invalid_raw(old, old_exp).await.expect("revoke"));
+        store.gc().await.expect("gc");
+        assert!(
+            !store.is_valid(old).await,
+            "a record past exp + leeway must be pruned by gc"
         );
     }
 }

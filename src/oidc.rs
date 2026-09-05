@@ -2590,7 +2590,13 @@ async fn handle_refresh(
     // internal /auth/refresh flow (Tenant::refresh_jwt). Nothing is mutated
     // before the commit point, so a rejected request cannot consume the
     // token.
-    let tkn = match crate::jwt::jwt_decode::<OidcRefreshTokenData>(&rt, 2, tenant).await {
+    let tkn = match crate::jwt::jwt_decode::<OidcRefreshTokenData>(
+        &rt,
+        crate::jwt::VERIFICATION_GRACE_MINUTES,
+        tenant,
+    )
+    .await
+    {
         Ok(t) => t,
         Err(_) => {
             token_error(
@@ -3242,7 +3248,12 @@ pub async fn revoke(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // or expired token is indistinguishable from an unknown one → 200
     // (RFC 7009 §2.2).
     let _hint = params.token_type_hint.as_deref();
-    let tkn = match crate::jwt::jwt_decode::<serde_json::Value>(&params.token, 2, &mut tenant).await
+    let tkn = match crate::jwt::jwt_decode::<serde_json::Value>(
+        &params.token,
+        crate::jwt::VERIFICATION_GRACE_MINUTES,
+        &mut tenant,
+    )
+    .await
     {
         Ok(t) => t,
         Err(_) => {

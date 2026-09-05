@@ -683,7 +683,12 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
 
     // ── Terminate the presented session (Bearer JWT) ───────────────────
     if let Some(jwt) = crate::utils::get_jwt(req).map(str::to_string)
-        && let Ok(tkn) = crate::jwt::jwt_decode::<crate::db::JwtData>(&jwt, 2, &mut tenant).await
+        && let Ok(tkn) = crate::jwt::jwt_decode::<crate::db::JwtData>(
+            &jwt,
+            crate::jwt::VERIFICATION_GRACE_MINUTES,
+            &mut tenant,
+        )
+        .await
         && tkn.claims.iss == issuer
         && tkn.claims.aud == domain
         && let Ok(exp) = jiff::Timestamp::from_second(tkn.claims.exp as i64)

@@ -59,9 +59,13 @@ pub async fn logout(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain)
     {
         let issuer = crate::utils::get_issuer(req, state);
-        let decoded = crate::jwt::jwt_decode::<crate::db::JwtData>(jwt, 2, &mut tenant)
-            .await
-            .ok();
+        let decoded = crate::jwt::jwt_decode::<crate::db::JwtData>(
+            jwt,
+            crate::jwt::VERIFICATION_GRACE_MINUTES,
+            &mut tenant,
+        )
+        .await
+        .ok();
         if crate::utils::revoke_token(&mut tenant, jwt, None, "logout")
             .await
             .is_ok()

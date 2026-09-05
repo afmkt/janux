@@ -238,7 +238,7 @@ impl Tenant {
     where
         T: DeserializeOwned,
     {
-        let all_data = jwt_decode::<T>(token, 2, self).await?;
+        let all_data = jwt_decode::<T>(token, crate::jwt::VERIFICATION_GRACE_MINUTES, self).await?;
         if all_data.claims.iss != issuer {
             return Err(anyhow::anyhow!(
                 "Invalid token issuer {} vs. {}",
@@ -908,6 +908,50 @@ mod tests {
         assert!(
             InvalidJwt::global().is_valid(&token).await,
             "the expired token must be revoked by its rotation"
+        );
+    }
+
+    /// regression: an already-rotated token that is expired but still
+    /// within the verification leeway must not mint a SECOND successor —
+    /// the revocation record has to survive gc for the whole window in
+    /// which the token can still rotate.
+    #[tokio::test]
+    async fn refresh_rejects_reuse_of_an_expired_rotated_token_after_gc() {
+        let (storage, _tmp) = refresh_test_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let key = tenant.current_key(DOMAIN).expect("signing key");
+        let alice = tenant.user("alice").await.expect("alice exists");
+        let data = JwtData {
+            user: alice.id.to_string(),
+            username: "alice".into(),
+            domain: DOMAIN.into(),
+            mfa: HashSet::new(),
+            roles: HashSet::new(),
+        };
+        let token = crate::jwt::jwt_authenticate(
+            TEST_ISSUER,
+            &alice.id.to_string(),
+            &data,
+            &key,
+            -1,
+            crate::jwt::JwtOidcParams {
+                client_id: DOMAIN.to_string(),
+                nonce: None,
+                amr: None,
+                acr: None,
+                access_token: None,
+                auth_time: None,
+            },
+        )
+        .expect("expired token");
+
+        refresh(&mut tenant, &token)
+            .await
+            .expect("first rotation of the expired-within-leeway token");
+        InvalidJwt::global().gc().await.expect("gc");
+        assert!(
+            refresh(&mut tenant, &token).await.is_err(),
+            "the rotated token must stay refused as reuse after gc (no second successor)"
         );
     }
 
