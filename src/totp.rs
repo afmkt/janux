@@ -75,9 +75,7 @@ impl Totp {
             6,
             1,
             30,
-            Secret::Raw(secret.as_bytes().to_vec())
-                .to_bytes()
-                .unwrap(),
+            Secret::Raw(secret.as_bytes().to_vec()).to_bytes().unwrap(),
             Some(self.domain_id.clone()),
             self.user_id.to_string(),
         )
@@ -199,7 +197,7 @@ impl Tenant {
         let updated = toasty::update!(Totp::filter(
             Totp::fields()
                 .user_id()
-                .eq(totp.user_id.clone())
+                .eq(totp.user_id)
                 .and(Totp::fields().name().eq(totp.name.clone()))
                 .and(Totp::fields().domain_id().eq(totp.domain_id.clone()))
         ) { secret: encrypted.clone() })
@@ -1390,8 +1388,7 @@ mod tests {
         let (state, _tmp) = totp_test_env().await;
         let service = totp_service(state.clone());
 
-        let (status, body) =
-            post_enroll(&service, &serde_json::json!({ "name": "device1" })).await;
+        let (status, body) = post_enroll(&service, &serde_json::json!({ "name": "device1" })).await;
         assert_eq!(status, StatusCode::OK);
         let uri = body["data"]["uri"].as_str().expect("uri").to_string();
 

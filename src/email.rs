@@ -1771,10 +1771,7 @@ mod tests {
         legacy.save(&mut tenant).await.expect("save");
         let raw = tenant.config_get("resend.key").await.expect("raw value");
         let raw = raw.as_str().expect("string");
-        assert_ne!(
-            raw, "re_test_key",
-            "the config table must hold ciphertext"
-        );
+        assert_ne!(raw, "re_test_key", "the config table must hold ciphertext");
         assert_eq!(
             crate::crypto::decrypt_secret(raw).expect("ciphertext"),
             "re_test_key"
