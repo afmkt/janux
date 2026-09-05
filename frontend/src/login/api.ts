@@ -13,9 +13,19 @@ export interface FactorInfo {
 
 export interface Discovery {
   issuer: string
+  /**
+   * False when the host is not a registered tenant domain: the server
+   * still answers discovery (Tier A — issuer and endpoint URLs are
+   * derived from the request) but advertises no factors, so no login
+   * ceremony can succeed. Absent on older servers; treat as provisioned.
+   */
+  janux_provisioned?: boolean
   acr_values_supported: string[]
   janux_factors: Record<string, FactorInfo>
 }
+
+export const NOT_PROVISIONED_TEXT =
+  'This site is not set up yet — the domain is not provisioned on this Janux server.'
 
 export async function fetchDiscovery(): Promise<Discovery> {
   const res = await fetch('/.well-known/openid-configuration')

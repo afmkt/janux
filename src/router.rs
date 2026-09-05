@@ -1,47 +1,64 @@
 use salvo::logging::Logger;
 use salvo::prelude::*;
-use salvo::serve_static::static_embed;
-// use salvo::serve_static::StaticDir;
-use rust_embed::RustEmbed;
 use salvo::rate_limiter::{BasicQuota, FixedGuard, MokaStore, RateLimiter};
 
-#[derive(RustEmbed)]
-#[folder = "./frontend/dist"]
-struct Assets;
+/// The per-domain frontend override root for this request, when the
+/// operator configured one (`pages_dir` in the seed config). Resolution
+/// goes through the same trusted host chain as every other endpoint, so
+/// an unregistered host never reaches a disk dir — it gets the embedded
+/// frontend.
+fn override_dir(req: &Request, depot: &Depot) -> Option<std::path::PathBuf> {
+    let state = depot.obtain::<crate::server::ServerState>().ok()?;
+    let domain = crate::utils::get_domain(req, state)?;
+    state
+        .pages_dirs
+        .get(domain)
+        .map(|entry| entry.value().clone())
+}
+
+async fn serve_page(req: &Request, depot: &Depot, res: &mut Response, name: &str) {
+    let dir = override_dir(req, depot);
+    crate::pages::serve(req, res, name, dir.as_deref()).await;
+}
 
 pub fn frontend() -> Router {
     Router::with_path("{*path}")
-        .get(static_embed::<Assets>())
+        .get(static_asset)
         .hoop(Logger::new())
 }
 
-fn render_embedded_page(res: &mut Response, name: &str) {
-    match Assets::get(name) {
-        Some(page) => res.render(Text::Html(String::from_utf8_lossy(&page.data).into_owned())),
-        None => {
-            res.status_code(StatusCode::NOT_FOUND);
-        }
+#[handler]
+async fn static_asset(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let path = req
+        .params()
+        .get("path")
+        .map(String::as_str)
+        .unwrap_or_default();
+    if path.is_empty() {
+        res.status_code(StatusCode::NOT_FOUND);
+        return;
     }
+    serve_page(req, depot, res, path).await;
 }
 
 #[handler]
-fn login_page(res: &mut Response) {
-    render_embedded_page(res, "login.html");
+async fn login_page(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    serve_page(req, depot, res, "login.html").await;
 }
 
 #[handler]
-fn consent_page(res: &mut Response) {
-    render_embedded_page(res, "consent.html");
+async fn consent_page(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    serve_page(req, depot, res, "consent.html").await;
 }
 
 #[handler]
-fn device_login_page(res: &mut Response) {
-    render_embedded_page(res, "device.html");
+async fn device_login_page(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    serve_page(req, depot, res, "device.html").await;
 }
 
 #[handler]
-fn admin_page(res: &mut Response) {
-    render_embedded_page(res, "admin.html");
+async fn admin_page(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    serve_page(req, depot, res, "admin.html").await;
 }
 
 #[handler]
@@ -562,5 +579,65 @@ mod tests {
                 .await;
             assert_ne!(res.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
         }
+    }
+
+    /// Tier-A discovery: an unregistered host still receives a well-formed
+    /// skeleton document — issuer derived from the request, no factors,
+    /// `janux_provisioned: false` — instead of an opaque 404.
+    #[tokio::test]
+    async fn discovery_serves_skeleton_for_unprovisioned_host() {
+        use salvo::test::ResponseExt;
+        let service = public_service(empty_state().await);
+        let mut req = get_from("203.0.113.33:5000", "/.well-known/openid-configuration");
+        req.headers_mut().insert(
+            salvo::http::header::HOST,
+            "fresh.example.com".parse().unwrap(),
+        );
+        let mut res = service.handle(req).await;
+        assert_eq!(res.status_code, Some(StatusCode::OK));
+        let doc: serde_json::Value = res.take_json().await.expect("json body");
+        assert_eq!(doc["janux_provisioned"], serde_json::json!(false));
+        assert_eq!(doc["issuer"], serde_json::json!("http://fresh.example.com"));
+        assert_eq!(doc["janux_factors"], serde_json::json!({}));
+        assert_eq!(doc["acr_values_supported"], serde_json::json!([]));
+        assert_eq!(
+            doc["token_endpoint"],
+            serde_json::json!("http://fresh.example.com/token")
+        );
+        assert!(
+            doc.get("registration_endpoint").is_none(),
+            "the skeleton must not advertise DCR"
+        );
+    }
+
+    /// A request with no usable host at all still 404s — the skeleton needs
+    /// at least a Host header to derive an issuer from.
+    #[tokio::test]
+    async fn discovery_without_host_is_not_found() {
+        let service = public_service(empty_state().await);
+        let res = service
+            .handle(get_from(
+                "203.0.113.34:5000",
+                "/.well-known/openid-configuration",
+            ))
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::NOT_FOUND));
+    }
+
+    /// JWKS for an unprovisioned host stays a valid, empty key set — the
+    /// skeleton discovery document points at it, so it must not 404.
+    #[tokio::test]
+    async fn jwks_for_unprovisioned_host_is_empty_but_valid() {
+        use salvo::test::ResponseExt;
+        let service = public_service(empty_state().await);
+        let mut req = get_from("203.0.113.35:5000", "/.well-known/jwks.json");
+        req.headers_mut().insert(
+            salvo::http::header::HOST,
+            "fresh.example.com".parse().unwrap(),
+        );
+        let mut res = service.handle(req).await;
+        assert_eq!(res.status_code, Some(StatusCode::OK));
+        let doc: serde_json::Value = res.take_json().await.expect("json body");
+        assert_eq!(doc["keys"], serde_json::json!([]));
     }
 }

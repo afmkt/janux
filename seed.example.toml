@@ -37,7 +37,22 @@
 
 [[seed]]
 name = "localhost"
+# Domain fields:
+#   id        — hostname clients reach this tenant at (Host / X-Forwarded-Host).
+#   cors      — [] forbid, ["tenant"] share among the tenant's domains,
+#               or an explicit allow list.
+#   pages_dir — optional filesystem root of per-domain frontend page
+#               overrides. Scaffold it with `janux dump-frontend <dir>`,
+#               prune/edit, then point the domain at it. Serving is
+#               per-file: anything missing from the dir falls back to the
+#               embedded frontend. Config-file-only by design — see
+#               docs/FRONTEND.md.
 domains = [{ id = "localhost", cors = [] }, { id = "0.0.0.0", cors = [] }]
+# Example with a page override:
+# domains = [
+#     { id = "localhost", cors = [] },
+#     { id = "auth.example.com", cors = ["tenant"], pages_dir = "./data/pages/auth.example.com" },
+# ]
 
 # Pre-built roles. Created before users and policies so that
 # policy_create can resolve them.

@@ -191,7 +191,12 @@ fn strip_default_port<'a>(host: &'a str, scheme: &str) -> &'a str {
     }
 }
 
-fn resolve_host<'a>(req: &'a Request, state: &ServerState) -> Option<(&'a str, &'a str)> {
+/// Client-visible host candidates in trust order: the proxy-forwarded host
+/// first (only when forwarding headers are trusted), then the raw `Host`
+/// header. Shared by tenant resolution ([`resolve_host`]) and the
+/// registration-free issuer derivation ([`raw_issuer`]) so both always see
+/// the same host the client used.
+fn host_candidates<'a>(req: &'a Request, state: &ServerState) -> Vec<&'a str> {
     let mut candidates: Vec<&'a str> = Vec::new();
     if state.trust_forwarded_headers
         && let Some(first) = req
@@ -213,7 +218,11 @@ fn resolve_host<'a>(req: &'a Request, state: &ServerState) -> Option<(&'a str, &
     {
         candidates.push(host);
     }
-    for candidate in candidates {
+    candidates
+}
+
+fn resolve_host<'a>(req: &'a Request, state: &ServerState) -> Option<(&'a str, &'a str)> {
+    for candidate in host_candidates(req, state) {
         if state.storage.router.contains_key(candidate) {
             return Some((candidate, candidate));
         }
@@ -297,9 +306,34 @@ pub fn forwarded_origin<'a>(
 /// Returns `None` when no registered tenant matches the request.
 pub fn get_issuer(req: &Request, state: &ServerState) -> Option<String> {
     let (host, _domain) = resolve_host(req, state)?;
+    Some(issuer_url(host, req, state))
+}
+
+/// Issuer URL derived from the request WITHOUT requiring a registered
+/// tenant — the Tier-A discovery fallback for unprovisioned hosts.
+///
+/// Same trust model as [`get_issuer`]: the host comes from the trusted
+/// proxy's `X-Forwarded-Host` or the raw `Host` header, the scheme from
+/// [`get_scheme`]. Unlike [`get_issuer`] it never consults the tenant
+/// router, so any host the client visibly used yields a well-formed issuer.
+/// Only used to render the skeleton discovery document
+/// (`janux_provisioned: false`); token issuance still requires a tenant.
+/// Returns `None` only when the request carries no host at all.
+pub fn raw_issuer(req: &Request, state: &ServerState) -> Option<String> {
+    let host = host_candidates(req, state).into_iter().next()?;
+    Some(issuer_url(host, req, state))
+}
+
+/// The single issuer-URL assembly: `<scheme>://<host>[:<port>]` from a
+/// client-visible host value. BOTH [`get_issuer`] and [`raw_issuer`] must
+/// build through this helper so the provisioned and skeleton documents can
+/// never drift apart in scheme, port or (future) normalization handling —
+/// discovery, token issuance and every `iss` comparison rely on that
+/// single-derivation invariant (OIDC Core §3.1.3.7, RFC 8414 §2).
+fn issuer_url(host: &str, req: &Request, state: &ServerState) -> String {
     let scheme = get_scheme(req, state);
     let host = strip_default_port(host, scheme.as_str());
-    Some(format!("{}://{}", scheme, host))
+    format!("{}://{}", scheme, host)
 }
 
 pub fn get_jwt(req: &Request) -> Option<&str> {
@@ -1087,6 +1121,79 @@ mod tests {
         let state = test_state(false, &["tenant.example.com"]).await;
         let req = req_with(Some("unknown.example.com"), None, None, None, "/");
         assert_eq!(get_issuer(&req, &state), None);
+    }
+
+    // ── raw_issuer: Tier-A discovery fallback ───────────────────────────────
+
+    #[tokio::test]
+    async fn raw_issuer_derives_from_unregistered_host() {
+        let state = test_state(false, &["tenant.example.com"]).await;
+        let req = req_with(Some("fresh.example.com"), None, None, None, "/");
+        assert_eq!(
+            raw_issuer(&req, &state),
+            Some("http://fresh.example.com".to_string())
+        );
+        // Registered hosts derive the same issuer through both paths.
+        let req = req_with(Some("tenant.example.com"), None, None, None, "/");
+        assert_eq!(raw_issuer(&req, &state), get_issuer(&req, &state));
+    }
+
+    #[tokio::test]
+    async fn raw_issuer_strips_default_port_and_honors_scheme() {
+        let state = test_state(false, &[]).await;
+        let req = with_scheme(
+            req_with(Some("fresh.example.com:443"), None, None, None, "/"),
+            salvo::http::uri::Scheme::HTTPS,
+        );
+        assert_eq!(
+            raw_issuer(&req, &state),
+            Some("https://fresh.example.com".to_string())
+        );
+        let req = req_with(Some("fresh.example.com:8080"), None, None, None, "/");
+        assert_eq!(
+            raw_issuer(&req, &state),
+            Some("http://fresh.example.com:8080".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_issuer_follows_the_same_header_trust_model() {
+        // Untrusted: a spoofed XFH must not steer the skeleton issuer.
+        let state = test_state(false, &[]).await;
+        let req = req_with(
+            Some("real.example.com"),
+            Some("spoofed.example.com"),
+            None,
+            None,
+            "/",
+        );
+        assert_eq!(
+            raw_issuer(&req, &state),
+            Some("http://real.example.com".to_string())
+        );
+        // Trusted: the proxy-forwarded host is the client-visible one.
+        let state = test_state(true, &[]).await;
+        let req = with_proto(
+            req_with(
+                Some("internal.upstream"),
+                Some("public.example.com"),
+                None,
+                None,
+                "/",
+            ),
+            "https",
+        );
+        assert_eq!(
+            raw_issuer(&req, &state),
+            Some("https://public.example.com".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_issuer_without_any_host_is_none() {
+        let state = test_state(false, &[]).await;
+        let req = req_with(None, None, None, None, "/");
+        assert_eq!(raw_issuer(&req, &state), None);
     }
 
     #[test]

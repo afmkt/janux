@@ -12,6 +12,7 @@ import {
 } from '@mantine/core'
 import '@mantine/core/styles.css'
 import {
+  NOT_PROVISIONED_TEXT,
   fetchDiscovery,
   postJson,
   routeAfterAuth,
@@ -115,7 +116,13 @@ function App() {
       return
     }
     fetchDiscovery()
-      .then(setDiscovery)
+      .then((d) => {
+        // Tier-A discovery: an unprovisioned host still gets a document,
+        // but with no factors nothing can authenticate — say so instead
+        // of rendering a dead login form.
+        if (d.janux_provisioned === false) setLoadError(NOT_PROVISIONED_TEXT)
+        else setDiscovery(d)
+      })
       .catch((e: Error) => setLoadError(e.message))
   }, [finish])
 

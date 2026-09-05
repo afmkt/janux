@@ -21,13 +21,23 @@ KNOWN_GRANTS = {
 def test_discovery_served_for_known_tenant(janux_env):
     r = janux_env.http.get("/.well-known/openid-configuration")
     assert r.status_code == 200
+    assert r.json().get("janux_provisioned") is True
 
 
-def test_discovery_unknown_tenant_is_not_found(janux_env):
+def test_discovery_unknown_tenant_gets_unprovisioned_skeleton(janux_env):
+    # Tier-A discovery: an unregistered host still gets a well-formed
+    # document (issuer derived from the request) but advertises no
+    # capabilities — no tenant state is leaked and no token can be minted.
     r = janux_env.http.get(
         "/.well-known/openid-configuration", headers={"Host": "unknown.example"}
     )
-    assert r.status_code == 404
+    assert r.status_code == 200
+    doc = r.json()
+    assert doc.get("janux_provisioned") is False
+    assert doc["issuer"].endswith("unknown.example")
+    assert doc["janux_factors"] == {}
+    assert doc["acr_values_supported"] == []
+    assert "registration_endpoint" not in doc
 
 
 @pytest.mark.parametrize("field", REQUIRED_METADATA)

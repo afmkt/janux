@@ -54,6 +54,8 @@ pub mod cors;
 pub mod ops;
 #[path = "otp.rs"]
 pub mod otp;
+#[path = "pages.rs"]
+pub mod pages;
 #[path = "passkey.rs"]
 pub mod passkey;
 #[path = "router.rs"]

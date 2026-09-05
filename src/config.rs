@@ -51,6 +51,19 @@ impl Tenant {
             .and_then(|r| serde_json::from_str(&r.value).ok())
     }
 
+    /// Delete a config entry. Deleting a missing key is a no-op, NOT an
+    /// error — declarative seeding (e.g. `pages_dir` removed from the seed
+    /// config) must succeed on tenants that never carried the key.
+    pub async fn config_delete(&mut self, name: &str) -> Result<()> {
+        if Config::get_by_id(&mut self.database, name).await.is_err() {
+            return Ok(());
+        }
+        Config::delete_by_id(&mut self.database, name)
+            .await
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
     /// Get all config entries for a given type.
     pub async fn config_list(&mut self, prefix: &str) -> Vec<(String, serde_json::Value)> {
         match Config::all().exec(&mut self.database).await.ok() {

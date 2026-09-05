@@ -15,6 +15,7 @@ mod oidc;
 mod oidc_ext;
 mod ops;
 mod otp;
+mod pages;
 mod passkey;
 mod policy;
 mod role;
@@ -41,12 +42,46 @@ struct Cli {
     /// merged over earlier ones (default: base.toml + seed.toml)
     #[arg(short, long)]
     config: Vec<String>,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Commands {
+    /// Dump the embedded frontend into DIR as a scaffold for per-domain
+    /// page overrides, then exit (the server does NOT start). Prune DIR to
+    /// the files you want to override, point a domain at it with
+    /// `pages_dir` in the seed config, and restart. Serving is per-file:
+    /// anything missing from DIR falls back to the embedded frontend.
+    DumpFrontend {
+        /// Target directory (created if missing; existing files overwritten)
+        dir: std::path::PathBuf,
+    },
 }
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
     tracing_subscriber::fmt().init();
+
+    if let Some(Commands::DumpFrontend { dir }) = cli.command {
+        match pages::dump_frontend(&dir) {
+            Ok(n) => {
+                println!(
+                    "Dumped {n} frontend files to {} (janux {}, marker {})",
+                    dir.display(),
+                    pages::version(),
+                    pages::VERSION_MARKER
+                );
+                return;
+            }
+            Err(e) => {
+                eprintln!("Failed to dump frontend to {}: {e}", dir.display());
+                std::process::exit(1);
+            }
+        }
+    }
 
     // Use --config if provided, fall back to JANUX_CONFIG_FILE env var,
     // then the default base.toml + seed.toml pair

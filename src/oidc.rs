@@ -624,9 +624,22 @@ pub async fn well_known(req: &mut Request, depot: &mut Depot, res: &mut Response
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or_default()
         .to_string();
-    let Some(issuer) = crate::utils::get_issuer(req, state) else {
-        res.status_code(StatusCode::NOT_FOUND);
-        return;
+    // Tier-A discovery: a registered domain gets the full tenant document;
+    // an unprovisioned host gets a skeleton derived purely from the request
+    // (issuer + endpoint URLs, no factors, `janux_provisioned: false`) so
+    // the login page renders and explains itself instead of facing an
+    // opaque 404. Only a request with no usable host at all still 404s.
+    // The skeleton leaks nothing: no tenant state, no keys — and no token
+    // can ever be minted for an unprovisioned host.
+    let (issuer, provisioned) = match crate::utils::get_issuer(req, state) {
+        Some(issuer) => (issuer, true),
+        None => match crate::utils::raw_issuer(req, state) {
+            Some(issuer) => (issuer, false),
+            None => {
+                res.status_code(StatusCode::NOT_FOUND);
+                return;
+            }
+        },
     };
     let base = issuer.clone();
 
@@ -638,65 +651,71 @@ pub async fn well_known(req: &mut Request, depot: &mut Depot, res: &mut Response
     let mut acr_values: Vec<String> = Vec::new();
     let mut factors = serde_json::Map::new();
     let mut dcr_enabled = false;
-    if let Some(mut tenant) = state.storage.tenant_by_domain(&domain) {
-        dcr_enabled = tenant.dcr_enabled().await;
-        if crate::config::ResendDTO::load(&mut tenant).await.is_some() {
-            acr_values.push("email".into());
-            factors.insert(
-                "email".into(),
-                serde_json::json!({
-                    "enabled": true,
-                    "request": "/api/v1/auth/email/request",
-                    "verify": "/api/v1/auth/email/verify",
-                    "identifier": "email",
-                }),
-            );
-        }
-        if crate::config::OTPDTO::load(&mut tenant).await.is_some() {
-            acr_values.push("otp".into());
-            factors.insert(
-                "otp".into(),
-                serde_json::json!({
-                    "enabled": true,
-                    "request": "/api/v1/auth/otp/request",
-                    "verify": "/api/v1/auth/otp/verify",
-                    "identifier": "mobile",
-                }),
-            );
-        }
-        let providers: Vec<serde_json::Value> = tenant
-            .all_providers()
-            .await
-            .into_iter()
-            .map(|p| {
-                serde_json::json!({
-                    "id": p.id,
-                    "request": format!("/api/v1/auth/social/{}/request", p.id),
+    // Factors are tenant state: an unprovisioned host advertises none (not
+    // even passkey — credential registration needs the tenant's user and
+    // key stores), so the login page shows the "not provisioned" state.
+    if provisioned {
+        if let Some(mut tenant) = state.storage.tenant_by_domain(&domain) {
+            dcr_enabled = tenant.dcr_enabled().await;
+            if crate::config::ResendDTO::load(&mut tenant).await.is_some() {
+                acr_values.push("email".into());
+                factors.insert(
+                    "email".into(),
+                    serde_json::json!({
+                        "enabled": true,
+                        "request": "/api/v1/auth/email/request",
+                        "verify": "/api/v1/auth/email/verify",
+                        "identifier": "email",
+                    }),
+                );
+            }
+            if crate::config::OTPDTO::load(&mut tenant).await.is_some() {
+                acr_values.push("otp".into());
+                factors.insert(
+                    "otp".into(),
+                    serde_json::json!({
+                        "enabled": true,
+                        "request": "/api/v1/auth/otp/request",
+                        "verify": "/api/v1/auth/otp/verify",
+                        "identifier": "mobile",
+                    }),
+                );
+            }
+            let providers: Vec<serde_json::Value> = tenant
+                .all_providers()
+                .await
+                .into_iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "id": p.id,
+                        "request": format!("/api/v1/auth/social/{}/request", p.id),
+                    })
                 })
-            })
-            .collect();
-        if !providers.is_empty() {
-            acr_values.push("social".into());
-            factors.insert(
-                "social".into(),
-                serde_json::json!({ "enabled": true, "providers": providers }),
-            );
+                .collect();
+            if !providers.is_empty() {
+                acr_values.push("social".into());
+                factors.insert(
+                    "social".into(),
+                    serde_json::json!({ "enabled": true, "providers": providers }),
+                );
+            }
         }
+        acr_values.push("passkey".into());
+        factors.insert(
+            "passkey".into(),
+            serde_json::json!({
+                "enabled": true,
+                "request": "/api/v1/auth/passkey/request",
+                "verify": "/api/v1/auth/passkey/verify",
+                "identifier": null,
+            }),
+        );
     }
-    acr_values.push("passkey".into());
-    factors.insert(
-        "passkey".into(),
-        serde_json::json!({
-            "enabled": true,
-            "request": "/api/v1/auth/passkey/request",
-            "verify": "/api/v1/auth/passkey/verify",
-            "identifier": null,
-        }),
-    );
 
     res.status_code(StatusCode::OK);
     let mut doc = serde_json::json!({
         "issuer": issuer,
+        "janux_provisioned": provisioned,
         "jwks_uri": format!("{}/.well-known/jwks.json", base),
         "authorization_endpoint": format!("{}/authorize", base),
         "token_endpoint": format!("{}/token", base),

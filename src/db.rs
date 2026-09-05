@@ -477,6 +477,11 @@ impl Storage {
             .get_mut(&tenant_name)
             .ok_or_else(|| anyhow::anyhow!("Tenant '{}' not found", tenant_name))?;
         tenant.domain_delete(domain).await?;
+        // Drop the pages-override binding too, so re-registering this
+        // domain later does not resurrect a stale override dir at boot.
+        tenant
+            .config_delete(&crate::pages::pages_config_key(domain))
+            .await?;
 
         self.router.remove(domain);
         Ok(())

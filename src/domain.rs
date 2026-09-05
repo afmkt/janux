@@ -18,6 +18,11 @@ pub struct DomainDTO {
     pub acme_email: Option<String>,
     pub cert: Option<String>,
     pub key: Option<String>,
+    /// Filesystem root of the per-domain frontend page overrides (scaffold
+    /// dumped by `janux dump-frontend`). Config-file-only by design — see
+    /// `crate::pages`. Stored in the tenant Config store (`pages.<domain>`,
+    /// the migration-free extension point) rather than as a Domain column.
+    pub pages_dir: Option<String>,
 }
 impl DomainDTO {
     pub async fn save(&self, tenant: &mut Tenant) -> Result<()> {
@@ -41,6 +46,24 @@ impl DomainDTO {
                     self.key.clone(),
                 )
                 .await?;
+        }
+        // Declarative: an absent `pages_dir` REMOVES a previously seeded
+        // binding, so deleting it from the config file actually disables
+        // the override on restart (seeding is otherwise upsert-only).
+        match &self.pages_dir {
+            Some(dir) => {
+                tenant
+                    .config_set(
+                        &crate::pages::pages_config_key(&self.id),
+                        serde_json::json!(dir),
+                    )
+                    .await?;
+            }
+            None => {
+                tenant
+                    .config_delete(&crate::pages::pages_config_key(&self.id))
+                    .await?;
+            }
         }
         Ok(())
     }

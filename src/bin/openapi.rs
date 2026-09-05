@@ -90,6 +90,9 @@ mod seed;
 #[path = "../domain.rs"]
 mod domain;
 
+#[path = "../pages.rs"]
+mod pages;
+
 fn main() {
     let api_router = router::api();
     let openapi = OpenApi::new("Secure Auth Microservice API", "1.0.0").merge_router(&api_router);

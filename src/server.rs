@@ -375,6 +375,11 @@ pub struct ServerStateInner {
     /// Deployment-wide switch for trusting `X-Forwarded-*` headers during
     /// tenant/path resolution (see `JanuxConfig::trust_forwarded_headers`).
     pub trust_forwarded_headers: bool,
+    /// domain -> canonicalized frontend override root (`crate::pages`).
+    /// Built once at boot from the tenant Config store (seeded via
+    /// `pages_dir` in the seed config); overrides are config-file-only, so
+    /// the cache never needs invalidation at runtime.
+    pub pages_dirs: dashmap::DashMap<String, std::path::PathBuf>,
 }
 
 /// Shared server state, cheap to clone (Arc inside) so it can be injected
@@ -399,12 +404,52 @@ impl std::ops::Deref for ServerState {
     }
 }
 
+/// Collect the per-domain frontend override dirs from the tenant Config
+/// stores (key `pages.<domain>`, seeded via `DomainDTO::pages_dir`) and
+/// run the boot-time version drift check on each. Canonicalized once here
+/// so request-time confinement compares against an absolute, `..`-free
+/// root; a dir that cannot be canonicalized (missing at boot) is kept as
+/// an absolute path — per-file lookups then miss and fall back to the
+/// embedded frontend.
+async fn load_pages_dirs(storage: &Storage) -> dashmap::DashMap<String, std::path::PathBuf> {
+    let map = dashmap::DashMap::new();
+    // Snapshot the domain list first: tenant_by_domain re-borrows the
+    // router map, so holding an iterator across the await would deadlock
+    // on a DashMap shard.
+    let domains: Vec<String> = storage
+        .router
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
+    for domain in domains {
+        let Some(mut tenant) = storage.tenant_by_domain(&domain) else {
+            continue;
+        };
+        let Some(dir) = tenant
+            .config_get(&crate::pages::pages_config_key(&domain))
+            .await
+            .and_then(|v| v.as_str().map(str::to_string))
+        else {
+            continue;
+        };
+        let path = std::path::PathBuf::from(&dir);
+        let root = std::fs::canonicalize(&path)
+            .or_else(|_| std::path::absolute(&path))
+            .unwrap_or(path);
+        crate::pages::check_drift(&domain, &root);
+        map.insert(domain, root);
+    }
+    map
+}
+
 impl ServerState {
     pub async fn create(storage: Storage, trust_forwarded_headers: bool) -> Result<ServerState> {
+        let pages_dirs = load_pages_dirs(&storage).await;
         Ok(ServerState {
             inner: std::sync::Arc::new(ServerStateInner {
                 storage,
                 trust_forwarded_headers,
+                pages_dirs,
             }),
         })
     }
