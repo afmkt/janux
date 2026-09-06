@@ -1136,6 +1136,14 @@ mod tests {
     async fn tenant_delete_backups_are_pruned_to_retention() {
         let (storage, tmp) = refresh_test_env().await;
         storage.new_tenant("prune-me").await.expect("tenant");
+        storage
+            .add_domain("prune.local", "prune-me")
+            .await
+            .expect("domain");
+        assert!(
+            storage.tenant_by_domain("prune.local").is_some(),
+            "the domain routes before the delete"
+        );
 
         // Pre-seed seven stale snapshots with ancient hex timestamps.
         let backups = tmp.path().join("backups");
@@ -1146,6 +1154,12 @@ mod tests {
         }
 
         storage.delete_tenant("prune-me").await.expect("delete");
+
+        // Cascade: the domain stops routing the moment the tenant is gone.
+        assert!(
+            storage.tenant_by_domain("prune.local").is_none(),
+            "tenant delete must drop the domain's router entry"
+        );
 
         let remaining: Vec<String> = std::fs::read_dir(&backups)
             .expect("read backups")
@@ -1174,6 +1188,41 @@ mod tests {
         assert!(
             backups.join(newest).join("janux.db").exists(),
             "the fresh backup must contain the database file"
+        );
+    }
+
+    /// regression H12: the domain→tenant router is persisted state, not
+    /// memory-only decoration — a fresh `Storage::init` over the same data
+    /// directory (a restart) rebuilds it from each tenant's `Domain` rows
+    /// with no re-seeding. (Cross-node invalidation remains out of scope:
+    /// single-instance deployment is the documented M1 constraint.)
+    #[tokio::test]
+    async fn router_is_rebuilt_from_disk_on_restart() {
+        let (storage, tmp) = refresh_test_env().await;
+        // A tenant + domain added at RUNTIME (never seeded from config).
+        storage.new_tenant("second").await.expect("second tenant");
+        storage
+            .add_domain("second.local", "second")
+            .await
+            .expect("domain");
+        assert!(storage.tenant_by_domain("second.local").is_some());
+        drop(storage);
+
+        // "Restart": a fresh Storage over the same directory.
+        let restarted = Storage::init(tmp.path()).await.expect("re-init");
+        assert!(
+            restarted.tenant_by_domain(DOMAIN).is_some(),
+            "the env's domain must route again after restart"
+        );
+        assert!(
+            restarted.tenant_by_domain("second.local").is_some(),
+            "a runtime-added domain must route again after restart"
+        );
+        assert!(
+            restarted
+                .tenant_by_domain("never-registered.local")
+                .is_none(),
+            "unknown domains must not route"
         );
     }
 

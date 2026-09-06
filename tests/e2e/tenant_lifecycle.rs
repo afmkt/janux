@@ -1,6 +1,13 @@
 //! E2E test: Tenant lifecycle management via admin APIs.
 //!
-//! Tests creating tenants, domains, users, roles, policies —  
+//! Unauthenticated-contract tests: the admin surface must fail closed
+//! (401) without a session, and public endpoints must answer 200. The
+//! old `assert!(resp.is_ok())` only proved "some HTTP response arrived"
+//! — a 500 passed just like a 200 (H8). The AUTHENTICATED lifecycle
+//! (create → bootstrap → delete → backup) runs in
+//! `z_integration_tests::full_tenant_lifecycle_create_and_delete`, which
+//! provisions a real root session.
+
 /// Test server is healthy before tenant creation.
 #[tokio::test]
 async fn test_server_healthy_before_tenant_ops() {
@@ -10,13 +17,12 @@ async fn test_server_healthy_before_tenant_ops() {
     let resp = client
         .get(format!("{}/api/v1/healthy", base_url.trim_end_matches('/')))
         .send()
-        .await;
+        .await
+        .expect("health request");
 
-    assert!(resp.is_ok());
-
-    if let Ok(response) = resp {
-        assert!(response.status().is_success());
-    }
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.expect("json body");
+    assert_eq!(body["ok"], true, "healthy body: {body}");
 }
 
 /// Test tenant list endpoint requires auth.
@@ -33,9 +39,14 @@ async fn test_tenant_list_requires_auth() {
         ))
         .header("Host", "localhost")
         .send()
-        .await;
+        .await
+        .expect("tenant list request");
 
-    assert!(resp.is_ok());
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "admin surface must fail closed without a session"
+    );
 }
 
 /// Test that the tenant delete endpoint requires proper auth.
@@ -53,9 +64,14 @@ async fn test_tenant_delete_requires_auth() {
         .header("Host", "localhost")
         .json(&serde_json::json!({"name": "test-tenant"}))
         .send()
-        .await;
+        .await
+        .expect("tenant delete request");
 
-    assert!(resp.is_ok());
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "tenant delete must fail closed without a session"
+    );
 }
 
 /// Test domain list endpoint.
@@ -72,14 +88,19 @@ async fn test_domain_list_requires_auth() {
         ))
         .header("Host", "localhost")
         .send()
-        .await;
+        .await
+        .expect("domain list request");
 
-    assert!(resp.is_ok());
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "domain list must fail closed without a session"
+    );
 }
 
-/// Test that the email request endpoint is reachable.
+/// Test that the email request endpoint rejects a body-less call.
 #[tokio::test]
-async fn test_email_request_endpoint_reachable() {
+async fn test_email_request_endpoint_rejects_empty_body() {
     let base_url = super::shared_server().await;
 
     let client = reqwest::Client::new();
@@ -91,14 +112,19 @@ async fn test_email_request_endpoint_reachable() {
         ))
         .header("Host", "localhost")
         .send()
-        .await;
+        .await
+        .expect("email request");
 
-    assert!(resp.is_ok());
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "a body-less magic-link request must be refused"
+    );
 }
 
 /// Test logout endpoint.
 #[tokio::test]
-async fn test_logout_endpoint_reachable() {
+async fn test_logout_endpoint_requires_token() {
     let base_url = super::shared_server().await;
 
     let client = reqwest::Client::new();
@@ -110,14 +136,19 @@ async fn test_logout_endpoint_reachable() {
         ))
         .header("Host", "localhost")
         .send()
-        .await;
+        .await
+        .expect("logout request");
 
-    assert!(resp.is_ok());
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "logout without a session must fail closed"
+    );
 }
 
 /// Test the refresh token endpoint.
 #[tokio::test]
-async fn test_refresh_endpoint_reachable() {
+async fn test_refresh_endpoint_requires_token() {
     let base_url = super::shared_server().await;
 
     let client = reqwest::Client::new();
@@ -128,7 +159,12 @@ async fn test_refresh_endpoint_reachable() {
             base_url.trim_end_matches('/')
         ))
         .send()
-        .await;
+        .await
+        .expect("refresh request");
 
-    assert!(resp.is_ok());
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "refresh without a token must fail closed"
+    );
 }

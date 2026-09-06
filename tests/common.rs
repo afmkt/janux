@@ -5,11 +5,22 @@
 #![allow(dead_code)] // shared helper surface; each test target uses a subset
 
 use std::process::{Child, Stdio};
+use std::sync::LazyLock;
 use tempfile::TempDir;
+
+/// Scratch backing dir for the test process's revocation-store singleton
+/// (see `provision_admin_session`) — must outlive every TestEnv.
+static PROVISION_STORE_DIR: LazyLock<TempDir> =
+    LazyLock::new(|| tempfile::tempdir().expect("provision store tempdir"));
+static PROVISION_STORE_INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
 pub struct TestEnv {
     pub base_url: String,
     pub admin_token: Option<String>,
+    /// The running server's data dir — for on-disk assertions (e.g. the
+    /// tenant-delete backup under `backups/{name}-{ts}/janux.db`).
+    data_dir: std::path::PathBuf,
+    encryption_key: String,
     _child: Option<Child>,
     _temp_dir: TempDir,
 }
@@ -76,26 +87,6 @@ fn extract_toml_value<T: std::str::FromStr>(content: &str, key: &str) -> Option<
 // ─── TestEnv implementation ───────────────────────────────────────────────────
 
 impl TestEnv {
-    /// Attempt to log in as admin@test.local (seeded user).
-    async fn login_admin(&self) -> Option<String> {
-        let resp = reqwest::Client::new()
-            .post(format!("{}/api/v1/auth/email/request", self.base_url))
-            .header("Host", "localhost")
-            .json(&serde_json::json!({
-                "user": "admin@test.local",
-                "channel": "email"
-            }))
-            .send()
-            .await
-            .ok()?;
-
-        if resp.status().is_success() {
-            Some("test-token-placeholder".to_string())
-        } else {
-            None
-        }
-    }
-
     /// Get the base URL string.
     pub fn base_url(&self) -> &str {
         &self.base_url
@@ -135,21 +126,77 @@ impl TestEnv {
     /// Always auto-starts a Janux server using `tests/test_config.toml` settings,
     /// allocating an available port starting from the configured base port.
     pub async fn new() -> Self {
-        Self::start(false).await
+        Self::start(false, false).await
     }
 
     /// Create a test environment whose server trusts `X-Forwarded-*` headers
     /// (`trust_forwarded_headers = true`) — the deployment mode used behind a reverse
     /// proxy such as Caddy `forward_auth`.
     pub async fn new_trust_forwarded_headers() -> Self {
-        Self::start(true).await
+        Self::start(true, false).await
     }
 
-    async fn start(trust_forwarded_headers: bool) -> Self {
+    /// Create a test environment with a REAL admin bearer token (H8).
+    ///
+    /// The old `login_admin` posted a wrong-shaped body and always fell
+    /// back to a placeholder string, so every "authenticated" test was
+    /// actually exercising the 401 path behind `assert!(resp.is_ok())`.
+    ///
+    /// Provisioning runs BEFORE the server starts (the tenant DBs are
+    /// exclusively locked while a process holds them) and does what a
+    /// deploying operator must do after seeding: seed the tenant from the
+    /// same config the server would use, create its first signing key
+    /// (seeding deliberately creates none), and mint a session for the
+    /// seeded `root@test.local` (root+admin — tenant/* policies bind
+    /// `root`, the rest `admin`). The server then starts with seeding
+    /// disabled and simply loads the provisioned data dir.
+    pub async fn new_with_auth() -> Self {
+        Self::start(false, true).await
+    }
+
+    async fn start(trust_forwarded_headers: bool, provision: bool) -> Self {
         let config = load_test_config();
-        let (port, child, temp_dir) =
-            start_test_server_with_port(&config.clone(), trust_forwarded_headers)
-                .expect("Failed to auto-start janux server — try: 'cargo build --bin janux'");
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let port = pick_port(&config);
+        let data_dir = temp_dir.path().join("data");
+
+        let mut admin_token = None;
+        let server_config_path = if provision {
+            // Seed + key + session in THIS process, then hand the server a
+            // config without a seed block so it cannot double-seed (policy
+            // rows have a unique constraint — a second seed would fail
+            // startup).
+            let seed_config =
+                build_test_config(temp_dir.path(), port, &config.encryption_key, false, true);
+            let token = provision_admin_session(&data_dir, &seed_config, &config.encryption_key)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "janux-test: failed to provision an admin session: {e:#} — \
+                         authenticated integration tests cannot run"
+                    )
+                });
+            println!("janux-test: provisioned seed + signing key + real admin session");
+            admin_token = Some(token);
+            build_test_config(
+                temp_dir.path(),
+                port,
+                &config.encryption_key,
+                trust_forwarded_headers,
+                false,
+            )
+        } else {
+            build_test_config(
+                temp_dir.path(),
+                port,
+                &config.encryption_key,
+                trust_forwarded_headers,
+                true,
+            )
+        };
+
+        let child = spawn_server(&server_config_path)
+            .expect("Failed to auto-start janux server — try: 'cargo build --bin janux'");
 
         if !wait_for_health(port).await {
             panic!("Janux server started but never became healthy. Check logs above.");
@@ -157,24 +204,64 @@ impl TestEnv {
 
         TestEnv {
             base_url: format!("http://127.0.0.1:{port}"),
-            admin_token: None,
+            admin_token,
+            data_dir,
+            encryption_key: config.encryption_key.clone(),
             _child: Some(child),
             _temp_dir: temp_dir,
         }
     }
 
-    /// Create a test environment with an admin bearer token.
-    pub async fn new_with_auth() -> Self {
-        let mut env = TestEnv::new().await;
-        if let Some(token) = env.login_admin().await {
-            println!("janux-test: extracted admin token");
-            env.admin_token = Some(token);
-        } else {
-            println!("janux-test: warning — no admin JWT (seeded user may not have auth enabled)");
-            env.admin_token = Some("test-placeholder-token".to_string());
-        }
-        env
+    /// The server's data directory (tenants/, backups/, revocation store).
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
     }
+}
+
+/// Seed the tenant, create its first signing key and mint the admin
+/// session — all through the janux lib, before the server process exists.
+async fn provision_admin_session(
+    data_dir: &std::path::Path,
+    seed_config: &std::path::Path,
+    encryption_key: &str,
+) -> anyhow::Result<String> {
+    // Same key for every env (tests/test_config.toml); the setter is
+    // process-wide first-call-wins and errors on later calls.
+    let _ = janux::crypto::setup_encryption_key(encryption_key);
+    // Occupy the process-wide revocation-store singleton with a scratch
+    // dir BEFORE `Storage::init`: the store opens its jwt.db exclusively,
+    // and binding the singleton to an env data dir would collide with the
+    // server process that later opens the same file.
+    PROVISION_STORE_INIT
+        .get_or_init(|| async {
+            janux::jwt::InvalidJwt::init_global(PROVISION_STORE_DIR.path())
+                .await
+                .expect("scratch revocation store");
+        })
+        .await;
+
+    let cfg = janux::server::JanuxConfig::load_from(&[seed_config
+        .to_str()
+        .expect("config path utf-8")
+        .to_string()])?;
+    let mut storage = janux::db::Storage::init(data_dir).await?;
+    storage = storage.seed(&cfg).await?;
+    let mut tenant = storage
+        .tenant_by_id("test-tenant")
+        .ok_or_else(|| anyhow::anyhow!("seeded tenant 'test-tenant' missing"))?;
+    tenant.key_create("localhost", "key1").await?;
+    let token = tenant
+        .authenticate_jwt(
+            &std::collections::HashSet::new(),
+            "http://localhost",
+            "localhost",
+            "root@test.local",
+            120,
+        )
+        .await?;
+    // `storage`/`tenant` drop here, releasing the tenant DB handles so the
+    // server process can open them exclusively-clean on boot.
+    Ok(token)
 }
 
 // ─── Port allocation and server startup ────────────────────────────────────────
@@ -183,11 +270,8 @@ fn is_port_available(port: u16) -> bool {
     std::net::TcpListener::bind(format!("127.0.0.1:{port}")).is_ok()
 }
 
-/// Allocate an available port starting from config base port, then start server.
-fn start_test_server_with_port(
-    config: &TestConfig,
-    trust_forwarded_headers: bool,
-) -> Result<(u16, Child, TempDir), String> {
+/// Allocate an available port starting from the configured base port.
+fn pick_port(config: &TestConfig) -> u16 {
     let seed: u32 = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -200,28 +284,14 @@ fn start_test_server_with_port(
         let port: u16 = config
             .base_port
             .wrapping_add(((seed as u16).wrapping_add((i as u16) * 7919u16)) % PORT_RANGE);
-
         if is_port_available(port) {
-            return try_start_server(config, port, trust_forwarded_headers);
+            return port;
         }
     }
-
-    Err("No available port found in range".into())
+    panic!("No available port found in range");
 }
 
-fn try_start_server(
-    config: &TestConfig,
-    port: u16,
-    trust_forwarded_headers: bool,
-) -> Result<(u16, Child, TempDir), String> {
-    let tmp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {e}"))?;
-    let config_path = build_test_config(
-        tmp_dir.path(),
-        port,
-        &config.encryption_key,
-        trust_forwarded_headers,
-    );
-
+fn spawn_server(config_path: &std::path::Path) -> Result<Child, String> {
     println!("janux-test: using config at {}", config_path.display());
 
     if !std::path::Path::new("./target/debug/janux").exists() {
@@ -241,34 +311,45 @@ fn try_start_server(
         .spawn()
         .map_err(|e| format!("Failed to start janux: {e}"))?;
 
-    println!("janux-test: server started on port {}", port);
-    Ok((port, child, tmp_dir))
+    println!(
+        "janux-test: server started with config {}",
+        config_path.display()
+    );
+    Ok(child)
 }
 
-/// Build a temporary test_config.toml with seeded tenant.
+/// Build a temporary server config. `include_seed` controls whether the
+/// server seeds the tenant itself (plain envs) or loads an already
+/// provisioned data dir (authenticated envs — double-seeding would trip
+/// the policy unique constraint and fail startup).
 fn build_test_config(
     tmp_dir: &std::path::Path,
     port: u16,
     encryption_key: &str,
     trust_forwarded_headers: bool,
+    include_seed: bool,
 ) -> std::path::PathBuf {
-    let config_content = format!(
-        r#"data_dir = "{data_dir}"
-encryption_key = "{encryption_key}"
-trust_forwarded_headers = {trust_forwarded_headers}
-
-[bind]
-address = "127.0.0.1"
-port = {port}
-
+    let seed_block = if include_seed {
+        format!(
+            r#"
 [[seed]]
 name = "test-tenant"
 domains = [{{ id = "localhost", cors = [] }}]
 # Roles must be declared before users reference them: user_add_role no
-# longer creates unknown roles (api-consolidation Step 4).
-roles = ["root", "admin", "user", "guest"]
-policies = []
+# longer creates unknown roles (api-consolidation Step 4). `scim` joins
+# the catalog so the seeded tenant mirrors bootstrap_tenant's builtin set.
+roles = ["root", "admin", "scim", "user", "guest"]
+# The seeded tenant gets ONLY the policies listed here (bootstrap_tenant's
+# standard set applies to runtime-created tenants), so mirror it — with an
+# empty list the protect hoop default-denies every admin endpoint and the
+# "authenticated" integration tests silently exercise nothing (H8).
+policies = [
+{policies}
+]
 users = [
+    # root+admin: tenant/* policies bind `root`, the rest bind `admin` —
+    # an operator session needs both to walk the whole admin surface.
+    {{ id = "root@test.local", active = true, roles = ["root", "admin"] }},
     {{ id = "admin@test.local", active = true, roles = ["admin"] }},
     {{ id = "user@test.local", active = true, roles = ["user"] }},
 ]
@@ -287,12 +368,93 @@ sign_name = "Test"
 region_id = "cn-shanghai"
 endpoint = "dysmsapi.aliyuncs.com"
 "#,
+            policies = seed_policy_rows("localhost")
+        )
+    } else {
+        String::new()
+    };
+
+    let config_content = format!(
+        r#"data_dir = "{data_dir}"
+encryption_key = "{encryption_key}"
+trust_forwarded_headers = {trust_forwarded_headers}
+
+[bind]
+address = "127.0.0.1"
+port = {port}
+{seed_block}"#,
         data_dir = tmp_dir.join("data").to_string_lossy(),
     );
 
-    let config_path = tmp_dir.join("test_config.toml");
+    // Distinct file names so the provisioned env's seed config and server
+    // config can coexist in one temp dir.
+    let file_name = if include_seed {
+        "seed_config.toml"
+    } else {
+        "test_config.toml"
+    };
+    let config_path = tmp_dir.join(file_name);
     std::fs::write(&config_path, &config_content).expect("Failed to write test config");
     config_path
+}
+
+/// TOML rows mirroring `STANDARD_ADMIN_POLICIES` (src/seed.rs) for the
+/// seeded test tenant: root owns tenant lifecycle, admin owns the rest,
+/// user gets the self-service rows.
+fn seed_policy_rows(domain: &str) -> String {
+    const ROOT: &[&str] = &[
+        "/api/v1/admin/tenant/list",
+        "/api/v1/admin/tenant/create",
+        "/api/v1/admin/tenant/delete",
+    ];
+    const ADMIN: &[&str] = &[
+        "/api/v1/admin/domain/list",
+        "/api/v1/admin/domain/create",
+        "/api/v1/admin/domain/delete",
+        "/api/v1/admin/user/list",
+        "/api/v1/admin/user/create",
+        "/api/v1/admin/user/activate",
+        "/api/v1/admin/user/delete",
+        "/api/v1/admin/user/add_role",
+        "/api/v1/admin/user/remove_role",
+        "/api/v1/admin/user/remove_email",
+        "/api/v1/admin/user/remove_mobile",
+        "/api/v1/admin/user/remove_social",
+        "/api/v1/admin/user/roles",
+        "/api/v1/admin/role/list",
+        "/api/v1/admin/role/create",
+        "/api/v1/admin/role/delete",
+        "/api/v1/admin/provider/list",
+        "/api/v1/admin/provider/create",
+        "/api/v1/admin/provider/delete",
+        "/api/v1/admin/policy/list",
+        "/api/v1/admin/policy/create",
+        "/api/v1/admin/policy/delete",
+        "/api/v1/admin/key/list",
+        "/api/v1/admin/key/create",
+        "/api/v1/admin/key/delete",
+        "/api/v1/admin/totp/list",
+        "/api/v1/admin/totp/remove",
+        "/api/v1/admin/oauth2client/list",
+        "/api/v1/admin/oauth2client/create",
+        "/api/v1/admin/oauth2client/delete",
+        "/api/v1/admin/oauth2client/meta",
+        "/api/v1/admin/oidc/config",
+        "/api/v1/admin/metrics",
+    ];
+    const USER: &[&str] = &[
+        "/api/v1/admin/user/activate/self",
+        "/api/v1/admin/user/delete/self",
+    ];
+    let mut rows = Vec::new();
+    for (role, paths) in [("root", ROOT), ("admin", ADMIN), ("user", USER)] {
+        for p in paths {
+            rows.push(format!(
+                "    {{ domain = \"{domain}\", resource = \"{p}\", role = \"{role}\", source = \"Nothing\", target = \"Nothing\", mfa = false, allowed = true }},"
+            ));
+        }
+    }
+    rows.join("\n")
 }
 
 /// Wait for the server health endpoint.

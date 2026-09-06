@@ -270,6 +270,7 @@
       "openapi.key.Addkey": {
         "properties": {
           "domain": {
+            "description": "The domain the key is for. H9: the AUTHENTICATED request domain is\nauthoritative — a non-empty mismatch is refused unless the caller\nis root (level 100) AND the claimed domain is a sibling of the\nsame tenant, the only path that can seed a second domain's first\nsigning key.",
             "type": "string"
           },
           "name": {
@@ -1312,7 +1313,17 @@
                 }
               }
             },
-            "description": "Bad request"
+            "description": "Bad request, or non-root cross-domain claim"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Cross-domain claim without a verified session"
           }
         },
         "summary": "Add scope to tenant"
@@ -1351,6 +1362,16 @@
               }
             },
             "description": "Bad request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Key belongs to another domain"
           }
         },
         "summary": "Remove a scope from tenant"

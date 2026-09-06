@@ -605,6 +605,27 @@ pub async fn session_family_poisoned(sub: &str, auth_time: usize) -> bool {
         .await
 }
 
+/// Outbound HTTP client with bounded timeouts (H6). Every server-initiated
+/// call (Aliyun SMS, Resend email, social IdP discovery/token/userinfo)
+/// MUST use this: a hung peer otherwise pins the request handler — which
+/// for the auth flows means pinning the tenant's `DashMap` write guard and
+/// stalling every other caller for that domain until the peer gives up.
+/// The bounds turn an indefinite freeze into a bounded, auditable failure.
+/// One shared client keeps connection pooling; clones are `Arc`-cheap.
+static OUTBOUND_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        // The builder only fails on TLS-backend init; fall back to the
+        // (unbounded) default rather than making every dispatch fail.
+        .unwrap_or_else(|_| reqwest::Client::new())
+});
+
+pub fn outbound_http_client() -> reqwest::Client {
+    OUTBOUND_HTTP_CLIENT.clone()
+}
+
 fn jwt_verify_from(decision: TokenDecision<crate::db::JwtData>, domain: &str) -> JwtVerify {
     JwtVerify {
         can_access: decision.can_access,

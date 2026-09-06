@@ -94,6 +94,13 @@ export type OpenapiIdpOAuth2ClientDto = {
 };
 
 export type OpenapiKeyAddkey = {
+    /**
+     * The domain the key is for. H9: the AUTHENTICATED request domain is
+     * authoritative — a non-empty mismatch is refused unless the caller
+     * is root (level 100) AND the claimed domain is a sibling of the
+     * same tenant, the only path that can seed a second domain's first
+     * signing key.
+     */
     domain: string;
     name: string;
 };
@@ -476,9 +483,13 @@ export type OpenapiKeyAddKeyData = {
 
 export type OpenapiKeyAddKeyErrors = {
     /**
-     * Bad request
+     * Bad request, or non-root cross-domain claim
      */
     400: OpenapiUtilsApiProblem;
+    /**
+     * Cross-domain claim without a verified session
+     */
+    401: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiKeyAddKeyError = OpenapiKeyAddKeyErrors[keyof OpenapiKeyAddKeyErrors];
@@ -504,6 +515,10 @@ export type OpenapiKeyDeleteKeyErrors = {
      * Bad request
      */
     400: OpenapiUtilsApiProblem;
+    /**
+     * Key belongs to another domain
+     */
+    403: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiKeyDeleteKeyError = OpenapiKeyDeleteKeyErrors[keyof OpenapiKeyDeleteKeyErrors];

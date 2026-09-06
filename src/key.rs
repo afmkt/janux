@@ -133,9 +133,17 @@ impl Tenant {
         }
         if let Some((s, k)) = self.keys.remove(&k.domain_id) {
             assert!(s == k.domain_id);
-            let domain = self.domain(&k.domain_id).await?;
-            if let Some(new_key) = domain.keys.get().iter().next() {
-                self.keys.insert(k.domain_id, new_key.clone());
+            // Re-seat the active-key cache from the remaining rows of this
+            // domain. Queried directly instead of via `domain.keys.get()`:
+            // the deferred relation panics ("deferred field not loaded")
+            // on a plain `Domain::get_by_id` row — deleting a domain's
+            // cached active key used to crash the request task.
+            if let Ok(remaining) = self.all_keys().await
+                && let Some(new_key) = remaining
+                    .into_iter()
+                    .find(|key| key.domain_id == k.domain_id)
+            {
+                self.keys.insert(k.domain_id, new_key);
             }
         }
         Ok(())
@@ -193,6 +201,11 @@ pub async fn all_keys(req: &mut Request, depot: &mut Depot, res: &mut Response) 
 
 #[derive(Serialize, Deserialize, ToSchema)]
 struct Addkey {
+    /// The domain the key is for. H9: the AUTHENTICATED request domain is
+    /// authoritative — a non-empty mismatch is refused unless the caller
+    /// is root (level 100) AND the claimed domain is a sibling of the
+    /// same tenant, the only path that can seed a second domain's first
+    /// signing key.
     domain: String,
     name: String,
 }
@@ -202,20 +215,54 @@ struct Addkey {
     request_body = Addkey,
     responses(
         (status_code = 200, description = "Scope created successfully", body = ApiResponse<()>),
-        (status_code = 400, description = "Bad request", body = ApiProblem)
+        (status_code = 400, description = "Bad request, or non-root cross-domain claim", body = ApiProblem),
+        (status_code = 401, description = "Cross-domain claim without a verified session", body = ApiProblem)
     )
 )]
 pub async fn add_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    // Extract the caller BEFORE borrowing ServerState out of the depot —
+    // `obtain_mut` keeps depot mutably borrowed for the rest of the handler.
+    let caller = crate::utils::caller_from_depot(depot);
     if let Some(body) = crate::utils::extract::<Addkey>(req, None).await {
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
-            && tenant.key_create(&body.domain, &body.name).await.is_ok()
-        {
-            let resp = ApiResponse::ok(());
-            res.status_code(StatusCode::OK);
-            res.render(Json(resp));
-            return;
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
+            // H9: the authenticated domain is authoritative. A body domain
+            // is honored only for a ROOT caller provisioning a SIBLING
+            // domain of the same tenant — without that exception a second
+            // domain could never obtain its first signing key (sessions
+            // are domain-bound and `current_key` is per-domain), but
+            // admin-level cross-domain injection stays refused.
+            let target = if body.domain.is_empty() || body.domain == domain {
+                domain.to_string()
+            } else {
+                let caller = match caller {
+                    Some(c) => c,
+                    None => {
+                        res.status_code(StatusCode::UNAUTHORIZED);
+                        res.render(Json(ApiProblem::unauthorized()));
+                        return;
+                    }
+                };
+                let is_root =
+                    tenant.effective_level(&caller).await == crate::role::builtin_level("root");
+                let is_sibling = tenant.domain(&body.domain).await.is_ok();
+                if !is_root || !is_sibling {
+                    let err = ApiProblem::validation_error(
+                        "domain does not match the authenticated request domain",
+                    );
+                    res.status_code(StatusCode::BAD_REQUEST);
+                    res.render(Json(err));
+                    return;
+                }
+                body.domain.clone()
+            };
+            if tenant.key_create(&target, &body.name).await.is_ok() {
+                let resp = ApiResponse::ok(());
+                res.status_code(StatusCode::OK);
+                res.render(Json(resp));
+                return;
+            }
         }
     };
     let err = ApiProblem::validation_error("Failed to parse request body");
@@ -233,20 +280,34 @@ pub struct DeleteKey {
     request_body = DeleteKey,
     responses(
         (status_code = 200, description = "Success", body = ApiResponse<()>),
-        (status_code = 400, description = "Bad request", body = ApiProblem)
+        (status_code = 400, description = "Bad request", body = ApiProblem),
+        (status_code = 403, description = "Key belongs to another domain", body = ApiProblem)
     )
 )]
 pub async fn delete_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<DeleteKey>(req, None).await {
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
-        if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
-            && tenant.key_delete(&body.name).await.is_ok()
-        {
-            let resp = ApiResponse::ok(());
-            res.status_code(StatusCode::OK);
-            res.render(Json(resp));
-            return;
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
+            // H9 (same class as create): one domain's admin must not
+            // delete another domain's signing keys. Fully qualified call —
+            // `tenant.key` would resolve to the DashMap guard's method.
+            match Tenant::key(&mut tenant, &body.name).await {
+                Ok(key) if key.domain_id != domain => {
+                    res.status_code(StatusCode::FORBIDDEN);
+                    res.render(Json(ApiProblem::forbidden()));
+                    return;
+                }
+                Ok(_) => {
+                    if tenant.key_delete(&body.name).await.is_ok() {
+                        let resp = ApiResponse::ok(());
+                        res.status_code(StatusCode::OK);
+                        res.render(Json(resp));
+                        return;
+                    }
+                }
+                Err(_) => {}
+            }
         }
     };
     let err = ApiProblem::validation_error("Failed to parse request body");
@@ -327,4 +388,310 @@ fn pem_to_jwk(pub_pem: &str, kid: &str) -> Result<Jwk, Box<dyn std::error::Error
     };
 
     Ok(jwk)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::LazyLock;
+
+    const TENANT: &str = "test-tenant";
+    const DOMAIN_A: &str = "a.local";
+    const DOMAIN_B: &str = "b.local";
+
+    /// The revocation store is a process-wide singleton, so all tests share
+    /// one backing directory that must outlive every individual test's
+    /// TempDir (same pattern as the otp.rs/totp.rs endpoint tests).
+    static TEST_STORE_DIR: LazyLock<tempfile::TempDir> =
+        LazyLock::new(|| tempfile::tempdir().expect("tempdir"));
+
+    /// toasty spawns the store's connection task on whichever runtime is
+    /// current during `init_global`; a `#[tokio::test]` runtime dies with
+    /// its test. Initialize once on a dedicated multi-thread runtime whose
+    /// workers outlive every individual test.
+    static TEST_STORE_RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("store runtime")
+    });
+    static TEST_STORE_INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+    async fn init_revocation_store() {
+        TEST_STORE_RT
+            .spawn(TEST_STORE_INIT.get_or_init(|| async {
+                crate::jwt::InvalidJwt::init_global(TEST_STORE_DIR.path())
+                    .await
+                    .expect("init revocation store");
+            }))
+            .await
+            .expect("store init task");
+    }
+
+    /// Tenant serving two domains so cross-domain injection has a target.
+    async fn key_test_env() -> (crate::server::ServerState, tempfile::TempDir) {
+        init_revocation_store().await;
+        // Signing keys are encrypted at rest (H2); the process-wide
+        // encryption key is first-call-wins across test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = crate::db::Storage::init(tmp.path())
+            .await
+            .expect("storage init");
+        storage.new_tenant(TENANT).await.expect("tenant");
+        storage
+            .add_domain(DOMAIN_A, TENANT)
+            .await
+            .expect("domain a");
+        storage
+            .add_domain(DOMAIN_B, TENANT)
+            .await
+            .expect("domain b");
+        {
+            // The builtin catalog gives `effective_level` something to
+            // resolve the injected session roles against (admin=80,
+            // root=100) — the H9 root exception is level-based.
+            let mut tenant = storage.tenant_by_id(TENANT).expect("tenant");
+            let bootstrap = crate::role::Caller::Bootstrap;
+            for (name, _) in crate::role::BUILTIN_ROLES {
+                tenant
+                    .role_create(&bootstrap, name, 0)
+                    .await
+                    .expect("builtin role");
+            }
+        }
+        let state = crate::server::ServerState::create(storage, false)
+            .await
+            .expect("server state");
+        (state, tmp)
+    }
+
+    fn key_service(state: crate::server::ServerState) -> Service {
+        Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state))
+                .push(Router::with_path("key/create").post(add_key))
+                .push(Router::with_path("key/delete").post(delete_key)),
+        )
+    }
+
+    /// Session injectors for the caller-level branch of the H9 gate.
+    /// `effective_level` resolves the JWT role names against the live Role
+    /// table, so the env's builtin catalog gives admin=80 / root=100.
+    macro_rules! session_injector {
+        ($name:ident, $user:literal, [$($role:literal),* $(,)?]) => {
+            #[salvo::prelude::handler]
+            async fn $name(
+                req: &mut Request,
+                depot: &mut Depot,
+                res: &mut Response,
+                ctrl: &mut FlowCtrl,
+            ) {
+                depot.inject(crate::db::JwtVerify {
+                    can_access: true,
+                    jwt_data: crate::db::JwtData {
+                        user: uuid::Uuid::nil().to_string(),
+                        username: $user.to_string(),
+                        domain: DOMAIN_A.to_string(),
+                        mfa: std::collections::HashSet::new(),
+                        roles: std::collections::HashSet::from([
+                            $($role.to_string()),*
+                        ]),
+                    },
+                    expect_mfa: false,
+                    domain: DOMAIN_A.to_string(),
+                    auth_time: None,
+                });
+                ctrl.call_next(req, depot, res).await;
+            }
+        };
+    }
+    session_injector!(inject_admin_session, "adminny", ["admin"]);
+    session_injector!(inject_root_session, "rooty", ["root"]);
+
+    fn keyed_service<H: salvo::Handler + 'static>(
+        state: crate::server::ServerState,
+        injector: H,
+    ) -> Service {
+        Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state))
+                .hoop(injector)
+                .push(Router::with_path("key/create").post(add_key))
+                .push(Router::with_path("key/delete").post(delete_key)),
+        )
+    }
+
+    async fn post_key(
+        service: &Service,
+        host: &str,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> StatusCode {
+        let res = salvo::test::TestClient::post(format!("http://{host}/{path}"))
+            .add_header("Host", host, true)
+            .json(body)
+            .send(service)
+            .await;
+        res.status_code.expect("status code")
+    }
+
+    /// regression H9: the authenticated request domain is authoritative —
+    /// a body-claimed foreign domain is refused. Without a session the
+    /// root exception cannot be evaluated: fail closed with 401.
+    #[tokio::test]
+    async fn key_create_refuses_cross_domain_injection() {
+        let (state, _tmp) = key_test_env().await;
+        let service = key_service(state.clone());
+
+        let status = post_key(
+            &service,
+            DOMAIN_A,
+            "key/create",
+            &serde_json::json!({ "domain": DOMAIN_B, "name": "injected" }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "a cross-domain claim without a session must fail closed"
+        );
+
+        // The refused key must not exist.
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN_A).expect("tenant");
+        assert!(Tenant::key(&mut tenant, "injected").await.is_err());
+    }
+
+    /// regression H9: an ADMIN-level caller (80 < root 100) may not inject
+    /// a key for a sibling domain — the pre-fix handler honored the body
+    /// domain with only the tenant-level policy gate.
+    #[tokio::test]
+    async fn key_create_refuses_admin_level_cross_domain() {
+        let (state, _tmp) = key_test_env().await;
+        let service = keyed_service(state.clone(), inject_admin_session);
+
+        let status = post_key(
+            &service,
+            DOMAIN_A,
+            "key/create",
+            &serde_json::json!({ "domain": DOMAIN_B, "name": "injected" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN_A).expect("tenant");
+        assert!(Tenant::key(&mut tenant, "injected").await.is_err());
+    }
+
+    /// The root exception that keeps multi-domain tenants operable: the
+    /// tenant apex (level 100) provisions a SIBLING domain's first signing
+    /// key — sessions are domain-bound and `current_key` is per-domain, so
+    /// without this path a second domain could never mint its first token.
+    /// A domain outside the tenant stays refused.
+    #[tokio::test]
+    async fn key_create_root_may_provision_sibling_domain() {
+        let (state, _tmp) = key_test_env().await;
+        let service = keyed_service(state.clone(), inject_root_session);
+
+        let status = post_key(
+            &service,
+            DOMAIN_A,
+            "key/create",
+            &serde_json::json!({ "domain": DOMAIN_B, "name": "key-b" }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "root must be able to seed a sibling domain's first key"
+        );
+
+        // A domain that is NOT part of the tenant is still refused.
+        let status = post_key(
+            &service,
+            DOMAIN_A,
+            "key/create",
+            &serde_json::json!({ "domain": "foreign.example", "name": "key-f" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN_A).expect("tenant");
+        let key_b = Tenant::key(&mut tenant, "key-b").await.expect("key-b");
+        assert_eq!(key_b.domain_id, DOMAIN_B);
+        assert!(Tenant::key(&mut tenant, "key-f").await.is_err());
+    }
+
+    /// The matching (or empty) body domain creates the key for the
+    /// AUTHENTICATED domain.
+    #[tokio::test]
+    async fn key_create_binds_to_the_authenticated_domain() {
+        let (state, _tmp) = key_test_env().await;
+        let service = key_service(state.clone());
+
+        let status = post_key(
+            &service,
+            DOMAIN_A,
+            "key/create",
+            &serde_json::json!({ "domain": DOMAIN_A, "name": "key-a" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Empty domain = no claim; the authenticated domain still rules.
+        let status = post_key(
+            &service,
+            DOMAIN_B,
+            "key/create",
+            &serde_json::json!({ "domain": "", "name": "key-b" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN_A).expect("tenant");
+        let key_a = Tenant::key(&mut tenant, "key-a").await.expect("key-a");
+        assert_eq!(key_a.domain_id, DOMAIN_A);
+        let key_b = Tenant::key(&mut tenant, "key-b").await.expect("key-b");
+        assert_eq!(key_b.domain_id, DOMAIN_B);
+    }
+
+    /// regression H9 (delete side): one domain's admin surface must not
+    /// delete another domain's signing key.
+    #[tokio::test]
+    async fn key_delete_refuses_cross_domain_keys() {
+        let (state, _tmp) = key_test_env().await;
+        let service = key_service(state.clone());
+
+        let status = post_key(
+            &service,
+            DOMAIN_B,
+            "key/create",
+            &serde_json::json!({ "domain": "", "name": "key-b" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Deleting B's key through A's authenticated domain: refused.
+        let status = post_key(
+            &service,
+            DOMAIN_A,
+            "key/delete",
+            &serde_json::json!({ "name": "key-b" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // The key survives; its own domain can delete it.
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN_A).expect("tenant");
+        assert!(Tenant::key(&mut tenant, "key-b").await.is_ok());
+        drop(tenant);
+        let status = post_key(
+            &service,
+            DOMAIN_B,
+            "key/delete",
+            &serde_json::json!({ "name": "key-b" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
 }

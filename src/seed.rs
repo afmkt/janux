@@ -282,4 +282,70 @@ mod tests {
             "runtime tenants must seed the SCIM collection policy"
         );
     }
+
+    /// Process-lifetime backing dir for the bootstrap test's Storage (the
+    /// revocation-store singleton binds to the FIRST init dir and must
+    /// outlive every test).
+    static BOOTSTRAP_STORE_DIR: std::sync::LazyLock<tempfile::TempDir> =
+        std::sync::LazyLock::new(|| tempfile::tempdir().expect("tempdir"));
+
+    /// regression H8: `bootstrap_tenant` — the path `admin/tenant/create`
+    /// walks — must produce an immediately operable tenant: the full
+    /// builtin catalog including `scim`, the standard admin policies bound
+    /// to the first domain, and the first admin user holding the role.
+    /// The HTTP-level lifecycle test cannot look inside a fresh tenant
+    /// (sessions are domain-bound and the new domain has no signing key
+    /// yet), so the bootstrap contract is pinned here.
+    #[tokio::test]
+    async fn bootstrap_tenant_provisions_catalog_policies_and_admin() {
+        let storage = crate::db::Storage::init(BOOTSTRAP_STORE_DIR.path())
+            .await
+            .expect("storage init");
+        storage.new_tenant("fresh").await.expect("tenant");
+        super::bootstrap_tenant(&storage, "fresh", Some("fresh.local"), Some("admin@fresh"))
+            .await
+            .expect("bootstrap");
+
+        let mut tenant = storage.tenant_by_id("fresh").expect("tenant");
+
+        // Full builtin catalog at the pinned levels (the role NAME is the
+        // model's `id`).
+        let roles = tenant.all_roles().await.expect("roles");
+        for (name, level) in crate::role::BUILTIN_ROLES {
+            let role = roles
+                .iter()
+                .find(|r| r.id == *name)
+                .unwrap_or_else(|| panic!("bootstrap must create the '{name}' role"));
+            assert_eq!(role.level, *level, "'{name}' keeps its builtin level");
+        }
+
+        // Standard policies bound to the FIRST domain — including the SCIM
+        // rows, without which the `scim` role is dead under default-deny.
+        // `resource` is stored as `/`-split segments; join round-trips the
+        // original path exactly (the leading "" segment restores the slash).
+        let policies = tenant.all_policies().await.expect("policies");
+        let has_policy = |resource: &str, role: &str| {
+            policies.iter().any(|p| {
+                p.domain_id == "fresh.local"
+                    && p.role_id == role
+                    && p.resource.join("/") == resource
+            })
+        };
+        assert!(
+            has_policy("/api/v1/admin/user/create", "admin"),
+            "standard admin policies must bind to the first domain"
+        );
+        assert!(
+            has_policy("/scim/v2/Users", "scim"),
+            "the scim role must come with its policy rows"
+        );
+
+        // The first admin exists and holds the admin role.
+        let admin = tenant.user("admin@fresh").await.expect("first admin");
+        let granted = tenant.user_roles(admin.id).await.expect("user roles");
+        assert!(
+            granted.iter().any(|r| r.id == "admin"),
+            "the bootstrap admin must hold the admin role"
+        );
+    }
 }

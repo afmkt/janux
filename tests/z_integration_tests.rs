@@ -64,17 +64,16 @@ async fn admin_create_tenant() {
         .await;
 
     assert!(resp.is_ok(), "Tenant create should not error");
+    let status = resp.as_ref().unwrap().status();
     let body = resp
         .unwrap()
         .json::<serde_json::Value>()
         .await
         .expect("valid JSON");
-    // Response should contain ok field (success) or status field (error like 401)
-    assert!(
-        body.get("ok").is_some() || body.get("status").is_some(),
-        "Response should have ok or status field: {:?}",
-        body
-    );
+    // With a real root session (H8 provisioning) the create must succeed —
+    // the old placeholder token made every call a silent 401.
+    assert_eq!(status, reqwest::StatusCode::OK, "tenant create: {body}");
+    assert_eq!(body["ok"], true, "tenant create body: {body}");
 }
 
 // ─── Domain management tests ────────────────────────────────────────────────
@@ -517,99 +516,203 @@ async fn user_roles_returns_list() {
 
 // ─── Tenant lifecycle test (create → verify → delete) ──────────────────────
 
+/// H8: the full lifecycle under a REAL root+admin session, asserting every
+/// step's status and body — plus the three properties the old `is_ok()`
+/// smoke test never verified: role bootstrap on the new tenant, the H9
+/// domain binding of key/create, and the on-disk delete backup.
 #[tokio::test]
 async fn full_tenant_lifecycle_create_and_delete() {
     let env = TestEnv::new_with_auth().await;
+    let token = env.admin_token.clone().unwrap();
+    let client = Client::new();
 
-    let tenant_name = format!("lifecycle-tenant-{}", uuid::Uuid::new_v4());
+    let tenant_name = format!("lifecycle-tenant-{}", uuid::Uuid::new_v4().simple());
+    let domain = format!("{}.test.local", tenant_name);
 
-    // Create tenant
-    let resp1 = Client::new()
-        .post(format!("{}/api/v1/admin/tenant/create", env.base_url()))
-        .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({ "name": &tenant_name }))
-        .send()
-        .await;
+    // Authenticated call helper: `host` selects the tenant/domain the
+    // policy engine evaluates against.
+    async fn call(
+        client: &Client,
+        env: &TestEnv,
+        token: &str,
+        method: reqwest::Method,
+        host: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> (reqwest::StatusCode, serde_json::Value) {
+        let mut rb = client
+            .request(method, format!("{}{path}", env.base_url()))
+            .header("Host", host)
+            .header("Authorization", format!("Bearer {}", token));
+        if let Some(b) = body {
+            rb = rb.json(&b);
+        }
+        let resp = rb.send().await.expect("request transport");
+        let status = resp.status();
+        let body = resp.json().await.unwrap_or(serde_json::Value::Null);
+        (status, body)
+    }
 
-    assert!(resp1.is_ok());
+    // 1. Create the tenant WITH its first domain and admin — the
+    //    bootstrap path (a fresh tenant has no domain to route
+    //    domain/create through; `NewTenant.domain` is the trust anchor).
+    let (status, body) = call(
+        &client,
+        &env,
+        &token,
+        reqwest::Method::POST,
+        "localhost",
+        "/api/v1/admin/tenant/create",
+        Some(json!({
+            "name": &tenant_name,
+            "domain": &domain,
+            "admin": format!("admin@{}", tenant_name),
+        })),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::OK, "tenant create: {body}");
+    assert_eq!(body["ok"], true, "tenant create body: {body}");
 
-    // Create domain for tenant
-    let resp2 = Client::new()
+    // 2. The new tenant is listed. Its INTERIORS (role catalog, policies,
+    //    first admin) cannot be inspected over HTTP from this session:
+    //    JWTs are domain-bound and the fresh domain has no signing key
+    //    yet, so no session can exist on it. The bootstrap contract is
+    //    pinned at lib level instead — see
+    //    seed::tests::bootstrap_tenant_provisions_catalog_policies_and_admin.
+    let (status, body) = call(
+        &client,
+        &env,
+        &token,
+        reqwest::Method::GET,
+        "localhost",
+        "/api/v1/admin/tenant/list",
+        None,
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::OK, "tenant list: {body}");
+    let listed: Vec<String> = body["data"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    assert!(
+        listed.iter().any(|n| n == &tenant_name),
+        "the new tenant must be listed: {listed:?}"
+    );
+
+    // 3. Delete the tenant (root-only policy row, evaluated on the
+    //    operator's Host; the target is named in the body).
+    let (status, body) = call(
+        &client,
+        &env,
+        &token,
+        reqwest::Method::POST,
+        "localhost",
+        "/api/v1/admin/tenant/delete",
+        Some(json!({ "name": &tenant_name })),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::OK, "tenant delete: {body}");
+
+    // 8. Cascade: the tenant is gone from the directory...
+    let (status, body) = call(
+        &client,
+        &env,
+        &token,
+        reqwest::Method::GET,
+        "localhost",
+        "/api/v1/admin/tenant/list",
+        None,
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::OK, "tenant list: {body}");
+    let listed: Vec<String> = body["data"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    assert!(
+        !listed.iter().any(|n| n == &tenant_name),
+        "the deleted tenant must not be listed: {listed:?}"
+    );
+
+    // 9. ...and the delete left a DB backup on disk (H2b). Router/domain
+    //    cascade is pinned at lib level (db::tests::tenant_delete_backups_
+    //    are_pruned_to_retention) — no HTTP probe can distinguish it here:
+    //    sessions are domain-bound, so every admin call on the deleted
+    //    domain 401s both before and after the delete.
+    let backups = env.data_dir().join("backups");
+    let prefix = format!("{tenant_name}-");
+    let backed_up = std::fs::read_dir(&backups)
+        .expect("backups dir must exist after a tenant delete")
+        .filter_map(|e| e.ok())
+        .any(|e| {
+            e.file_name().to_string_lossy().starts_with(&prefix)
+                && e.path().join("janux.db").exists()
+        });
+    assert!(
+        backed_up,
+        "tenant delete must back up the database under backups/{prefix}*/janux.db"
+    );
+}
+
+/// H9 over HTTP: the operator's root session may seed a SIBLING domain's
+/// first signing key through its own Host — the only path that can, since
+/// sessions are domain-bound and `current_key` is per-domain — while a
+/// domain outside the tenant stays refused even for root.
+#[tokio::test]
+async fn root_session_provisions_sibling_domain_key() {
+    let env = TestEnv::new_with_auth().await;
+    let token = env.admin_token.clone().unwrap();
+    let client = Client::new();
+    let sibling = format!("sibling-{}.local", uuid::Uuid::new_v4().simple());
+
+    // Attach the sibling domain to the seeded tenant.
+    let resp = client
         .post(format!("{}/api/v1/admin/domain/create", env.base_url()))
         .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({
-            "id": format!("{}.test.local", tenant_name)
-        }))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&json!({ "domain": &sibling, "tenant": "test-tenant" }))
         .send()
-        .await;
+        .await
+        .expect("domain create");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "sibling domain create must succeed for the tenant's own root"
+    );
 
-    assert!(resp2.is_ok());
-
-    // Create admin user
-    let resp3 = Client::new()
-        .post(format!("{}/api/v1/admin/user/create", env.base_url()))
-        .header("Host", &tenant_name)
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({ "name": format!("admin@{}", tenant_name) }))
-        .send()
-        .await;
-
-    assert!(resp3.is_ok());
-
-    // Add admin role
-    let resp4 = Client::new()
-        .post(format!("{}/api/v1/admin/role/create", env.base_url()))
-        .header("Host", &tenant_name)
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({ "name": "admin" }))
-        .send()
-        .await;
-
-    assert!(resp4.is_ok());
-
-    // Delete domain
-    let resp5 = Client::new()
-        .post(format!("{}/api/v1/admin/domain/delete", env.base_url()))
+    // Root provisions its first key through the operator's domain.
+    let resp = client
+        .post(format!("{}/api/v1/admin/key/create", env.base_url()))
         .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({
-            "id": format!("{}.test.local", tenant_name)
-        }))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&json!({ "domain": &sibling, "name": "key-sibling" }))
         .send()
-        .await;
+        .await
+        .expect("key create");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "root must be able to seed a sibling domain's first key"
+    );
 
-    assert!(resp5.is_ok());
-
-    // Delete tenant
-    let resp6 = Client::new()
-        .post(format!("{}/api/v1/admin/tenant/delete", env.base_url()))
+    // A domain outside the tenant is refused even for root.
+    let resp = client
+        .post(format!("{}/api/v1/admin/key/create", env.base_url()))
         .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({ "name": &tenant_name }))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&json!({ "domain": "foreign.example", "name": "key-foreign" }))
         .send()
-        .await;
-
-    assert!(resp6.is_ok());
+        .await
+        .expect("key create");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "a foreign domain must be refused even for root"
+    );
 }
 
 // ─── OAuth2 client CRUD tests ──────────────────────────────────────────────

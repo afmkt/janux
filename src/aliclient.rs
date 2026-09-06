@@ -333,8 +333,15 @@ pub async fn send_otp(
     sign_name: &str,
     template: &str,
 ) -> Result<String> {
-    // 创建 HTTP 客户端
-    let client = Client::new();
+    // H6: bounded-timeout client — a hung SMS peer must not pin the OTP
+    // request handler indefinitely. Built inline (not via crate::utils)
+    // because this file is also compiled into the standalone `aliapi`
+    // binary through #[path], where the crate root has no `utils`.
+    let client = Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| Client::new());
     // env::var()表示通过环境变量获取Access Key ID和Access Key Secret
     let access_key_id = key;
     let access_key_secret = secret;

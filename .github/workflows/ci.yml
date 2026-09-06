@@ -51,6 +51,19 @@ jobs:
           npm ci
           npm run build
 
+      # H11: frontend/openapi.json and the generated client are committed
+      # artifacts — regeneration used to be a manual `just openapi`, so the
+      # contract silently drifted from the endpoint declarations. CI now
+      # regenerates both and fails on any diff.
+      - name: OpenAPI contract drift check
+        run: |
+          cargo run -q --bin openapi > frontend/openapi.json
+          cd frontend && npm run openapi && cd ..
+          git diff --exit-code frontend/openapi.json frontend/src/api || {
+            echo "::error::OpenAPI contract drift — run 'just openapi' and commit the result"
+            exit 1
+          }
+
       - name: Check formatting
         run: cargo fmt -- --check
 

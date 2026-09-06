@@ -174,14 +174,24 @@ struct EmailResponse {
 async fn send(config: &ResendDTO, to: &str, subject: &str, content: &str) -> anyhow::Result<()> {
     // An optional base_url override the official Resend endpoint — a proxy
     // in production, a mock server in tests.
+    // H6: both branches run on the bounded-timeout shared client, so a
+    // hung Resend (or proxy) peer cannot pin the email request handler —
+    // and the tenant write guard it holds — indefinitely.
+    let http = crate::utils::outbound_http_client();
     let resend = match config.base_url.as_deref() {
         Some(url) => {
             let cfg = resend_rs::ConfigBuilder::new(config.resend_key.as_str())
                 .base_url(url.parse()?)
+                .client(http)
                 .build();
             Resend::with_config(cfg)
         }
-        None => Resend::new(config.resend_key.as_ref()),
+        None => {
+            let cfg = resend_rs::ConfigBuilder::new(config.resend_key.as_str())
+                .client(http)
+                .build();
+            Resend::with_config(cfg)
+        }
     };
     let email =
         CreateEmailBaseOptions::new(config.from.clone(), vec![to], subject).with_html(content);
@@ -252,18 +262,21 @@ fn build_magic_link(
     Ok(link)
 }
 
+/// Phase 1 of the magic-link ceremony — runs WHILE the tenant guard is
+/// held: mint the ceremony JWT, load the Resend config, render the link
+/// and the email body. Local-only, no network. Returns everything phase 2
+/// needs, including the resolved `user_name` the verify cache maps to.
 #[allow(clippy::too_many_arguments)]
-async fn handle_user<'a>(
+async fn prepare_magic_link<'a>(
     tenant: &mut RefMut<'a, String, Tenant>,
     issuer: &str,
     domain: &str,
     user_name: String,
     email: String,
     signup: bool,
-    _state: &'a ServerState,
     ctx: MagicLinkContext<'_>,
-) -> Result<String, String> {
-    if let Ok(token) = tenant
+) -> Result<(String, String, ResendDTO, String, String), String> {
+    let token = tenant
         .jwt_authenticate(
             issuer,
             domain,
@@ -275,33 +288,46 @@ async fn handle_user<'a>(
             15,
         )
         .await
-    {
-        let subject = "Janux login";
-        let cfg = ResendDTO::load(tenant)
-            .await
-            .ok_or("Failed to load email config")?;
+        .map_err(|_| "Fail to issue JWT".to_string())?;
+    let subject = "Janux login".to_string();
+    let cfg = ResendDTO::load(tenant)
+        .await
+        .ok_or("Failed to load email config")?;
+    let link = build_magic_link(
+        cfg.verify_url.as_str(),
+        token.as_str(),
+        user_name.as_str(),
+        email.as_str(),
+        ctx,
+    )
+    .map_err(|e| format!("Invalid verify_url in email config: {e}"))?;
+    let content = render_email(&cfg, &email, &subject, link.as_str())
+        .map_err(|e| format!("Failed to render email: {e}"))?;
+    Ok((token, user_name, cfg, subject, content))
+}
 
-        let link = build_magic_link(
-            cfg.verify_url.as_str(),
-            token.as_str(),
-            user_name.as_str(),
-            email.as_str(),
-            ctx,
-        )
-        .map_err(|e| format!("Invalid verify_url in email config: {e}"))?;
-        let content = render_email(&cfg, &email, subject, link.as_str())
-            .map_err(|e| format!("Failed to render email: {e}"))?;
-        if send(&cfg, &email, subject, content.as_ref()).await.is_ok() {
-            MLINK_CACHE
-                .insert(format!("{}:{}", domain, token), user_name)
-                .await
-                .ok();
-            Ok(token)
-        } else {
-            Err("Fail to send email".to_string())
-        }
+/// Phase 2 — runs AFTER the tenant guard is dropped (H6): the Resend
+/// network hop must not pin the tenant's `DashMap` write guard and stall
+/// every other caller for the domain. On success, parks the token →
+/// username mapping `verify` consumes.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_magic_link(
+    domain: &str,
+    email: &str,
+    token: &str,
+    user_name: &str,
+    cfg: &ResendDTO,
+    subject: &str,
+    content: &str,
+) -> Result<(), String> {
+    if send(cfg, email, subject, content).await.is_ok() {
+        MLINK_CACHE
+            .insert(format!("{}:{}", domain, token), user_name.to_string())
+            .await
+            .ok();
+        Ok(())
     } else {
-        Err("Fail to issue JWT".to_string())
+        Err("Fail to send email".to_string())
     }
 }
 
@@ -352,68 +378,73 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     state: req_request.state.as_deref(),
                     redirect_uri: req_request.redirect_uri.as_deref(),
                 };
-                if let Ok(user) = tenant.user_by_email(&req_request.email).await {
+                // Phase 1 under the tenant guard: resolve the ceremony
+                // identity, mint its JWT and render the email (local only).
+                let prepared = if let Ok(user) = tenant.user_by_email(&req_request.email).await {
                     // Existing credential: signin ceremony (— verify
                     // will resolve, never attach).
-                    match handle_user(
+                    prepare_magic_link(
                         &mut tenant,
                         issuer.as_str(),
                         domain.as_str(),
                         user.name,
-                        req_request.email,
+                        req_request.email.clone(),
                         false,
-                        state,
                         ctx,
                     )
                     .await
-                    {
-                        Ok(_token) => {
-                            res.status_code(StatusCode::OK);
-                            res.render(Json(EmailResponse {
-                                ok: true,
-                                code: StatusCode::OK.as_u16(),
-                                msg: format!("Success{}", err_msg),
-                                jwt: None,
-                            }));
-                            // without this return the handler fell
-                            // through to the 401 render below, so every
-                            // successful request still answered 401.
-                            return;
-                        }
-                        Err(e) => {
-                            err_msg = e;
-                        }
-                    }
                 } else {
                     // Unknown credential: signup ceremony (— verify
                     // will create the user or fail; it never attaches to a
                     // pre-existing user).
-                    match handle_user(
+                    prepare_magic_link(
                         &mut tenant,
                         issuer.as_str(),
                         domain.as_str(),
-                        req_request.name,
-                        req_request.email,
+                        req_request.name.clone(),
+                        req_request.email.clone(),
                         true,
-                        state,
                         ctx,
                     )
                     .await
-                    {
-                        Ok(_token) => {
-                            res.status_code(StatusCode::OK);
-                            res.render(Json(EmailResponse {
-                                ok: true,
-                                code: StatusCode::OK.as_u16(),
-                                msg: format!("Success{}", err_msg),
-                                jwt: None,
-                            }));
-                            // same fall-through as the signin branch.
-                            return;
+                };
+                // H6: drop the tenant's write guard BEFORE the Resend
+                // network hop — a hung peer must not stall every other
+                // caller for this domain.
+                drop(tenant);
+                match prepared {
+                    Ok((token, user_name, cfg, subject, content)) => {
+                        match dispatch_magic_link(
+                            domain.as_str(),
+                            &req_request.email,
+                            &token,
+                            &user_name,
+                            &cfg,
+                            &subject,
+                            &content,
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                res.status_code(StatusCode::OK);
+                                res.render(Json(EmailResponse {
+                                    ok: true,
+                                    code: StatusCode::OK.as_u16(),
+                                    msg: format!("Success{}", err_msg),
+                                    jwt: None,
+                                }));
+                                // without this return the handler fell
+                                // through to the 401 render below, so every
+                                // successful request still answered 401.
+                                return;
+                            }
+                            Err(e) => {
+                                err_msg = e;
+                            }
                         }
-                        Err(e) => {
-                            err_msg = e;
-                        }
+                    }
+                    Err(e) => {
+                        err_msg = e;
                     }
                 }
             } else {

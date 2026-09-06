@@ -13,7 +13,21 @@ use std::sync::LazyLock;
 
 use crate::cache::EphemCache;
 
+use oauth2::reqwest::Client as HttpClient;
 use oauth2::{AuthorizationCode, CsrfToken};
+
+/// H6: bounded-timeout client for IdP discovery/token/userinfo calls — a
+/// hung peer must not pin the caller (and the tenant write guard the
+/// callback flow holds). Built on the reqwest re-exported by `oauth2`:
+/// the `AsyncHttpClient` impls exist for THAT client type (reqwest 0.12),
+/// while the workspace's own reqwest is a newer, distinct type.
+fn social_http_client() -> HttpClient {
+    HttpClient::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| HttpClient::new())
+}
 
 use openidconnect::core::{
     CoreAuthDisplay, CoreAuthPrompt, CoreErrorResponseType, CoreGenderClaim, CoreJsonWebKey,
@@ -29,7 +43,6 @@ use openidconnect::{
 
 // use openidconnect::*;
 
-use oauth2::reqwest::Client as HttpClient;
 use salvo::http::cookie::{Cookie, SameSite};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -143,7 +156,8 @@ pub struct SocialLoginEntry {
 
 impl SocialProvider {
     pub async fn build(&self) -> Result<DiscoveredClient> {
-        let http_client = HttpClient::new();
+        // H6: bounded-timeout shared client (discovery/token/userinfo calls).
+        let http_client = social_http_client();
         let issuer = IssuerUrl::new(self.issuer_url.clone())?;
 
         let provider_metadata: CoreProviderMetadata =
@@ -475,7 +489,8 @@ impl SocialLoginRegistry {
             .get(provider_id)
             .ok_or_else(|| anyhow!("provider '{}' not found in registry", provider_id))?;
 
-        let http_client = HttpClient::new();
+        // H6: bounded-timeout shared client (discovery/token/userinfo calls).
+        let http_client = social_http_client();
 
         let token_response = entry
             .client

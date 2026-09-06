@@ -90,6 +90,14 @@ pub async fn logout(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         }
     }
 
+    // No bearer token → 401, the contract this endpoint declares (and
+    // what `refresh` renders); other failures (unknown domain, revoke
+    // error) stay 400.
+    if get_jwt(req).is_none() {
+        res.status_code(StatusCode::UNAUTHORIZED);
+        res.render(Json(ApiProblem::unauthorized()));
+        return;
+    }
     res.status_code(StatusCode::BAD_REQUEST);
     res.render(Json(ApiProblem::bad_request("")));
 }

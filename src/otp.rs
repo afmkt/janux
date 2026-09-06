@@ -185,26 +185,19 @@ async fn sendsms(config: &OTPDTO, mobile: &str, code: &str) -> anyhow::Result<St
     .await
 }
 
-async fn handle_user<'a>(
+/// Phase 1 of the OTP ceremony — runs WHILE the tenant guard is held:
+/// mints the ceremony JWT (needs the tenant's signing key) and draws the
+/// 6-digit code. Cheap, local, no network.
+async fn prepare_ceremony<'a>(
     tenant: &mut RefMut<'a, String, Tenant>,
     issuer: &str,
     domain: &str,
     user_name: String,
     mobile: String,
     signup: bool,
-    otp_cfg: &OTPDTO,
-) -> Result<String, String> {
+) -> Result<(String, String), String> {
     if let Ok(token) = tenant
-        .jwt_authenticate(
-            issuer,
-            domain,
-            &user_name,
-            &OtpData {
-                mobile: mobile.clone(),
-                signup,
-            },
-            15,
-        )
+        .jwt_authenticate(issuer, domain, &user_name, &OtpData { mobile, signup }, 15)
         .await
     {
         use rsa::rand_core::{OsRng, RngCore};
@@ -221,30 +214,42 @@ async fn handle_user<'a>(
                 digits.push(char::from((buf[0] % 10) + b'0'));
             }
         }
-        let code = digits;
-
-        let ret = sendsms(otp_cfg, &mobile, code.as_str()).await;
-        if ret.is_ok() {
-            // H1: return an opaque flow handle, never the ceremony JWT —
-            // its `sub` would disclose the resolved username to whoever
-            // called this unauthenticated endpoint. Both cache entries
-            // are keyed by the handle; `verify` resolves it back.
-            let flow = crate::oidc::random_urlsafe_string();
-            let flow_key = format!("{}:{}", domain, flow);
-            OTP_FLOW_CACHE
-                .insert(flow_key.clone(), token)
-                .await
-                .map_err(|_| "Fail to start OTP ceremony".to_string())?;
-            OTP_CODE_CACHE
-                .insert(flow_key, code)
-                .await
-                .map_err(|_| "Fail to start OTP ceremony".to_string())?;
-            Ok(flow)
-        } else {
-            Err("Fail to send SMS".to_string())
-        }
+        Ok((token, digits))
     } else {
         Err("Fail to issue JWT".to_string())
+    }
+}
+
+/// Phase 2 of the OTP ceremony — runs AFTER the tenant guard is dropped
+/// (H6): the SMS dispatch is the only network hop, and a hung Aliyun peer
+/// must not pin the tenant's `DashMap` write guard (which would stall
+/// every other request for the domain). Parks the ceremony state under an
+/// opaque flow handle and returns it.
+async fn dispatch_ceremony(
+    domain: &str,
+    otp_cfg: &OTPDTO,
+    mobile: &str,
+    code: String,
+    ceremony_jwt: String,
+) -> Result<String, String> {
+    if sendsms(otp_cfg, mobile, code.as_str()).await.is_ok() {
+        // H1: return an opaque flow handle, never the ceremony JWT —
+        // its `sub` would disclose the resolved username to whoever
+        // called this unauthenticated endpoint. Both cache entries
+        // are keyed by the handle; `verify` resolves it back.
+        let flow = crate::oidc::random_urlsafe_string();
+        let flow_key = format!("{}:{}", domain, flow);
+        OTP_FLOW_CACHE
+            .insert(flow_key.clone(), ceremony_jwt)
+            .await
+            .map_err(|_| "Fail to start OTP ceremony".to_string())?;
+        OTP_CODE_CACHE
+            .insert(flow_key, code)
+            .await
+            .map_err(|_| "Fail to start OTP ceremony".to_string())?;
+        Ok(flow)
+    } else {
+        Err("Fail to send SMS".to_string())
     }
 }
 
@@ -316,7 +321,9 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                         return;
                     }
                 };
-                if let Ok(user) = tenant.user_by_mobile(&req_request.mobile).await {
+                // Phase 1 under the tenant guard: resolve the ceremony
+                // identity and mint its JWT (local, cheap).
+                let prepared = if let Ok(user) = tenant.user_by_mobile(&req_request.mobile).await {
                     // The signin ceremony binds to the RESOLVED account,
                     // not the claimed name — re-check the gate on the
                     // identity the token will carry, so claiming a
@@ -335,59 +342,61 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     }
                     // Existing credential: signin ceremony (— verify
                     // will resolve, never attach).
-                    match handle_user(
+                    prepare_ceremony(
                         &mut tenant,
                         issuer.as_str(),
                         domain.as_str(),
                         user.name,
-                        req_request.mobile,
+                        req_request.mobile.clone(),
                         false,
-                        &cfg,
                     )
                     .await
-                    {
-                        Ok(token) => {
-                            res.status_code(StatusCode::OK);
-                            res.render(Json(MobileResponse {
-                                ok: true,
-                                code: StatusCode::OK.as_u16(),
-                                msg: format!("Success{}", err_msg),
-                                jwt: Some(token),
-                            }));
-                            return;
-                        }
-                        Err(e) => {
-                            err_msg = e;
-                        }
-                    }
                 } else {
                     // Unknown credential: signup ceremony (— verify
                     // will create the user or fail; it never attaches to a
                     // pre-existing user).
-                    match handle_user(
+                    prepare_ceremony(
                         &mut tenant,
                         issuer.as_str(),
                         domain.as_str(),
-                        req_request.name,
-                        req_request.mobile,
+                        req_request.name.clone(),
+                        req_request.mobile.clone(),
                         true,
-                        &cfg,
                     )
                     .await
-                    {
-                        Ok(token) => {
-                            res.status_code(StatusCode::OK);
-                            res.render(Json(MobileResponse {
-                                ok: true,
-                                code: StatusCode::OK.as_u16(),
-                                msg: format!("Success{}", err_msg),
-                                jwt: Some(token),
-                            }));
-                            return;
+                };
+                // H6: drop the tenant's write guard BEFORE the SMS network
+                // hop — a hung Aliyun peer must not stall every other
+                // caller for this domain.
+                drop(tenant);
+                match prepared {
+                    Ok((ceremony_jwt, code)) => {
+                        match dispatch_ceremony(
+                            domain.as_str(),
+                            &cfg,
+                            &req_request.mobile,
+                            code,
+                            ceremony_jwt,
+                        )
+                        .await
+                        {
+                            Ok(flow) => {
+                                res.status_code(StatusCode::OK);
+                                res.render(Json(MobileResponse {
+                                    ok: true,
+                                    code: StatusCode::OK.as_u16(),
+                                    msg: format!("Success{}", err_msg),
+                                    jwt: Some(flow),
+                                }));
+                                return;
+                            }
+                            Err(e) => {
+                                err_msg = e;
+                            }
                         }
-                        Err(e) => {
-                            err_msg = e;
-                        }
+                    }
+                    Err(e) => {
+                        err_msg = e;
                     }
                 }
             } else {
