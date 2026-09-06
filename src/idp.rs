@@ -40,7 +40,11 @@ pub struct OAuth2Client {
     #[index]
     pub scope: String,
 
-    /// Tenant/domain this client belongs to (foreign key string)
+    /// Domain this client is registered on (FK → `Domain.id`). The tenant
+    /// is implicit — every tenant lives in its own database file — so this
+    /// column must NEVER hold the tenant name (it did before the domain
+    /// scoping fix, which made the `belongs_to` relation below dead and
+    /// let a client registered on one domain answer on all of them).
     #[index]
     pub domain_id: String,
 
@@ -256,10 +260,13 @@ impl OAuth2Client {
 // ── Tenant helper methods ────────────────────────────────────────────────────
 
 impl crate::db::Tenant {
-    /// Register a new OAuth2 client for this tenant.
+    /// Register a new OAuth2 client on `domain`. Clients are domain-scoped:
+    /// `domain_id` stores the registration domain (FK → `Domain.id`), never
+    /// the tenant name — the tenant is implicit in the per-tenant database.
     #[allow(clippy::too_many_arguments)]
     pub async fn oauth2client_create(
         &mut self,
+        domain: &str,
         id: &str,
         secret: &str,
         redirect_uris: &[&str],
@@ -276,7 +283,7 @@ impl crate::db::Tenant {
             response_types: response_types.to_string(),
             token_endpoint_auth_method: auth_method.to_string(),
             scope: default_scopes.to_string(),
-            domain_id: self.name.clone(),
+            domain_id: domain.to_string(),
             active: true,
         })
         .exec(&mut self.database)
@@ -291,12 +298,12 @@ impl crate::db::Tenant {
         Ok(())
     }
 
-    /// List all active OAuth2 clients for this tenant.
-    pub async fn oauth2client_all(&mut self) -> anyhow::Result<Vec<OAuth2Client>> {
+    /// List all active OAuth2 clients registered on `domain`.
+    pub async fn oauth2client_all(&mut self, domain: &str) -> anyhow::Result<Vec<OAuth2Client>> {
         OAuth2Client::filter(
             OAuth2Client::fields()
                 .domain_id()
-                .eq(self.name.clone())
+                .eq(domain.to_string())
                 .and(OAuth2Client::fields().active().eq(true)),
         )
         .exec(&mut self.database)
@@ -331,12 +338,23 @@ impl crate::db::Tenant {
     }
 
     /// Soft-delete an OAuth2 client by setting active=false (B-1).
-    pub async fn oauth2client_delete(&mut self, id: &str) -> Result<()> {
+    /// Soft-delete an OAuth2 client by setting active=false (B-1).
+    /// Domain-scoped: a client registered on another domain of the same
+    /// tenant is "not found" here — one domain's admin surface must not
+    /// deactivate another domain's relying parties.
+    pub async fn oauth2client_delete(&mut self, domain: &str, id: &str) -> anyhow::Result<()> {
+        let c = OAuth2Client::get_by_id(&mut self.database, id)
+            .await
+            .map_err(|_e| anyhow::anyhow!("OAuth2 client '{}' not found", id))?;
+        if c.domain_id != domain {
+            return Err(anyhow::anyhow!("OAuth2 client '{}' not found", id));
+        }
         OAuth2Client::update_by_id(id)
             .active(false)
             .exec(&mut self.database)
             .await
             .map(|_| ())
+            .map_err(Into::into)
     }
 
     /// Extended OIDC metadata for a client ([`ClientMeta`]), if any was
@@ -507,6 +525,7 @@ pub async fn new_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut Re
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
         match tenant
             .oauth2client_create(
+                domain,
                 &body.client_id,
                 &body.secret,
                 &redirect_uris,
@@ -545,7 +564,7 @@ pub async fn list_oauth2clients(req: &mut Request, depot: &mut Depot, res: &mut 
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-        match tenant.oauth2client_all().await {
+        match tenant.oauth2client_all(domain).await {
             Ok(clients) => {
                 // the redirect_uris deferred is unloaded on these
                 // rows — query each client's URIs explicitly.
@@ -600,7 +619,7 @@ pub async fn delete_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-        match tenant.oauth2client_delete(&body.client_id).await {
+        match tenant.oauth2client_delete(domain, &body.client_id).await {
             Ok(_) => {
                 res.status_code(StatusCode::OK);
                 res.render(Json(ApiResponse::ok("OAuth2 client deactivated")));

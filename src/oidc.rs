@@ -1072,12 +1072,12 @@ async fn authorize_flow(
         return;
     }
 
-    if client.domain_id != tenant.name {
+    if client.domain_id != domain {
         oauth2_error(
             res,
             "/error",
             "invalid_client",
-            "Client is not registered for this tenant",
+            "Client is not registered for this domain",
             state.as_deref(),
         );
         return;
@@ -1336,6 +1336,11 @@ pub async fn authorize_resume(req: &mut Request, depot: &mut Depot, res: &mut Re
     let state = depot
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
+    // Owned String: `continuation_tenant` reborrows state mutably, and the
+    // domain guard below compares the client against the request domain.
+    let domain = crate::utils::get_domain(req, state)
+        .unwrap_or_default()
+        .to_string();
     let mut tenant = match continuation_tenant(req, state) {
         Some(t) => t,
         None => {
@@ -1349,7 +1354,7 @@ pub async fn authorize_resume(req: &mut Request, depot: &mut Depot, res: &mut Re
     };
 
     match tenant.oauth2client_get(&client_id).await {
-        Ok(c) if c.domain_id == tenant.name => {}
+        Ok(c) if c.domain_id == domain => {}
         _ => {
             render_redirect_json(
                 res,
@@ -1615,6 +1620,11 @@ pub async fn consent_submit(req: &mut Request, depot: &mut Depot, res: &mut Resp
     let state = depot
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
+    // Owned String: `continuation_tenant` reborrows state mutably, and the
+    // domain guard below compares the client against the request domain.
+    let domain = crate::utils::get_domain(req, state)
+        .unwrap_or_default()
+        .to_string();
     let mut tenant = match continuation_tenant(req, state) {
         Some(t) => t,
         None => {
@@ -1628,7 +1638,7 @@ pub async fn consent_submit(req: &mut Request, depot: &mut Depot, res: &mut Resp
     };
 
     match tenant.oauth2client_get(&client_id).await {
-        Ok(c) if c.domain_id == tenant.name => {}
+        Ok(c) if c.domain_id == domain => {}
         _ => {
             render_redirect_json(
                 res,
@@ -1804,6 +1814,20 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             return;
         }
     };
+
+    // Clients are domain-scoped: `domain_id` holds the domain the client
+    // was registered on (FK → Domain.id). The same client_id presented on
+    // another domain of the tenant is unknown here — one guard covering
+    // every grant type below.
+    if client.domain_id != domain {
+        token_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            &format!("Unknown client '{}'", params.client_id),
+        );
+        return;
+    }
 
     // server-side support first (unknown grants get the precise
     // `unsupported_grant_type`), then the per-client allowlist — a client
@@ -4112,7 +4136,7 @@ pub async fn device_login_approve(req: &mut Request, depot: &mut Depot, res: &mu
         }
 
         match tenant.oauth2client_get(&client_id).await {
-            Ok(c) if c.domain_id == tenant.name => {}
+            Ok(c) if c.domain_id == domain => {}
             _ => {
                 rollback_claim!();
                 res.status_code(StatusCode::BAD_REQUEST);
@@ -4445,6 +4469,7 @@ mod tests {
                 let redirect = format!("http://localhost/{id}/callback");
                 tenant
                     .oauth2client_create(
+                        "localhost",
                         id,
                         secret,
                         &[redirect.as_str()],
@@ -5232,6 +5257,7 @@ mod tests {
             let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
             tenant
                 .oauth2client_create(
+                    "localhost",
                     "scim-client",
                     "scim-secret",
                     &[],
@@ -5303,6 +5329,7 @@ mod tests {
             let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
             tenant
                 .oauth2client_create(
+                    "localhost",
                     "machine-no-scim",
                     "secret",
                     &[],
@@ -5347,6 +5374,7 @@ mod tests {
             let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
             tenant
                 .oauth2client_create(
+                    "localhost",
                     "hybrid-client",
                     "secret",
                     &[],
@@ -5376,6 +5404,101 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "invalid_scope");
+    }
+
+    /// regression: `OAuth2Client.domain_id` stores the DOMAIN the client
+    /// was registered on (FK → `Domain.id`) — never the tenant name, which
+    /// is implicit in the per-tenant database. Clients are domain-scoped:
+    /// list/delete/token all refuse a sibling domain's client.
+    #[tokio::test]
+    async fn clients_are_scoped_to_their_registration_domain() {
+        let (state, _tmp) = revoke_test_env().await;
+        state
+            .storage
+            .add_domain("other.local", "test-tenant")
+            .await
+            .expect("sibling domain");
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant
+                .key_create("other.local", "key-other")
+                .await
+                .expect("sibling signing key");
+            tenant
+                .oauth2client_create(
+                    "other.local",
+                    "other-client",
+                    "secret",
+                    &[],
+                    "client_credentials",
+                    "",
+                    "client_secret_post",
+                    "scim",
+                )
+                .await
+                .expect("client");
+
+            // The stored value is the domain — the bug this pins is the
+            // row holding `tenant.name` instead.
+            let c = tenant
+                .oauth2client_get("other-client")
+                .await
+                .expect("client");
+            assert_eq!(c.domain_id, "other.local");
+            assert_ne!(c.domain_id, tenant.name);
+
+            // Listing is domain-scoped.
+            let here = tenant.oauth2client_all("localhost").await.expect("list");
+            assert!(
+                here.iter().all(|c| c.id != "other-client"),
+                "a sibling domain's client must not appear in this domain's list"
+            );
+            let there = tenant.oauth2client_all("other.local").await.expect("list");
+            assert_eq!(there.len(), 1);
+
+            // Cross-domain delete is refused; the owner domain succeeds
+            // (checked last, after the token assertions).
+            assert!(
+                tenant
+                    .oauth2client_delete("localhost", "other-client")
+                    .await
+                    .is_err(),
+                "one domain's admin surface must not deactivate another's client"
+            );
+        }
+
+        let service = token_service(state.clone());
+
+        // Token endpoint on localhost: the sibling's client is unknown.
+        let (status, body) = post_token(
+            &service,
+            "grant_type=client_credentials&client_id=other-client&client_secret=secret&scope=scim",
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"], "invalid_client");
+
+        // On its own domain the same credentials mint normally.
+        let res = salvo::test::TestClient::post("http://other.local/token")
+            .add_header("Host", "other.local", true)
+            .raw_form(
+                "grant_type=client_credentials&client_id=other-client&client_secret=secret&scope=scim"
+                    .to_string(),
+            )
+            .send(&service)
+            .await;
+        assert_eq!(
+            res.status_code,
+            Some(StatusCode::OK),
+            "the client must work on its registration domain"
+        );
+
+        // Owner-domain delete succeeds.
+        let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+        tenant
+            .oauth2client_delete("other.local", "other-client")
+            .await
+            .expect("owner domain deletes its own client");
     }
 
     /// regression H5: `plain` PKCE is refused outright — the old TLS-gated
@@ -5443,7 +5566,16 @@ mod tests {
         {
             let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
             tenant
-                .oauth2client_create("public-cc", "x", &[], "client_credentials", "", "none", "")
+                .oauth2client_create(
+                    "localhost",
+                    "public-cc",
+                    "x",
+                    &[],
+                    "client_credentials",
+                    "",
+                    "none",
+                    "",
+                )
                 .await
                 .expect("client");
         }
@@ -6192,6 +6324,7 @@ mod tests {
             let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
             tenant
                 .oauth2client_create(
+                    "localhost",
                     "client-pub",
                     "unused",
                     &["http://localhost/client-pub/callback"],
@@ -6356,6 +6489,7 @@ mod tests {
             tenant.user_create("alice").await.expect("user");
             tenant
                 .oauth2client_create(
+                    "localhost",
                     "client-c",
                     "secret-c",
                     &["http://localhost/client-c/callback"],

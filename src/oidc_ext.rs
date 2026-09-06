@@ -186,8 +186,13 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     let state = depot
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
-    let domain = crate::utils::get_domain(req, state).unwrap_or_default();
-    let Some(mut tenant) = state.storage.tenant_by_domain(domain) else {
+    // Owned String: `get_domain` borrows `req`, and the body parse below
+    // needs it mutably while `domain` stays live until the client row is
+    // written.
+    let domain = crate::utils::get_domain(req, state)
+        .unwrap_or_default()
+        .to_string();
+    let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_str()) else {
         registration_error(res, "invalid_client_metadata", "unknown tenant domain");
         return;
     };
@@ -291,6 +296,7 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     let redirect_refs: Vec<&str> = body.redirect_uris.iter().map(|s| s.as_str()).collect();
     if let Err(e) = tenant
         .oauth2client_create(
+            &domain,
             &client_id,
             &secret,
             &redirect_refs,
@@ -314,7 +320,7 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         // The client row exists but its extended metadata did not persist:
         // roll the registration back rather than leaving a half-registered
         // client behind.
-        let _ = tenant.oauth2client_delete(&client_id).await;
+        let _ = tenant.oauth2client_delete(&domain, &client_id).await;
         registration_error(res, "invalid_client_metadata", &e.to_string());
         return;
     }
@@ -404,8 +410,10 @@ pub async fn register_read(req: &mut Request, depot: &mut Depot, res: &mut Respo
     };
 
     let client = match tenant.oauth2client_get(&client_id).await {
-        Ok(c) => c,
-        Err(_) => {
+        // Domain-scoped: a client registered on another domain of the
+        // tenant is unknown to this endpoint.
+        Ok(c) if c.domain_id == domain => c,
+        _ => {
             crate::oidc::token_error(
                 res,
                 StatusCode::UNAUTHORIZED,
@@ -653,7 +661,9 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
     {
         let registered = if let Some(cid) = &client_id {
             match tenant.oauth2client_get(cid).await {
-                Ok(_) => {
+                // Domain-scoped: only a client of THIS domain can have its
+                // redirect URIs honored for post-logout redirection.
+                Ok(c) if c.domain_id == domain => {
                     let mut allowed: Vec<String> = tenant
                         .oauth2client_redirect_uris(cid)
                         .await
@@ -664,7 +674,8 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
                     }
                     allowed.iter().any(|u| u == &uri)
                 }
-                Err(_) => false,
+                // Unknown OR registered on another domain: not redirectable.
+                _ => false,
             }
         } else {
             false
@@ -824,7 +835,13 @@ pub async fn set_client_meta(req: &mut Request, depot: &mut Depot, res: &mut Res
         res.render(Json(ApiProblem::not_found("Unknown domain")));
         return;
     };
-    if tenant.oauth2client_get(&body.client_id).await.is_err() {
+    // Domain-scoped: metadata of a client registered on another domain of
+    // the tenant is out of reach for this domain's admin surface.
+    let client_on_domain = matches!(
+        tenant.oauth2client_get(&body.client_id).await,
+        Ok(c) if c.domain_id == domain
+    );
+    if !client_on_domain {
         res.status_code(StatusCode::BAD_REQUEST);
         res.render(Json(ApiProblem::not_found("Unknown OAuth2 client")));
         return;
@@ -1038,6 +1055,7 @@ mod tests {
             let mut tenant = storage.tenant_by_id(tenant_name).expect("tenant");
             tenant
                 .oauth2client_create(
+                    domain,
                     "client-with-uri",
                     "secret-a",
                     &["https://a.example/cb"],
@@ -1060,6 +1078,7 @@ mod tests {
                 .expect("meta A");
             tenant
                 .oauth2client_create(
+                    domain,
                     "client-without-uri",
                     "secret-b",
                     &["https://b.example/cb"],
@@ -1072,6 +1091,7 @@ mod tests {
                 .expect("client B");
             tenant
                 .oauth2client_create(
+                    domain,
                     "client-revoked",
                     "secret-c",
                     &["https://c.example/cb"],
@@ -1374,6 +1394,7 @@ mod tests {
                 .expect("user");
             tenant
                 .oauth2client_create(
+                    HTTP_DOMAIN,
                     "rp-client",
                     "rp-secret",
                     &["https://rp.example.com/callback"],

@@ -891,6 +891,7 @@ mod tests {
                 .expect("signing key");
             tenant
                 .oauth2client_create(
+                    DOMAIN,
                     "scim-client",
                     "scim-secret",
                     &[],
