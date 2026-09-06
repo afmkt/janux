@@ -5448,12 +5448,12 @@ mod tests {
             assert_ne!(c.domain_id, tenant.name);
 
             // Listing is domain-scoped.
-            let here = tenant.oauth2client_all("localhost").await.expect("list");
+            let here = tenant.oauth2client_page("localhost", crate::utils::MAX_PAGE_LIMIT, 0).await.expect("list").items;
             assert!(
                 here.iter().all(|c| c.id != "other-client"),
                 "a sibling domain's client must not appear in this domain's list"
             );
-            let there = tenant.oauth2client_all("other.local").await.expect("list");
+            let there = tenant.oauth2client_page("other.local", crate::utils::MAX_PAGE_LIMIT, 0).await.expect("list").items;
             assert_eq!(there.len(), 1);
 
             // Cross-domain delete is refused; the owner domain succeeds

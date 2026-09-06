@@ -1046,114 +1046,6 @@
         ],
         "type": "object"
       },
-      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.idp.OAuth2ClientDto>>": {
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/openapi.idp.OAuth2ClientDto"
-            },
-            "type": "array"
-          },
-          "ok": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "ok",
-          "data"
-        ],
-        "type": "object"
-      },
-      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.key.KeyEntry>>": {
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/openapi.key.KeyEntry"
-            },
-            "type": "array"
-          },
-          "ok": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "ok",
-          "data"
-        ],
-        "type": "object"
-      },
-      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.policy.PolicyEntry>>": {
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/openapi.policy.PolicyEntry"
-            },
-            "type": "array"
-          },
-          "ok": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "ok",
-          "data"
-        ],
-        "type": "object"
-      },
-      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.role.RoleEntry>>": {
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/openapi.role.RoleEntry"
-            },
-            "type": "array"
-          },
-          "ok": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "ok",
-          "data"
-        ],
-        "type": "object"
-      },
-      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.social.SocialProvider>>": {
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/openapi.social.SocialProvider"
-            },
-            "type": "array"
-          },
-          "ok": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "ok",
-          "data"
-        ],
-        "type": "object"
-      },
-      "openapi.utils.ApiResponse<alloc.vec.Vec<openapi.totp.TotpEntry>>": {
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/openapi.totp.TotpEntry"
-            },
-            "type": "array"
-          },
-          "ok": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "ok",
-          "data"
-        ],
-        "type": "object"
-      },
       "openapi.utils.ApiResponse<openapi.oidc_ext.OidcTenantConfig>": {
         "properties": {
           "data": {
@@ -1166,6 +1058,335 @@
         "required": [
           "ok",
           "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<openapi.utils.Page<String>>": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/openapi.utils.Page<String>"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<openapi.utils.Page<openapi.idp.OAuth2ClientDto>>": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/openapi.utils.Page<openapi.idp.OAuth2ClientDto>"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<openapi.utils.Page<openapi.key.KeyEntry>>": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/openapi.utils.Page<openapi.key.KeyEntry>"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<openapi.utils.Page<openapi.policy.PolicyEntry>>": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/openapi.utils.Page<openapi.policy.PolicyEntry>"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<openapi.utils.Page<openapi.role.RoleEntry>>": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/openapi.utils.Page<openapi.role.RoleEntry>"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<openapi.utils.Page<openapi.social.SocialProvider>>": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/openapi.utils.Page<openapi.social.SocialProvider>"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<openapi.utils.Page<openapi.totp.TotpEntry>>": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/openapi.utils.Page<openapi.totp.TotpEntry>"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.Page<String>": {
+        "description": "Pagination envelope for list endpoints. `next_offset` is `Some` only when\nmore rows follow this page, so clients can loop without a total count.",
+        "properties": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_offset": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.Page<openapi.idp.OAuth2ClientDto>": {
+        "description": "Pagination envelope for list endpoints. `next_offset` is `Some` only when\nmore rows follow this page, so clients can loop without a total count.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.idp.OAuth2ClientDto"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_offset": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.Page<openapi.key.KeyEntry>": {
+        "description": "Pagination envelope for list endpoints. `next_offset` is `Some` only when\nmore rows follow this page, so clients can loop without a total count.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.key.KeyEntry"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_offset": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.Page<openapi.policy.PolicyEntry>": {
+        "description": "Pagination envelope for list endpoints. `next_offset` is `Some` only when\nmore rows follow this page, so clients can loop without a total count.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.policy.PolicyEntry"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_offset": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.Page<openapi.role.RoleEntry>": {
+        "description": "Pagination envelope for list endpoints. `next_offset` is `Some` only when\nmore rows follow this page, so clients can loop without a total count.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.role.RoleEntry"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_offset": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.Page<openapi.social.SocialProvider>": {
+        "description": "Pagination envelope for list endpoints. `next_offset` is `Some` only when\nmore rows follow this page, so clients can loop without a total count.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.social.SocialProvider"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_offset": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.Page<openapi.totp.TotpEntry>": {
+        "description": "Pagination envelope for list endpoints. `next_offset` is `Some` only when\nmore rows follow this page, so clients can loop without a total count.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/openapi.totp.TotpEntry"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_offset": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset"
         ],
         "type": "object"
       }
@@ -1256,12 +1477,34 @@
     "/api/v1/admin/domain/list": {
       "get": {
         "operationId": "openapi.admin.all_domains",
+        "parameters": [
+          {
+            "description": "Max items per page (server-enforced default and cap)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of items to skip",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<String>>"
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<String>>"
                 }
               }
             },
@@ -1380,12 +1623,34 @@
     "/api/v1/admin/key/list": {
       "get": {
         "operationId": "openapi.key.all_keys",
+        "parameters": [
+          {
+            "description": "Max items per page (server-enforced default and cap)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of items to skip",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.key.KeyEntry>>"
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<openapi.key.KeyEntry>>"
                 }
               }
             },
@@ -1502,12 +1767,34 @@
     "/api/v1/admin/oauth2client/list": {
       "get": {
         "operationId": "openapi.idp.list_oauth2clients",
+        "parameters": [
+          {
+            "description": "Max items per page (server-enforced default and cap)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of items to skip",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.idp.OAuth2ClientDto>>"
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<openapi.idp.OAuth2ClientDto>>"
                 }
               }
             },
@@ -1731,12 +2018,34 @@
       "get": {
         "description": "Policies are read directly from the DB (not the cache) so the caller sees\nthe latest configuration. The `resource` field is flattened back from its\nsegmented storage form into a slash-joined path string.",
         "operationId": "openapi.policy.all_policies",
+        "parameters": [
+          {
+            "description": "Max items per page (server-enforced default and cap)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of items to skip",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.policy.PolicyEntry>>"
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<openapi.policy.PolicyEntry>>"
                 }
               }
             },
@@ -1835,12 +2144,34 @@
     "/api/v1/admin/provider/list": {
       "get": {
         "operationId": "openapi.social.all_providers",
+        "parameters": [
+          {
+            "description": "Max items per page (server-enforced default and cap)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of items to skip",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.social.SocialProvider>>"
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<openapi.social.SocialProvider>>"
                 }
               }
             },
@@ -1969,12 +2300,34 @@
     "/api/v1/admin/role/list": {
       "get": {
         "operationId": "openapi.role.all_roles",
+        "parameters": [
+          {
+            "description": "Max items per page (server-enforced default and cap)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of items to skip",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.role.RoleEntry>>"
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<openapi.role.RoleEntry>>"
                 }
               }
             },
@@ -2073,12 +2426,34 @@
     "/api/v1/admin/tenant/list": {
       "get": {
         "operationId": "openapi.admin.all_tenants",
+        "parameters": [
+          {
+            "description": "Max items per page (server-enforced default and cap)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of items to skip",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<String>>"
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<String>>"
                 }
               }
             },
@@ -2101,6 +2476,28 @@
     "/api/v1/admin/totp/list": {
       "post": {
         "operationId": "openapi.totp.list_totp",
+        "parameters": [
+          {
+            "description": "Max items per page (server-enforced default and cap)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of items to skip",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2116,7 +2513,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<openapi.totp.TotpEntry>>"
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<openapi.totp.TotpEntry>>"
                 }
               }
             },
@@ -2465,12 +2862,34 @@
     "/api/v1/admin/user/list": {
       "get": {
         "operationId": "openapi.user.all_users",
+        "parameters": [
+          {
+            "description": "Max items per page (server-enforced default and cap)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of items to skip",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<alloc.vec.Vec<String>>"
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<String>>"
                 }
               }
             },

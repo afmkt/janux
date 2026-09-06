@@ -1,6 +1,6 @@
 use crate::domain::Domain;
 use crate::utils::ApiProblem;
-use crate::utils::ApiResponse;
+use crate::utils::{ApiResponse, Page};
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use rsa::rand_core::OsRng;
@@ -298,14 +298,45 @@ impl crate::db::Tenant {
         Ok(())
     }
 
-    /// List all active OAuth2 clients registered on `domain`.
-    pub async fn oauth2client_all(&mut self, domain: &str) -> anyhow::Result<Vec<OAuth2Client>> {
-        OAuth2Client::filter(
+    /// One DB-level page of active OAuth2 clients on `domain`, ordered by id
+    /// so pages are stable and disjoint. The `limit + 1` probe row (see
+    /// [`crate::utils::Page`]) is fetched and folded into `next_offset`
+    /// internally.
+    pub async fn oauth2client_page(
+        &mut self,
+        domain: &str,
+        limit: usize,
+        offset: usize,
+    ) -> anyhow::Result<Page<OAuth2Client>> {
+        let (fetch, offset) = crate::utils::page_bounds(limit, offset);
+        let rows = OAuth2Client::filter(
             OAuth2Client::fields()
                 .domain_id()
                 .eq(domain.to_string())
                 .and(OAuth2Client::fields().active().eq(true)),
         )
+        .order_by(OAuth2Client::fields().id().asc())
+        .limit(fetch)
+        .offset(offset)
+        .exec(&mut self.database)
+        .await
+        .map_err::<anyhow::Error, _>(Into::into)?;
+        Ok(Page::from_rows(rows, limit, offset))
+    }
+
+    /// Batch-fetch the redirect URIs of several clients in one query
+    /// (`RedirectURI.client_id` is indexed), replacing a per-client N+1.
+    pub async fn redirect_uris_for_clients(
+        &mut self,
+        client_ids: Vec<String>,
+    ) -> anyhow::Result<Vec<RedirectURI>> {
+        if client_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        RedirectURI::filter(toasty::stmt::Expr::in_list(
+            RedirectURI::fields().client_id(),
+            client_ids,
+        ))
         .exec(&mut self.database)
         .await
         .map_err(Into::into)
@@ -555,34 +586,56 @@ pub async fn new_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut Re
 
 #[endpoint(
     summary = "List all active OAuth2 clients for the current tenant",
+    parameters(
+        ("limit" = Option<usize>, Query, description = "Max items per page (server-enforced default and cap)"),
+        ("offset" = Option<usize>, Query, description = "Number of items to skip"),
+    ),
     responses(
-        (status_code = 200, description = "Success", body = ApiResponse<Vec<OAuth2ClientDto>>),
+        (status_code = 200, description = "Success", body = ApiResponse<Page<OAuth2ClientDto>>),
         (status_code = 400, description = "Bad request", body = ApiProblem),
     )
 )]
 pub async fn list_oauth2clients(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
+    let (limit, offset) = crate::utils::page_params(req);
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-        match tenant.oauth2client_all(domain).await {
-            Ok(clients) => {
-                // the redirect_uris deferred is unloaded on these
-                // rows — query each client's URIs explicitly.
-                let mut dtos = Vec::with_capacity(clients.len());
-                for c in clients {
-                    let uris = match tenant.oauth2client_redirect_uris(&c.id).await {
-                        Ok(uris) => uris.into_iter().map(|r| r.id).collect(),
-                        Err(e) => {
-                            let err = ApiProblem::validation_error(&e.to_string());
-                            res.status_code(StatusCode::BAD_REQUEST);
-                            res.render(Json(err));
-                            return;
-                        }
-                    };
-                    dtos.push(OAuth2ClientDto::from_client(c, uris));
+        match tenant.oauth2client_page(domain, limit, offset).await {
+            Ok(page) => {
+                // The redirect_uris deferred is unloaded on these rows, so
+                // fetch the whole page's URIs in one indexed query instead
+                // of one round-trip per client.
+                let ids: Vec<String> = page.items.iter().map(|c| c.id.clone()).collect();
+                let uris = match tenant.redirect_uris_for_clients(ids).await {
+                    Ok(uris) => uris,
+                    Err(e) => {
+                        let err = ApiProblem::validation_error(&e.to_string());
+                        res.status_code(StatusCode::BAD_REQUEST);
+                        res.render(Json(err));
+                        return;
+                    }
+                };
+                let mut by_client: std::collections::HashMap<String, Vec<String>> =
+                    std::collections::HashMap::new();
+                for uri in uris {
+                    by_client.entry(uri.client_id).or_default().push(uri.id);
                 }
+                let dtos = page
+                    .items
+                    .into_iter()
+                    .map(|c| {
+                        let uris = by_client.remove(&c.id).unwrap_or_default();
+                        OAuth2ClientDto::from_client(c, uris)
+                    })
+                    .collect();
+                let page = Page {
+                    items: dtos,
+                    limit: page.limit,
+                    offset: page.offset,
+                    next_offset: page.next_offset,
+                };
                 res.status_code(StatusCode::OK);
-                res.render(Json(ApiResponse::ok(dtos)));
+                res.render(Json(ApiResponse::ok(page)));
             }
             Err(e) => {
                 let err = ApiProblem::validation_error(&e.to_string());

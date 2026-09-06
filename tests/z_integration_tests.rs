@@ -590,7 +590,7 @@ async fn full_tenant_lifecycle_create_and_delete() {
     )
     .await;
     assert_eq!(status, reqwest::StatusCode::OK, "tenant list: {body}");
-    let listed: Vec<String> = body["data"]
+    let listed: Vec<String> = body["data"]["items"]
         .as_array()
         .unwrap_or(&Vec::new())
         .iter()
@@ -627,7 +627,7 @@ async fn full_tenant_lifecycle_create_and_delete() {
     )
     .await;
     assert_eq!(status, reqwest::StatusCode::OK, "tenant list: {body}");
-    let listed: Vec<String> = body["data"]
+    let listed: Vec<String> = body["data"]["items"]
         .as_array()
         .unwrap_or(&Vec::new())
         .iter()
@@ -733,14 +733,21 @@ async fn admin_create_delete_oauth2_client() {
             format!("Bearer {}", env.admin_token.clone().unwrap()),
         )
         .json(&json!({
-            "id": "test-oauth2-client"
+            "client_id": "test-oauth2-client",
+            "secret": "test-secret",
+            "redirect_uris": "https://rp.example/cb",
+            "grant_types": "authorization_code refresh_token",
+            "response_types": "code",
+            "token_endpoint_auth_method": "client_secret_post",
+            "default_scopes": "openid email profile"
         }))
         .send()
-        .await;
+        .await
+        .expect("client create");
+    assert_eq!(resp1.status(), reqwest::StatusCode::OK, "client create");
 
-    assert!(resp1.is_ok());
-
-    // List clients
+    // List clients — paginated envelope, and the page's redirect URIs are
+    // batch-fetched in one query (G-113 follow-up), so the DTO must carry them.
     let resp2 = Client::new()
         .get(format!("{}/api/v1/admin/oauth2client/list", env.base_url()))
         .header("Host", "localhost")
@@ -749,9 +756,25 @@ async fn admin_create_delete_oauth2_client() {
             format!("Bearer {}", env.admin_token.clone().unwrap()),
         )
         .send()
-        .await;
-
-    assert!(resp2.is_ok());
+        .await
+        .expect("client list");
+    assert_eq!(resp2.status(), reqwest::StatusCode::OK, "client list");
+    let body = resp2
+        .json::<serde_json::Value>()
+        .await
+        .expect("valid JSON list body");
+    let items = body["data"]["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("list must return a page of items: {body}"));
+    let listed = items
+        .iter()
+        .find(|c| c["id"] == "test-oauth2-client")
+        .unwrap_or_else(|| panic!("created client must be listed: {body}"));
+    assert_eq!(
+        listed["redirect_uris"].as_str().unwrap_or(""),
+        "https://rp.example/cb",
+        "the batched redirect-URI lookup must populate the DTO"
+    );
 
     // Delete client
     let resp3 = Client::new()
@@ -765,12 +788,12 @@ async fn admin_create_delete_oauth2_client() {
             format!("Bearer {}", env.admin_token.clone().unwrap()),
         )
         .json(&json!({
-            "id": "test-oauth2-client"
+            "client_id": "test-oauth2-client"
         }))
         .send()
-        .await;
-
-    assert!(resp3.is_ok());
+        .await
+        .expect("client delete");
+    assert_eq!(resp3.status(), reqwest::StatusCode::OK, "client delete");
 }
 
 // ─── OIDC /authorize continuation endpoint tests ────────────────────────────

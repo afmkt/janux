@@ -310,7 +310,7 @@ mod tests {
 
         // Full builtin catalog at the pinned levels (the role NAME is the
         // model's `id`).
-        let roles = tenant.all_roles().await.expect("roles");
+        let roles = tenant.roles_page(crate::utils::MAX_PAGE_LIMIT, 0).await.expect("roles").items;
         for (name, level) in crate::role::BUILTIN_ROLES {
             let role = roles
                 .iter()
@@ -323,7 +323,7 @@ mod tests {
         // rows, without which the `scim` role is dead under default-deny.
         // `resource` is stored as `/`-split segments; join round-trips the
         // original path exactly (the leading "" segment restores the slash).
-        let policies = tenant.all_policies().await.expect("policies");
+        let policies = tenant.policies_page(crate::utils::MAX_PAGE_LIMIT, 0).await.expect("policies").items;
         let has_policy = |resource: &str, role: &str| {
             policies.iter().any(|p| {
                 p.domain_id == "fresh.local"

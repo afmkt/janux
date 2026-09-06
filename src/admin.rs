@@ -1,4 +1,4 @@
-use crate::utils::{ApiProblem, ApiResponse};
+use crate::utils::{ApiProblem, ApiResponse, Page};
 use salvo::prelude::*;
 use serde::Deserialize;
 
@@ -81,18 +81,23 @@ pub struct SetCors {
 
 #[endpoint(
     summary = "List all tenants",
+    parameters(
+        ("limit" = Option<usize>, Query, description = "Max items per page (server-enforced default and cap)"),
+        ("offset" = Option<usize>, Query, description = "Number of items to skip"),
+    ),
     responses(
-        (status_code = 200, description = "All tenant names", body = ApiResponse<Vec<String>>),
+        (status_code = 200, description = "All tenant names", body = ApiResponse<Page<String>>),
         (status_code = 400, description = "Bad request", body = ApiProblem),
     )
 )]
-pub async fn all_tenants(_req: &mut Request, depot: &mut Depot, res: &mut Response) {
+pub async fn all_tenants(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
+    let (limit, offset) = crate::utils::page_params(req);
     if let Ok(data) = state.storage.all_tenants().await {
         res.status_code(StatusCode::OK);
-        res.render(Json(ApiResponse::ok(data)));
+        res.render(Json(ApiResponse::ok(Page::from_all(data, limit, offset))));
         return;
     }
     let err = ApiProblem::validation_error("Failed to parse request body");
@@ -137,23 +142,23 @@ pub async fn set_cors(req: &mut Request, depot: &mut Depot, res: &mut Response) 
 
 #[endpoint(
     summary = "Return all domains in a tenant",
+    parameters(
+        ("limit" = Option<usize>, Query, description = "Max items per page (server-enforced default and cap)"),
+        ("offset" = Option<usize>, Query, description = "Number of items to skip"),
+    ),
     responses(
-        (status_code = 200, description = "All domain names of the tenant", body = ApiResponse<Vec<String>>),
+        (status_code = 200, description = "All domain names of the tenant", body = ApiResponse<Page<String>>),
         (status_code = 400, description = "Bad request", body = ApiProblem)
     )
 )]
 pub async fn all_domains(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
+    let (limit, offset) = crate::utils::page_params(req);
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-        let data: Vec<String> = tenant
-            .all_domains()
-            .await
-            .into_iter()
-            .map(|d| d.id.clone())
-            .collect();
+        let page = tenant.domains_page(limit, offset).await.map(|d| d.id);
         res.status_code(StatusCode::OK);
-        res.render(Json(ApiResponse::ok(data)));
+        res.render(Json(ApiResponse::ok(page)));
         return;
     }
     let err = ApiProblem::validation_error("Failed to parse request body");

@@ -6,6 +6,7 @@ use crate::key::Key;
 use crate::policy::Policy;
 
 use crate::totp::Totp;
+use crate::utils::Page;
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -169,5 +170,22 @@ impl Tenant {
             .await
             .unwrap_or_default();
         ret.into_iter().collect()
+    }
+
+    /// One DB-level page of domains, ordered by id so pages are stable and
+    /// disjoint. The `limit + 1` probe row (see [`crate::utils::Page`]) is
+    /// fetched and folded into `next_offset` internally.
+    pub async fn domains_page(&mut self, limit: usize, offset: usize) -> Page<Domain> {
+        let (fetch, offset) = crate::utils::page_bounds(limit, offset);
+        let rows: Vec<Domain> = Domain::all()
+            .order_by(Domain::fields().id().asc())
+            .limit(fetch)
+            .offset(offset)
+            .exec(&mut self.database)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        Page::from_rows(rows, limit, offset)
     }
 }

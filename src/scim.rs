@@ -28,8 +28,9 @@ const SPC_SCHEMA: &str = "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderC
 const RATE_LIMIT_PER_MINUTE: usize = 60;
 
 /// Default page cap for list responses (`filter.maxResults` in
-/// ServiceProviderConfig).
-const MAX_RESULTS: usize = 200;
+/// ServiceProviderConfig). Tied to the shared admin-list cap so the two
+/// surfaces advertise one page-size ceiling.
+const MAX_RESULTS: usize = crate::utils::MAX_PAGE_LIMIT;
 
 // ─── Wire types ──────────────────────────────────────────────────────────────
 

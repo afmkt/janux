@@ -121,6 +121,92 @@ impl<T> ApiResponse<T> {
     }
 }
 
+/// Default page size for paginated list endpoints.
+pub const DEFAULT_PAGE_LIMIT: usize = 50;
+
+/// Hard cap on page size, matching SCIM's `filter.maxResults`.
+pub const MAX_PAGE_LIMIT: usize = 200;
+
+/// Parse the `limit`/`offset` query parameters shared by all paginated list
+/// endpoints. `limit` is clamped to `[1, MAX_PAGE_LIMIT]` (default
+/// [`DEFAULT_PAGE_LIMIT`]); a missing or malformed `offset` falls back to 0.
+/// `offset` is capped at `i64::MAX` because toasty's query builder panics on
+/// larger values.
+pub fn page_params(req: &Request) -> (usize, usize) {
+    let limit = req
+        .query::<usize>("limit")
+        .unwrap_or(DEFAULT_PAGE_LIMIT)
+        .clamp(1, MAX_PAGE_LIMIT);
+    let offset = req
+        .query::<usize>("offset")
+        .unwrap_or(0)
+        .min(i64::MAX as usize);
+    (limit, offset)
+}
+
+/// Translate a client-facing page window into safe toasty query bounds:
+/// fetch one extra row to probe for a next page (see [`Page::from_rows`]),
+/// and keep both values within the `i64` range toasty's builder requires
+/// (it panics above `i64::MAX`).
+pub fn page_bounds(limit: usize, offset: usize) -> (usize, usize) {
+    (
+        limit.saturating_add(1).min(i64::MAX as usize),
+        offset.min(i64::MAX as usize),
+    )
+}
+
+/// Pagination envelope for list endpoints. `next_offset` is `Some` only when
+/// more rows follow this page, so clients can loop without a total count.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct Page<T> {
+    pub items: Vec<T>,
+    pub limit: usize,
+    pub offset: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<usize>,
+}
+
+impl<T> Page<T> {
+    /// Build a page from rows fetched with `limit + 1`: the extra probe row
+    /// (when present) signals that more data follows and is dropped. This
+    /// avoids a separate `COUNT(*)` query.
+    pub fn from_rows(mut rows: Vec<T>, limit: usize, offset: usize) -> Self {
+        let has_more = rows.len() > limit;
+        if has_more {
+            rows.truncate(limit);
+        }
+        Page {
+            items: rows,
+            limit,
+            offset,
+            next_offset: has_more.then_some(offset + limit),
+        }
+    }
+
+    /// Page an already-loaded in-memory collection (used for the tenant
+    /// directory, which lives in a `DashMap` rather than the DB).
+    pub fn from_all(rows: Vec<T>, limit: usize, offset: usize) -> Self {
+        let end = offset.saturating_add(limit);
+        let has_more = rows.len() > end;
+        let items = rows.into_iter().skip(offset).take(limit).collect();
+        Page {
+            items,
+            limit,
+            offset,
+            next_offset: has_more.then_some(end),
+        }
+    }
+
+    pub fn map<U>(self, f: impl FnMut(T) -> U) -> Page<U> {
+        Page {
+            items: self.items.into_iter().map(f).collect(),
+            limit: self.limit,
+            offset: self.offset,
+            next_offset: self.next_offset,
+        }
+    }
+}
+
 pub fn get_method(req: &Request) -> HttpMethod {
     match *req.method() {
         Method::GET => HttpMethod::GET,
@@ -1723,5 +1809,116 @@ mod tests {
             "a scheme without the space and token must not match"
         );
         assert_eq!(get_jwt(&Request::new()), None, "a missing header");
+    }
+
+    // ── pagination (G-113) ──────────────────────────────────────────────────
+
+    fn req_with_query(query: &str) -> Request {
+        let mut req = Request::new();
+        req.set_uri(format!("/list?{query}").parse().unwrap());
+        req
+    }
+
+    #[test]
+    fn page_params_defaults_and_clamping() {
+        // defaults when absent
+        let mut req = Request::new();
+        req.set_uri("/list".parse().unwrap());
+        assert_eq!(page_params(&req), (DEFAULT_PAGE_LIMIT, 0));
+
+        // explicit values pass through
+        assert_eq!(page_params(&req_with_query("limit=10&offset=20")), (10, 20));
+
+        // limit is clamped into [1, MAX_PAGE_LIMIT]
+        assert_eq!(page_params(&req_with_query("limit=0")).0, 1);
+        assert_eq!(page_params(&req_with_query("limit=100000")).0, MAX_PAGE_LIMIT);
+
+        // malformed values fall back to defaults
+        assert_eq!(
+            page_params(&req_with_query("limit=abc&offset=-1")),
+            (DEFAULT_PAGE_LIMIT, 0)
+        );
+
+        // offset is capped at i64::MAX — toasty's builder panics above it
+        assert_eq!(
+            page_params(&req_with_query("offset=18446744073709551615")).1,
+            i64::MAX as usize
+        );
+    }
+
+    #[test]
+    fn page_bounds_probes_one_extra_row_within_toasty_limits() {
+        assert_eq!(page_bounds(50, 0), (51, 0));
+        // the probe must not overflow usize or exceed toasty's i64 bound
+        assert_eq!(page_bounds(usize::MAX, 0).0, i64::MAX as usize);
+        assert_eq!(page_bounds(50, usize::MAX).1, i64::MAX as usize);
+    }
+
+    #[test]
+    fn page_from_rows_uses_the_probe_row_to_detect_a_next_page() {
+        // limit + 1 rows fetched → the extra row is dropped and next_offset set
+        let page = Page::from_rows(vec![1, 2, 3], 2, 4);
+        assert_eq!(page.items, vec![1, 2]);
+        assert_eq!(page.limit, 2);
+        assert_eq!(page.offset, 4);
+        assert_eq!(page.next_offset, Some(6));
+
+        // fewer rows than the limit → last page
+        let page = Page::from_rows(vec![1, 2], 5, 0);
+        assert_eq!(page.items, vec![1, 2]);
+        assert_eq!(page.next_offset, None);
+
+        // exactly `limit` rows (no probe row) → treated as last page
+        let page = Page::from_rows(vec![1, 2], 2, 0);
+        assert_eq!(page.next_offset, None);
+
+        // empty result
+        let page = Page::<i32>::from_rows(vec![], 2, 0);
+        assert!(page.items.is_empty());
+        assert_eq!(page.next_offset, None);
+    }
+
+    #[test]
+    fn page_from_all_slices_in_memory_rows() {
+        let rows: Vec<i32> = (0..7).collect();
+        let page = Page::from_all(rows.clone(), 3, 0);
+        assert_eq!(page.items, vec![0, 1, 2]);
+        assert_eq!(page.next_offset, Some(3));
+
+        let page = Page::from_all(rows.clone(), 3, 6);
+        assert_eq!(page.items, vec![6]);
+        assert_eq!(page.next_offset, None);
+
+        // offset past the end yields an empty page, not a panic
+        let page = Page::from_all(rows.clone(), 3, 100);
+        assert!(page.items.is_empty());
+        assert_eq!(page.next_offset, None);
+
+        // extreme offsets saturate instead of overflowing `offset + limit`
+        let page = Page::from_all(rows, 3, usize::MAX);
+        assert!(page.items.is_empty());
+        assert_eq!(page.next_offset, None);
+    }
+
+    #[test]
+    fn page_map_preserves_pagination_metadata() {
+        let page = Page::from_rows(vec![1, 2, 3], 2, 0).map(|n| n.to_string());
+        assert_eq!(page.items, vec!["1", "2"]);
+        assert_eq!(page.next_offset, Some(2));
+    }
+
+    #[test]
+    fn page_serializes_without_next_offset_on_the_last_page() {
+        let last = Page::from_rows(vec![1], 5, 0);
+        let json = serde_json::to_value(&last).expect("serialize");
+        assert_eq!(json["items"], serde_json::json!([1]));
+        assert!(
+            json.get("next_offset").is_none(),
+            "next_offset must be omitted on the last page: {json}"
+        );
+
+        let more = Page::from_rows(vec![1, 2], 1, 0);
+        let json = serde_json::to_value(&more).expect("serialize");
+        assert_eq!(json["next_offset"], serde_json::json!(1));
     }
 }

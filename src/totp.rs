@@ -4,7 +4,7 @@ use crate::db::Tenant;
 use crate::domain::Domain;
 use crate::server::ServerState;
 use crate::user::User;
-use crate::utils::{ApiProblem, ApiResponse, extract};
+use crate::utils::{ApiProblem, ApiResponse, Page, extract};
 use anyhow::Result;
 use salvo::http::cookie::{Cookie, SameSite};
 
@@ -102,16 +102,23 @@ impl Totp {
 }
 
 impl Tenant {
-    pub async fn all_totps(
+    /// One DB-level page of TOTP entries, ordered by the full composite
+    /// primary key so pages are stable and disjoint. The `limit + 1` probe
+    /// row (see [`crate::utils::Page`]) is fetched and folded into
+    /// `next_offset` internally.
+    pub async fn totps_page(
         &mut self,
         user: Option<&str>,
         domain: Option<&str>,
-    ) -> Result<Vec<Totp>> {
+        limit: usize,
+        offset: usize,
+    ) -> Result<Page<Totp>> {
+        let (fetch, offset) = crate::utils::page_bounds(limit, offset);
         let uid = match user {
             Some(name) => Some(self.user(name).await?.id),
             None => None,
         };
-        if let Some(user_id) = uid {
+        let query = if let Some(user_id) = uid {
             if let Some(domain_name) = domain {
                 Totp::filter(
                     Totp::fields()
@@ -119,28 +126,26 @@ impl Tenant {
                         .eq(user_id)
                         .and(Totp::fields().domain_id().eq(domain_name)),
                 )
-                .exec(&mut self.database)
-                .await
-                .map_err(Into::into)
             } else {
                 Totp::filter(Totp::fields().user_id().eq(user_id))
-                    .exec(&mut self.database)
-                    .await
-                    .map_err(Into::into)
             }
+        } else if let Some(domain_name) = domain {
+            Totp::filter(Totp::fields().domain_id().eq(domain_name))
         } else {
-            if let Some(domain_name) = domain {
-                Totp::filter(Totp::fields().domain_id().eq(domain_name))
-                    .exec(&mut self.database)
-                    .await
-                    .map_err(Into::into)
-            } else {
-                Totp::all()
-                    .exec(&mut self.database)
-                    .await
-                    .map_err(Into::into)
-            }
-        }
+            Totp::all()
+        };
+        let rows = query
+            .order_by((
+                Totp::fields().user_id().asc(),
+                Totp::fields().domain_id().asc(),
+                Totp::fields().name().asc(),
+            ))
+            .limit(fetch)
+            .offset(offset)
+            .exec(&mut self.database)
+            .await
+            .map_err::<anyhow::Error, _>(Into::into)?;
+        Ok(Page::from_rows(rows, limit, offset))
     }
     pub async fn totp_of(&mut self, user: &str, domain: &str, name: Option<&str>) -> Result<Totp> {
         let user_id = self.user(user).await?.id;
@@ -636,8 +641,12 @@ struct TotpEntry {
 #[endpoint(
     summary = "Return all TOTP entries for a user",
     request_body = AllTotpRequest,
+    parameters(
+        ("limit" = Option<usize>, Query, description = "Max items per page (server-enforced default and cap)"),
+        ("offset" = Option<usize>, Query, description = "Number of items to skip"),
+    ),
     responses(
-        (status_code = 200, description = "Success", body = ApiResponse<Vec<TotpEntry>>),
+        (status_code = 200, description = "Success", body = ApiResponse<Page<TotpEntry>>),
         (status_code = 401, description = "Failed", body = ApiProblem)
     )
 )]
@@ -646,19 +655,19 @@ pub async fn list_totp(req: &mut Request, depot: &mut Depot, res: &mut Response)
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
+    let (limit, offset) = crate::utils::page_params(req);
     if let Some(req_request) = crate::utils::extract::<AllTotpRequest>(req, None).await
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-        && let Ok(data) = tenant.all_totps(req_request.name.as_deref(), None).await
+        && let Ok(page) = tenant
+            .totps_page(req_request.name.as_deref(), None, limit, offset)
+            .await
     {
-        let tmp: Vec<TotpEntry> = data
-            .iter()
-            .map(|a| TotpEntry {
-                name: a.name.clone(),
-                active: a.active,
-            })
-            .collect();
+        let page = page.map(|a| TotpEntry {
+            name: a.name,
+            active: a.active,
+        });
         res.status_code(StatusCode::OK);
-        res.render(Json(ApiResponse::ok(tmp)));
+        res.render(Json(ApiResponse::ok(page)));
         return;
     }
 

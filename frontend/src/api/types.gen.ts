@@ -364,39 +364,121 @@ export type OpenapiUtilsApiResponse_allocVecVec_String__ = {
     ok: boolean;
 };
 
-export type OpenapiUtilsApiResponse_allocVecVec_openapiIdpOAuth2ClientDto__ = {
-    data: Array<OpenapiIdpOAuth2ClientDto>;
-    ok: boolean;
-};
-
-export type OpenapiUtilsApiResponse_allocVecVec_openapiKeyKeyEntry__ = {
-    data: Array<OpenapiKeyKeyEntry>;
-    ok: boolean;
-};
-
-export type OpenapiUtilsApiResponse_allocVecVec_openapiPolicyPolicyEntry__ = {
-    data: Array<OpenapiPolicyPolicyEntry>;
-    ok: boolean;
-};
-
-export type OpenapiUtilsApiResponse_allocVecVec_openapiRoleRoleEntry__ = {
-    data: Array<OpenapiRoleRoleEntry>;
-    ok: boolean;
-};
-
-export type OpenapiUtilsApiResponse_allocVecVec_openapiSocialSocialProvider__ = {
-    data: Array<OpenapiSocialSocialProvider>;
-    ok: boolean;
-};
-
-export type OpenapiUtilsApiResponse_allocVecVec_openapiTotpTotpEntry__ = {
-    data: Array<OpenapiTotpTotpEntry>;
-    ok: boolean;
-};
-
 export type OpenapiUtilsApiResponse_openapiOidcExtOidcTenantConfig_ = {
     data: OpenapiOidcExtOidcTenantConfig;
     ok: boolean;
+};
+
+export type OpenapiUtilsApiResponse_openapiUtilsPage_String__ = {
+    data: OpenapiUtilsPage_String_;
+    ok: boolean;
+};
+
+export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiIdpOAuth2ClientDto__ = {
+    data: OpenapiUtilsPage_openapiIdpOAuth2ClientDto_;
+    ok: boolean;
+};
+
+export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiKeyKeyEntry__ = {
+    data: OpenapiUtilsPage_openapiKeyKeyEntry_;
+    ok: boolean;
+};
+
+export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiPolicyPolicyEntry__ = {
+    data: OpenapiUtilsPage_openapiPolicyPolicyEntry_;
+    ok: boolean;
+};
+
+export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiRoleRoleEntry__ = {
+    data: OpenapiUtilsPage_openapiRoleRoleEntry_;
+    ok: boolean;
+};
+
+export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiSocialSocialProvider__ = {
+    data: OpenapiUtilsPage_openapiSocialSocialProvider_;
+    ok: boolean;
+};
+
+export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiTotpTotpEntry__ = {
+    data: OpenapiUtilsPage_openapiTotpTotpEntry_;
+    ok: boolean;
+};
+
+/**
+ * Pagination envelope for list endpoints. `next_offset` is `Some` only when
+ * more rows follow this page, so clients can loop without a total count.
+ */
+export type OpenapiUtilsPage_String_ = {
+    items: Array<string>;
+    limit: number;
+    next_offset?: number | null;
+    offset: number;
+};
+
+/**
+ * Pagination envelope for list endpoints. `next_offset` is `Some` only when
+ * more rows follow this page, so clients can loop without a total count.
+ */
+export type OpenapiUtilsPage_openapiIdpOAuth2ClientDto_ = {
+    items: Array<OpenapiIdpOAuth2ClientDto>;
+    limit: number;
+    next_offset?: number | null;
+    offset: number;
+};
+
+/**
+ * Pagination envelope for list endpoints. `next_offset` is `Some` only when
+ * more rows follow this page, so clients can loop without a total count.
+ */
+export type OpenapiUtilsPage_openapiKeyKeyEntry_ = {
+    items: Array<OpenapiKeyKeyEntry>;
+    limit: number;
+    next_offset?: number | null;
+    offset: number;
+};
+
+/**
+ * Pagination envelope for list endpoints. `next_offset` is `Some` only when
+ * more rows follow this page, so clients can loop without a total count.
+ */
+export type OpenapiUtilsPage_openapiPolicyPolicyEntry_ = {
+    items: Array<OpenapiPolicyPolicyEntry>;
+    limit: number;
+    next_offset?: number | null;
+    offset: number;
+};
+
+/**
+ * Pagination envelope for list endpoints. `next_offset` is `Some` only when
+ * more rows follow this page, so clients can loop without a total count.
+ */
+export type OpenapiUtilsPage_openapiRoleRoleEntry_ = {
+    items: Array<OpenapiRoleRoleEntry>;
+    limit: number;
+    next_offset?: number | null;
+    offset: number;
+};
+
+/**
+ * Pagination envelope for list endpoints. `next_offset` is `Some` only when
+ * more rows follow this page, so clients can loop without a total count.
+ */
+export type OpenapiUtilsPage_openapiSocialSocialProvider_ = {
+    items: Array<OpenapiSocialSocialProvider>;
+    limit: number;
+    next_offset?: number | null;
+    offset: number;
+};
+
+/**
+ * Pagination envelope for list endpoints. `next_offset` is `Some` only when
+ * more rows follow this page, so clients can loop without a total count.
+ */
+export type OpenapiUtilsPage_openapiTotpTotpEntry_ = {
+    items: Array<OpenapiTotpTotpEntry>;
+    limit: number;
+    next_offset?: number | null;
+    offset: number;
 };
 
 export type OpenapiAdminAddDomainData = {
@@ -452,7 +534,16 @@ export type OpenapiAdminDeleteDomainResponse = OpenapiAdminDeleteDomainResponses
 export type OpenapiAdminAllDomainsData = {
     body?: never;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Max items per page (server-enforced default and cap)
+         */
+        limit?: number;
+        /**
+         * Number of items to skip
+         */
+        offset?: number;
+    };
     url: '/api/v1/admin/domain/list';
 };
 
@@ -469,7 +560,7 @@ export type OpenapiAdminAllDomainsResponses = {
     /**
      * All domain names of the tenant
      */
-    200: OpenapiUtilsApiResponse_allocVecVec_String__;
+    200: OpenapiUtilsApiResponse_openapiUtilsPage_String__;
 };
 
 export type OpenapiAdminAllDomainsResponse = OpenapiAdminAllDomainsResponses[keyof OpenapiAdminAllDomainsResponses];
@@ -535,7 +626,16 @@ export type OpenapiKeyDeleteKeyResponse = OpenapiKeyDeleteKeyResponses[keyof Ope
 export type OpenapiKeyAllKeysData = {
     body?: never;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Max items per page (server-enforced default and cap)
+         */
+        limit?: number;
+        /**
+         * Number of items to skip
+         */
+        offset?: number;
+    };
     url: '/api/v1/admin/key/list';
 };
 
@@ -552,7 +652,7 @@ export type OpenapiKeyAllKeysResponses = {
     /**
      * Success
      */
-    200: OpenapiUtilsApiResponse_allocVecVec_openapiKeyKeyEntry__;
+    200: OpenapiUtilsApiResponse_openapiUtilsPage_openapiKeyKeyEntry__;
 };
 
 export type OpenapiKeyAllKeysResponse = OpenapiKeyAllKeysResponses[keyof OpenapiKeyAllKeysResponses];
@@ -626,7 +726,16 @@ export type OpenapiIdpDeleteOauth2ClientResponse = OpenapiIdpDeleteOauth2ClientR
 export type OpenapiIdpListOauth2ClientsData = {
     body?: never;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Max items per page (server-enforced default and cap)
+         */
+        limit?: number;
+        /**
+         * Number of items to skip
+         */
+        offset?: number;
+    };
     url: '/api/v1/admin/oauth2client/list';
 };
 
@@ -643,7 +752,7 @@ export type OpenapiIdpListOauth2ClientsResponses = {
     /**
      * Success
      */
-    200: OpenapiUtilsApiResponse_allocVecVec_openapiIdpOAuth2ClientDto__;
+    200: OpenapiUtilsApiResponse_openapiUtilsPage_openapiIdpOAuth2ClientDto__;
 };
 
 export type OpenapiIdpListOauth2ClientsResponse = OpenapiIdpListOauth2ClientsResponses[keyof OpenapiIdpListOauth2ClientsResponses];
@@ -784,7 +893,16 @@ export type OpenapiPolicyDeletePolicyResponse = OpenapiPolicyDeletePolicyRespons
 export type OpenapiPolicyAllPoliciesData = {
     body?: never;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Max items per page (server-enforced default and cap)
+         */
+        limit?: number;
+        /**
+         * Number of items to skip
+         */
+        offset?: number;
+    };
     url: '/api/v1/admin/policy/list';
 };
 
@@ -801,7 +919,7 @@ export type OpenapiPolicyAllPoliciesResponses = {
     /**
      * Success
      */
-    200: OpenapiUtilsApiResponse_allocVecVec_openapiPolicyPolicyEntry__;
+    200: OpenapiUtilsApiResponse_openapiUtilsPage_openapiPolicyPolicyEntry__;
 };
 
 export type OpenapiPolicyAllPoliciesResponse = OpenapiPolicyAllPoliciesResponses[keyof OpenapiPolicyAllPoliciesResponses];
@@ -859,7 +977,16 @@ export type OpenapiSocialRemoveProviderResponse = OpenapiSocialRemoveProviderRes
 export type OpenapiSocialAllProvidersData = {
     body?: never;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Max items per page (server-enforced default and cap)
+         */
+        limit?: number;
+        /**
+         * Number of items to skip
+         */
+        offset?: number;
+    };
     url: '/api/v1/admin/provider/list';
 };
 
@@ -876,7 +1003,7 @@ export type OpenapiSocialAllProvidersResponses = {
     /**
      * Success
      */
-    200: OpenapiUtilsApiResponse_allocVecVec_openapiSocialSocialProvider__;
+    200: OpenapiUtilsApiResponse_openapiUtilsPage_openapiSocialSocialProvider__;
 };
 
 export type OpenapiSocialAllProvidersResponse = OpenapiSocialAllProvidersResponses[keyof OpenapiSocialAllProvidersResponses];
@@ -946,7 +1073,16 @@ export type OpenapiRoleDeleteRoleResponse = OpenapiRoleDeleteRoleResponses[keyof
 export type OpenapiRoleAllRolesData = {
     body?: never;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Max items per page (server-enforced default and cap)
+         */
+        limit?: number;
+        /**
+         * Number of items to skip
+         */
+        offset?: number;
+    };
     url: '/api/v1/admin/role/list';
 };
 
@@ -963,7 +1099,7 @@ export type OpenapiRoleAllRolesResponses = {
     /**
      * Success
      */
-    200: OpenapiUtilsApiResponse_allocVecVec_openapiRoleRoleEntry__;
+    200: OpenapiUtilsApiResponse_openapiUtilsPage_openapiRoleRoleEntry__;
 };
 
 export type OpenapiRoleAllRolesResponse = OpenapiRoleAllRolesResponses[keyof OpenapiRoleAllRolesResponses];
@@ -1021,7 +1157,16 @@ export type OpenapiAdminRemoveTenantResponse = OpenapiAdminRemoveTenantResponses
 export type OpenapiAdminAllTenantsData = {
     body?: never;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Max items per page (server-enforced default and cap)
+         */
+        limit?: number;
+        /**
+         * Number of items to skip
+         */
+        offset?: number;
+    };
     url: '/api/v1/admin/tenant/list';
 };
 
@@ -1038,7 +1183,7 @@ export type OpenapiAdminAllTenantsResponses = {
     /**
      * All tenant names
      */
-    200: OpenapiUtilsApiResponse_allocVecVec_String__;
+    200: OpenapiUtilsApiResponse_openapiUtilsPage_String__;
 };
 
 export type OpenapiAdminAllTenantsResponse = OpenapiAdminAllTenantsResponses[keyof OpenapiAdminAllTenantsResponses];
@@ -1046,7 +1191,16 @@ export type OpenapiAdminAllTenantsResponse = OpenapiAdminAllTenantsResponses[key
 export type OpenapiTotpListTotpData = {
     body: OpenapiTotpAllTotpRequest;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Max items per page (server-enforced default and cap)
+         */
+        limit?: number;
+        /**
+         * Number of items to skip
+         */
+        offset?: number;
+    };
     url: '/api/v1/admin/totp/list';
 };
 
@@ -1063,7 +1217,7 @@ export type OpenapiTotpListTotpResponses = {
     /**
      * Success
      */
-    200: OpenapiUtilsApiResponse_allocVecVec_openapiTotpTotpEntry__;
+    200: OpenapiUtilsApiResponse_openapiUtilsPage_openapiTotpTotpEntry__;
 };
 
 export type OpenapiTotpListTotpResponse = OpenapiTotpListTotpResponses[keyof OpenapiTotpListTotpResponses];
@@ -1274,7 +1428,16 @@ export type OpenapiUserDeleteSelfResponse = OpenapiUserDeleteSelfResponses[keyof
 export type OpenapiUserAllUsersData = {
     body?: never;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Max items per page (server-enforced default and cap)
+         */
+        limit?: number;
+        /**
+         * Number of items to skip
+         */
+        offset?: number;
+    };
     url: '/api/v1/admin/user/list';
 };
 
@@ -1291,7 +1454,7 @@ export type OpenapiUserAllUsersResponses = {
     /**
      * Success
      */
-    200: OpenapiUtilsApiResponse_allocVecVec_String__;
+    200: OpenapiUtilsApiResponse_openapiUtilsPage_String__;
 };
 
 export type OpenapiUserAllUsersResponse = OpenapiUserAllUsersResponses[keyof OpenapiUserAllUsersResponses];

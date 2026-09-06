@@ -2,7 +2,7 @@ use crate::db::JwtData;
 use crate::db::Tenant;
 use crate::policy::Policy;
 use crate::user::User;
-use crate::utils::{ApiProblem, ApiResponse};
+use crate::utils::{ApiProblem, ApiResponse, Page};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use toasty::*;
@@ -186,8 +186,18 @@ impl Tenant {
     }
 
     // role CRUD
-    pub async fn all_roles(&mut self) -> Result<Vec<Role>> {
-        Role::all().exec(&mut self.database).await
+    /// One DB-level page of roles, ordered by id so pages are stable and
+    /// disjoint. The `limit + 1` probe row (see [`crate::utils::Page`]) is
+    /// fetched and folded into `next_offset` internally.
+    pub async fn roles_page(&mut self, limit: usize, offset: usize) -> Result<Page<Role>> {
+        let (fetch, offset) = crate::utils::page_bounds(limit, offset);
+        let rows = Role::all()
+            .order_by(Role::fields().id().asc())
+            .limit(fetch)
+            .offset(offset)
+            .exec(&mut self.database)
+            .await?;
+        Ok(Page::from_rows(rows, limit, offset))
     }
 
     /// Create a role.
@@ -270,8 +280,12 @@ struct RoleEntry {
 
 #[endpoint(
     summary = "List all roles in a tenant",
+    parameters(
+        ("limit" = Option<usize>, Query, description = "Max items per page (server-enforced default and cap)"),
+        ("offset" = Option<usize>, Query, description = "Number of items to skip"),
+    ),
     responses(
-        (status_code = 200, description = "Success", body = ApiResponse<Vec<RoleEntry>>),
+        (status_code = 200, description = "Success", body = ApiResponse<Page<RoleEntry>>),
         (status_code = 400, description = "Bad request", body = ApiProblem),
     )
 )]
@@ -280,19 +294,17 @@ pub async fn all_roles(req: &mut Request, depot: &mut Depot, res: &mut Response)
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
+    let (limit, offset) = crate::utils::page_params(req);
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
-        && let Ok(data) = tenant.all_roles().await
+        && let Ok(page) = tenant.roles_page(limit, offset).await
     {
+        let page = page.map(|r| RoleEntry {
+            name: r.id,
+            level: r.level,
+            builtin: r.builtin,
+        });
         res.status_code(StatusCode::OK);
-        res.render(Json(ApiResponse::ok(
-            data.iter()
-                .map(|r| RoleEntry {
-                    name: r.id.clone(),
-                    level: r.level,
-                    builtin: r.builtin,
-                })
-                .collect::<Vec<_>>(),
-        )));
+        res.render(Json(ApiResponse::ok(page)));
         return;
     }
 

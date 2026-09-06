@@ -547,6 +547,9 @@ impl Storage {
         for t in self.tenants.iter() {
             ret.push(t.value().name.clone());
         }
+        // Sorted so paginated views of the directory are stable across
+        // requests (DashMap iteration order is arbitrary).
+        ret.sort();
         Ok(ret)
     }
 
@@ -2245,9 +2248,10 @@ mod tests {
             assert_eq!(tenant.user_roles(alice_id).await.expect("roles").len(), 1);
             assert_eq!(
                 tenant
-                    .all_totps(Some("alice"), None)
+                    .totps_page(Some("alice"), None, crate::utils::MAX_PAGE_LIMIT, 0)
                     .await
                     .expect("totps")
+                    .items
                     .len(),
                 1
             );

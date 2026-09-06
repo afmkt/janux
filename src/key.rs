@@ -1,6 +1,6 @@
 use crate::db::Tenant;
 use crate::domain::Domain;
-use crate::utils::{ApiProblem, ApiResponse};
+use crate::utils::{ApiProblem, ApiResponse, Page};
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use dashmap::DashMap;
@@ -120,6 +120,21 @@ impl Tenant {
             .map_err(Into::into)
     }
 
+    /// One DB-level page of keys, ordered by id so pages are stable and
+    /// disjoint. The `limit + 1` probe row (see [`crate::utils::Page`]) is
+    /// fetched and folded into `next_offset` internally.
+    pub async fn keys_page(&mut self, limit: usize, offset: usize) -> Result<Page<Key>> {
+        let (fetch, offset) = crate::utils::page_bounds(limit, offset);
+        let rows = Key::all()
+            .order_by(Key::fields().id().asc())
+            .limit(fetch)
+            .offset(offset)
+            .exec(&mut self.database)
+            .await
+            .map_err::<anyhow::Error, _>(Into::into)?;
+        Ok(Page::from_rows(rows, limit, offset))
+    }
+
     pub async fn key_delete(&mut self, name: &str) -> Result<()> {
         let k = self.key(name).await?;
 
@@ -159,8 +174,12 @@ pub struct KeyEntry {
 
 #[endpoint(
     summary = "List all keys in a tenant",
+    parameters(
+        ("limit" = Option<usize>, Query, description = "Max items per page (server-enforced default and cap)"),
+        ("offset" = Option<usize>, Query, description = "Number of items to skip"),
+    ),
     responses(
-        (status_code = 200, description = "Success", body = ApiResponse<Vec<KeyEntry>>),
+        (status_code = 200, description = "Success", body = ApiResponse<Page<KeyEntry>>),
         (status_code = 400, description = "Bad request", body = ApiProblem),
     )
 )]
@@ -169,28 +188,22 @@ pub async fn all_keys(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
+    let (limit, offset) = crate::utils::page_params(req);
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
-        && let Ok(keys) = tenant.all_keys().await
+        && let Ok(page) = tenant.keys_page(limit, offset).await
     {
+        let page = page.map(|entry| {
+            let public = entry
+                .public_pem()
+                .unwrap_or_else(|_| String::from("Invalid public key"));
+            KeyEntry {
+                name: entry.id,
+                public,
+                domain: entry.domain_id,
+            }
+        });
         res.status_code(StatusCode::OK);
-        res.render(Json(ApiResponse::ok(
-            keys.iter()
-                .map(|entry| {
-                    if let Ok(dk) = entry.public_pem() {
-                        return KeyEntry {
-                            name: entry.id.clone(),
-                            public: dk,
-                            domain: entry.domain_id.clone(),
-                        };
-                    }
-                    KeyEntry {
-                        name: entry.id.clone(),
-                        public: String::from("Invalid public key"),
-                        domain: entry.domain_id.clone(),
-                    }
-                })
-                .collect::<Vec<_>>(),
-        )));
+        res.render(Json(ApiResponse::ok(page)));
         return;
     }
 

@@ -50,7 +50,7 @@ import {
   type OpenapiPolicySourceResolver,
   type OpenapiPolicyTargetResolver,
 } from '../api'
-import { envelope, isUnauthorized, problemText, sessionExpired, setupAuth } from './api'
+import { fetchAllPages, isUnauthorized, problemText, sessionExpired, setupAuth } from './api'
 
 const authed = setupAuth()
 
@@ -110,10 +110,10 @@ function UsersTab() {
   const [roleName, setRoleName] = useState('')
 
   const load = useCallback(async () => {
-    const { data, error: err, response } = await openapiUserAllUsers()
-    if (isUnauthorized(response?.status)) return sessionExpired()
-    if (!response?.ok) return setError(problemText(err, response?.status))
-    setUsers(envelope<string[]>(data).data ?? [])
+    const r = await fetchAllPages<string>((query) => openapiUserAllUsers({ query }))
+    if (r.unauthorized) return sessionExpired()
+    if (r.errorText) return setError(r.errorText)
+    setUsers(r.items)
   }, [])
 
   useEffect(() => {
@@ -244,10 +244,10 @@ function RolesTab() {
   const [level, setLevel] = useState('10')
 
   const load = useCallback(async () => {
-    const { data, error: err, response } = await openapiRoleAllRoles()
-    if (isUnauthorized(response?.status)) return sessionExpired()
-    if (!response?.ok) return setError(problemText(err, response?.status))
-    setRoles(envelope<RoleRow[]>(data).data ?? [])
+    const r = await fetchAllPages<RoleRow>((query) => openapiRoleAllRoles({ query }))
+    if (r.unauthorized) return sessionExpired()
+    if (r.errorText) return setError(r.errorText)
+    setRoles(r.items)
   }, [])
 
   useEffect(() => {
@@ -347,14 +347,15 @@ function PoliciesTab() {
   const [mfa, setMfa] = useState(false)
 
   const load = useCallback(async () => {
-    const [pol, rol] = await Promise.all([openapiPolicyAllPolicies(), openapiRoleAllRoles()])
-    if (isUnauthorized(pol.response?.status) || isUnauthorized(rol.response?.status)) {
-      return sessionExpired()
-    }
-    if (!pol.response?.ok) return setError(problemText(pol.error, pol.response?.status))
-    setPolicies(envelope<PolicyRow[]>(pol.data).data ?? [])
-    if (rol.response?.ok) {
-      setRoleNames((envelope<RoleRow[]>(rol.data).data ?? []).map((r) => r.name))
+    const [pol, rol] = await Promise.all([
+      fetchAllPages<PolicyRow>((query) => openapiPolicyAllPolicies({ query })),
+      fetchAllPages<RoleRow>((query) => openapiRoleAllRoles({ query })),
+    ])
+    if (pol.unauthorized || rol.unauthorized) return sessionExpired()
+    if (pol.errorText) return setError(pol.errorText)
+    setPolicies(pol.items)
+    if (!rol.errorText) {
+      setRoleNames(rol.items.map((r) => r.name))
     }
   }, [])
 
@@ -491,10 +492,10 @@ function DomainsTab() {
   const [domain, setDomain] = useState('')
 
   const load = useCallback(async () => {
-    const { data, error: err, response } = await openapiAdminAllDomains()
-    if (isUnauthorized(response?.status)) return sessionExpired()
-    if (!response?.ok) return setError(problemText(err, response?.status))
-    setDomains(envelope<string[]>(data).data ?? [])
+    const r = await fetchAllPages<string>((query) => openapiAdminAllDomains({ query }))
+    if (r.unauthorized) return sessionExpired()
+    if (r.errorText) return setError(r.errorText)
+    setDomains(r.items)
   }, [])
 
   useEffect(() => {
@@ -590,10 +591,10 @@ function ClientsTab() {
   const [scopes, setScopes] = useState('openid email profile')
 
   const load = useCallback(async () => {
-    const { data, error: err, response } = await openapiIdpListOauth2Clients()
-    if (isUnauthorized(response?.status)) return sessionExpired()
-    if (!response?.ok) return setError(problemText(err, response?.status))
-    setClients(envelope<ClientRow[]>(data).data ?? [])
+    const r = await fetchAllPages<ClientRow>((query) => openapiIdpListOauth2Clients({ query }))
+    if (r.unauthorized) return sessionExpired()
+    if (r.errorText) return setError(r.errorText)
+    setClients(r.items)
   }, [])
 
   useEffect(() => {
@@ -726,11 +727,10 @@ function ProvidersTab() {
   const [clientSecret, setClientSecret] = useState('')
 
   const load = useCallback(async () => {
-    const { data, error: err, response } = await openapiSocialAllProviders()
-    if (isUnauthorized(response?.status)) return sessionExpired()
-    if (!response?.ok) return setError(problemText(err, response?.status))
-    const list = envelope<ProviderRow[]>(data).data
-    setProviders(Array.isArray(list) ? list : [])
+    const r = await fetchAllPages<ProviderRow>((query) => openapiSocialAllProviders({ query }))
+    if (r.unauthorized) return sessionExpired()
+    if (r.errorText) return setError(r.errorText)
+    setProviders(r.items)
   }, [])
 
   useEffect(() => {
@@ -837,10 +837,10 @@ function KeysTab() {
   const [name, setName] = useState('')
 
   const load = useCallback(async () => {
-    const { data, error: err, response } = await openapiKeyAllKeys()
-    if (isUnauthorized(response?.status)) return sessionExpired()
-    if (!response?.ok) return setError(problemText(err, response?.status))
-    setKeys(envelope<KeyRow[]>(data).data ?? [])
+    const r = await fetchAllPages<KeyRow>((query) => openapiKeyAllKeys({ query }))
+    if (r.unauthorized) return sessionExpired()
+    if (r.errorText) return setError(r.errorText)
+    setKeys(r.items)
   }, [])
 
   useEffect(() => {
@@ -926,10 +926,10 @@ function TenantsTab() {
   const [admin, setAdmin] = useState('')
 
   const load = useCallback(async () => {
-    const { data, error: err, response } = await openapiAdminAllTenants()
-    if (isUnauthorized(response?.status)) return sessionExpired()
-    if (!response?.ok) return setError(problemText(err, response?.status))
-    setTenants(envelope<string[]>(data).data ?? [])
+    const r = await fetchAllPages<string>((query) => openapiAdminAllTenants({ query }))
+    if (r.unauthorized) return sessionExpired()
+    if (r.errorText) return setError(r.errorText)
+    setTenants(r.items)
   }, [])
 
   useEffect(() => {

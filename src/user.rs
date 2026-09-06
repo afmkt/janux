@@ -12,7 +12,7 @@ use crate::social::OAuth2;
 use crate::totp::Totp;
 use anyhow::Result;
 
-use crate::utils::{ApiProblem, ApiResponse, extract};
+use crate::utils::{ApiProblem, ApiResponse, Page, extract};
 
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -282,6 +282,20 @@ impl Tenant {
             .await
             .map_err(Into::into)
     }
+    /// One DB-level page of users, ordered by id so pages are stable and
+    /// disjoint. The `limit + 1` probe row (see [`crate::utils::Page`]) is
+    /// fetched and folded into `next_offset` internally.
+    pub async fn users_page(&mut self, limit: usize, offset: usize) -> Result<Page<User>> {
+        let (fetch, offset) = crate::utils::page_bounds(limit, offset);
+        let rows = User::all()
+            .order_by(User::fields().id().asc())
+            .limit(fetch)
+            .offset(offset)
+            .exec(&mut self.database)
+            .await
+            .map_err::<anyhow::Error, _>(Into::into)?;
+        Ok(Page::from_rows(rows, limit, offset))
+    }
     pub async fn user_roles(&mut self, id: uuid::Uuid) -> Result<Vec<Role>> {
         User::filter_by_id(id)
             .userroles()
@@ -392,8 +406,12 @@ impl Tenant {
 
 #[endpoint(
     summary = "List all users in a tenant",
+    parameters(
+        ("limit" = Option<usize>, Query, description = "Max items per page (server-enforced default and cap)"),
+        ("offset" = Option<usize>, Query, description = "Number of items to skip"),
+    ),
     responses(
-        (status_code = 200, description = "Success", body = ApiResponse<Vec<String>>),
+        (status_code = 200, description = "Success", body = ApiResponse<Page<String>>),
         (status_code = 400, description = "Bad request", body = ApiProblem)
     )
 )]
@@ -402,13 +420,13 @@ pub async fn all_users(req: &mut Request, depot: &mut Depot, res: &mut Response)
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
+    let (limit, offset) = crate::utils::page_params(req);
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
-        && let Ok(data) = tenant.all_users().await
+        && let Ok(page) = tenant.users_page(limit, offset).await
     {
+        let page = page.map(|u| u.name);
         res.status_code(StatusCode::OK);
-        res.render(Json(ApiResponse::ok(
-            data.iter().map(|u| u.name.clone()).collect::<Vec<_>>(),
-        )));
+        res.render(Json(ApiResponse::ok(page)));
         return;
     }
 
@@ -1341,9 +1359,10 @@ mod tests {
         {
             let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
             let stored: Vec<_> = tenant
-                .all_policies()
+                .policies_page(crate::utils::MAX_PAGE_LIMIT, 0)
                 .await
                 .expect("policies")
+                .items
                 .into_iter()
                 .filter(|p| p.resource.join("/") == RESOURCE)
                 .collect();
@@ -1370,9 +1389,10 @@ mod tests {
             let mut tenant = state.storage.tenant_by_domain(OTHER).expect("tenant");
             assert!(
                 tenant
-                    .all_policies()
+                    .policies_page(crate::utils::MAX_PAGE_LIMIT, 0)
                     .await
                     .expect("policies")
+                    .items
                     .iter()
                     .any(|p| p.resource.join("/") == SIBLING_RESOURCE),
                 "forged-domain delete must not reach the sibling domain's policy"
@@ -1395,9 +1415,10 @@ mod tests {
             let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
             assert!(
                 !tenant
-                    .all_policies()
+                    .policies_page(crate::utils::MAX_PAGE_LIMIT, 0)
                     .await
                     .expect("policies")
+                    .items
                     .iter()
                     .any(|p| p.resource.join("/") == RESOURCE),
                 "delete is confined to the resolved domain and removes it"
@@ -1862,6 +1883,64 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
                 "{endpoint} must fail closed without a session"
             );
+        }
+    }
+
+    // ── pagination (G-113) ──────────────────────────────────────────────────
+
+    /// `users_page` must apply limit/offset in the DB with a stable order,
+    /// encapsulate the `limit + 1` probe, and tile the table into disjoint
+    /// pages that follow `next_offset`.
+    #[tokio::test]
+    async fn users_page_walks_the_table_in_disjoint_pages() {
+        let (state, _tmp) = user_test_env().await;
+        {
+            let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+            for name in ["bob", "carol", "dave", "erin"] {
+                tenant.user_create(name).await.expect("user created");
+            }
+            // 5 users total (alice + 4).
+            let all = tenant.all_users().await.expect("all users");
+            assert_eq!(all.len(), 5);
+
+            // Walk pages of 2 by following next_offset; the probe row must
+            // never leak into items.
+            let p1 = tenant.users_page(2, 0).await.expect("p1");
+            assert_eq!(p1.items.len(), 2);
+            assert_eq!(p1.next_offset, Some(2));
+
+            let p2 = tenant.users_page(2, p1.next_offset.unwrap()).await.expect("p2");
+            assert_eq!(p2.items.len(), 2);
+            assert_eq!(p2.next_offset, Some(4));
+
+            let p3 = tenant.users_page(2, p2.next_offset.unwrap()).await.expect("p3");
+            assert_eq!(p3.items.len(), 1, "last page is short");
+            assert_eq!(p3.next_offset, None, "last page advertises no successor");
+
+            // Ordered by id, so pages are disjoint and tile the table in a
+            // deterministic sequence (no sort-both-sides masking).
+            let tiled: Vec<String> = p1
+                .items
+                .into_iter()
+                .chain(p2.items)
+                .chain(p3.items)
+                .map(|u| u.name)
+                .collect();
+            let mut expected: Vec<String> = all.into_iter().map(|u| u.name).collect();
+            let mut tiled_sorted = tiled.clone();
+            tiled_sorted.sort();
+            expected.sort();
+            assert_eq!(tiled_sorted, expected, "pages must tile the whole table");
+            assert_eq!(
+                tiled.iter().collect::<std::collections::HashSet<_>>().len(),
+                5,
+                "no user may appear on two pages"
+            );
+
+            // Offset past the end yields an empty page, not an error.
+            let empty = tenant.users_page(2, 100).await.expect("empty page");
+            assert!(empty.items.is_empty());
+            assert_eq!(empty.next_offset, None);
         }
     }
 }

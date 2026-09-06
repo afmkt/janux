@@ -1,4 +1,4 @@
-use crate::utils::{ApiProblem, ApiResponse};
+use crate::utils::{ApiProblem, ApiResponse, Page};
 
 use crate::db::HttpMethod;
 use crate::db::JwtData;
@@ -256,12 +256,19 @@ impl Tenant {
         }
         Ok(ret)
     }
-    /// Fetch all policies for this tenant's database (no caching).
-    pub async fn all_policies(&mut self) -> Result<Vec<Policy>> {
-        Policy::all()
+    /// One DB-level page of policies, ordered by id so pages are stable and
+    /// disjoint. The `limit + 1` probe row (see [`crate::utils::Page`]) is
+    /// fetched and folded into `next_offset` internally.
+    pub async fn policies_page(&mut self, limit: usize, offset: usize) -> Result<Page<Policy>> {
+        let (fetch, offset) = crate::utils::page_bounds(limit, offset);
+        let rows = Policy::all()
+            .order_by(Policy::fields().id().asc())
+            .limit(fetch)
+            .offset(offset)
             .exec(&mut self.database)
             .await
-            .map_err(Into::<anyhow::Error>::into)
+            .map_err(Into::<anyhow::Error>::into)?;
+        Ok(Page::from_rows(rows, limit, offset))
     }
 
     /// Create a new policy record and insert it into the in-memory
@@ -392,8 +399,12 @@ struct PolicyEntry {
 /// segmented storage form into a slash-joined path string.
 #[endpoint(
     summary = "List all policies in a tenant",
+    parameters(
+        ("limit" = Option<usize>, Query, description = "Max items per page (server-enforced default and cap)"),
+        ("offset" = Option<usize>, Query, description = "Number of items to skip"),
+    ),
     responses(
-        (status_code = 200, description = "Success", body = ApiResponse<Vec<PolicyEntry>>),
+        (status_code = 200, description = "Success", body = ApiResponse<Page<PolicyEntry>>),
         (status_code = 400, description = "Bad request", body = ApiProblem),
     )
 )]
@@ -402,25 +413,23 @@ pub async fn all_policies(req: &mut Request, depot: &mut Depot, res: &mut Respon
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
+    let (limit, offset) = crate::utils::page_params(req);
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
-        && let Ok(data) = tenant.all_policies().await
+        && let Ok(page) = tenant.policies_page(limit, offset).await
     {
-        let items: Vec<PolicyEntry> = data
-            .iter()
-            .map(|p| PolicyEntry {
-                id: Some(p.id),
-                resource: p.resource.join("/"),
-                domain: p.domain_id.clone(),
-                role: p.role_id.clone(),
-                action: p.action.clone(),
-                source: p.source.clone(),
-                target: p.target.clone(),
-                mfa: p.mfa,
-                allowed: p.allowed,
-            })
-            .collect();
+        let page = page.map(|p| PolicyEntry {
+            id: Some(p.id),
+            resource: p.resource.join("/"),
+            domain: p.domain_id,
+            role: p.role_id,
+            action: p.action,
+            source: p.source,
+            target: p.target,
+            mfa: p.mfa,
+            allowed: p.allowed,
+        });
         res.status_code(StatusCode::OK);
-        res.render(Json(ApiResponse::ok(items)));
+        res.render(Json(ApiResponse::ok(page)));
         return;
     }
 

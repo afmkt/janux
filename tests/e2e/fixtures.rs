@@ -128,7 +128,7 @@ impl TestApiClient {
             .ok()?;
 
         resp.json::<serde_json::Value>().await.ok().and_then(|v| {
-            let arr = v.get("data")?.as_array()?;
+            let arr = v.get("data")?.get("items")?.as_array()?;
             Some(
                 arr.iter()
                     .filter_map(|item| item.as_str().map(String::from))

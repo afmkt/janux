@@ -6,7 +6,7 @@ use crate::db::JwtVerify;
 use crate::db::Tenant;
 use crate::server::ServerState;
 use crate::user::User;
-use crate::utils::{ApiProblem, ApiResponse};
+use crate::utils::{ApiProblem, ApiResponse, Page};
 use toasty::*;
 
 use std::sync::LazyLock;
@@ -185,6 +185,25 @@ impl Tenant {
             .exec(&mut self.database)
             .await
             .unwrap_or_default()
+    }
+
+    /// One DB-level page of providers, ordered by id so pages are stable and
+    /// disjoint. The `limit + 1` probe row (see [`crate::utils::Page`]) is
+    /// fetched and folded into `next_offset` internally.
+    pub async fn providers_page(
+        &mut self,
+        limit: usize,
+        offset: usize,
+    ) -> Page<SocialProvider> {
+        let (fetch, offset) = crate::utils::page_bounds(limit, offset);
+        let rows = SocialProvider::all()
+            .order_by(SocialProvider::fields().id().asc())
+            .limit(fetch)
+            .offset(offset)
+            .exec(&mut self.database)
+            .await
+            .unwrap_or_default();
+        Page::from_rows(rows, limit, offset)
     }
 
     /// Build a `DashMap` from pre-fetched providers (no DB query).
@@ -1205,8 +1224,12 @@ pub async fn add_provider(req: &mut Request, depot: &mut Depot, res: &mut Respon
 
 #[endpoint(
     summary = "List all external IdPs",
+    parameters(
+        ("limit" = Option<usize>, Query, description = "Max items per page (server-enforced default and cap)"),
+        ("offset" = Option<usize>, Query, description = "Number of items to skip"),
+    ),
     responses(
-        (status_code = 200, description = "Success", body = ApiResponse<Vec<SocialProvider>>),
+        (status_code = 200, description = "Success", body = ApiResponse<Page<SocialProvider>>),
         (status_code = 400, description = "Bad request", body = ApiProblem),
     )
 )]
@@ -1215,13 +1238,11 @@ pub async fn all_providers(req: &mut Request, depot: &mut Depot, res: &mut Respo
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
+    let (limit, offset) = crate::utils::page_params(req);
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-        let data = tenant.all_providers().await;
+        let page = tenant.providers_page(limit, offset).await;
         res.status_code(StatusCode::OK);
-        res.render(Json(ApiResponse {
-            ok: true,
-            data: Some(data),
-        }));
+        res.render(Json(ApiResponse::ok(page)));
         return;
     }
     let err = ApiProblem::validation_error("Failed to parse request body");
