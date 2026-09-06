@@ -72,6 +72,11 @@ toasty-driver-turso = "*"
 serde = { version = "*", features = ["derive"] }
 globset = "*"
 tempfile = "*"
+# Soft WebAuthn authenticator for the passkey ceremony tests: openssl is
+# already linked on every platform (salvo/webauthn-attestation-ca) and
+# serde_cbor_2 is already in the tree via webauthn-rs-core.
+openssl = "0.10"
+serde_cbor_2 = "*"
 
 # ─── Test targets ──────────────────────────────────────────────────────
 [[test]]

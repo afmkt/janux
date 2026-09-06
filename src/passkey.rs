@@ -245,7 +245,14 @@ async fn finish_passkey_registration(
 // ─── Login Flow Helpers ──────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct PasskeyCacheRequestValue(pk::PasskeyAuthentication);
+struct PasskeyCacheRequestValue {
+    state: pk::PasskeyAuthentication,
+    /// The username this challenge was issued for. `verify` must present the
+    /// same username: without this binding an attacker can complete a ceremony
+    /// with their own authenticator and cash the flow token in for a session
+    /// belonging to any other user (full account takeover).
+    username: String,
+}
 
 static LOGIN_CACHE: LazyLock<EphemCache<PasskeyCacheKey, PasskeyCacheRequestValue>> =
     LazyLock::new(|| EphemCache::new("passkey_session", Some(600)));
@@ -254,6 +261,7 @@ async fn start_passkey_login(
     creds: &[pk::Passkey],
     domain: &str,
     origin: &str,
+    username: &str,
 ) -> Result<(RequestChallengeResponse, uuid::Uuid)> {
     let webauthn = build_webauthn(domain, origin).await?;
     let token = uuid::Uuid::new_v4();
@@ -264,7 +272,13 @@ async fn start_passkey_login(
     match webauthn.start_passkey_authentication(creds) {
         Ok((challenge_opts, auth_state)) => {
             LOGIN_CACHE
-                .insert(key, PasskeyCacheRequestValue(auth_state))
+                .insert(
+                    key,
+                    PasskeyCacheRequestValue {
+                        state: auth_state,
+                        username: username.to_string(),
+                    },
+                )
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -278,6 +292,7 @@ async fn finish_passkey_login(
     domain: &str,
     origin: &str,
     token: uuid::Uuid,
+    username: &str,
     credential: &pk::PublicKeyCredential,
 ) -> Result<pk::AuthenticationResult> {
     let webauthn = build_webauthn(domain, origin).await?;
@@ -286,7 +301,16 @@ async fn finish_passkey_login(
         token,
     };
 
-    if let Some(PasskeyCacheRequestValue(state)) = LOGIN_CACHE.get_one_shot(&key).await {
+    if let Some(PasskeyCacheRequestValue {
+        state,
+        username: challenge_username,
+    }) = LOGIN_CACHE.get_one_shot(&key).await
+    {
+        if challenge_username != username {
+            return Err(anyhow::anyhow!(
+                "Passkey login token was issued for a different user"
+            ));
+        }
         webauthn
             .finish_passkey_authentication(credential, &state)
             .map_err(Into::into)
@@ -338,8 +362,14 @@ async fn render_passkey_auth_success(
 #[derive(Deserialize, Serialize, Debug, ToSchema)]
 pub struct PasskeyRequest(String);
 
-async fn login(domain: &str, origin: &str, creds: &[pk::Passkey], res: &mut Response) {
-    match start_passkey_login(creds, domain, origin).await {
+async fn login(
+    domain: &str,
+    origin: &str,
+    username: &str,
+    creds: &[pk::Passkey],
+    res: &mut Response,
+) {
+    match start_passkey_login(creds, domain, origin, username).await {
         Ok((challenge_opts, token)) => {
             res.status_code(StatusCode::OK);
             res.render(Json(PasskeyResponse {
@@ -437,7 +467,7 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             };
 
             if !active_creds.is_empty() {
-                return login(&domain, &origin, &active_creds, res).await;
+                return login(&domain, &origin, &passkey_req.0, &active_creds, res).await;
             }
             // No active passkey — this is a registration. It requires a valid
             // session for exactly this user, validated without the
@@ -564,13 +594,25 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             }
         }
         if let Ok(x) = serde_json::from_value::<pk::PublicKeyCredential>(rqst.credential_json) {
-            match finish_passkey_login(&domain, &issuer, rqst.token, &x).await {
+            match finish_passkey_login(&domain, &issuer, rqst.token, &rqst.username, &x).await {
                 Ok(auth_result) => {
-                    if let Ok(stored_passkeys) = tenant
+                    // The ceremony proved possession of *a* credential bound to
+                    // this flow's username; prove it is one of `rqst.username`'s
+                    // stored credentials before minting a session.
+                    let asserted_id = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .encode(auth_result.cred_id());
+                    let stored = tenant
                         .active_passkey(Some(&rqst.username), Some(&domain))
                         .await
-                        && let Some(stored) = stored_passkeys.into_iter().next()
-                        && let Ok(mut passkey) = stored.get_passkey()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|p| p.id == asserted_id);
+                    let Some(stored) = stored else {
+                        res.status_code(StatusCode::UNAUTHORIZED);
+                        res.render(Json(ApiProblem::unauthorized()));
+                        return;
+                    };
+                    if let Ok(mut passkey) = stored.get_passkey()
                         && passkey.update_credential(&auth_result).unwrap_or(false)
                         && let Ok(updated_bytes) = serde_json::to_vec(&passkey)
                     {
@@ -708,6 +750,7 @@ mod tests {
                 .await
                 .expect("signing key");
             tenant.user_create("alice").await.expect("user");
+            tenant.user_create("bob").await.expect("user");
         }
         let state = crate::server::ServerState::create(storage, false)
             .await
@@ -901,6 +944,273 @@ mod tests {
             None,
         )
         .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    // ── soft WebAuthn authenticator (P-256/ES256, "none" attestation) ────
+    //
+    // Runs real ceremonies against webauthn-rs so the login branch can be
+    // tested end to end: registration yields a genuine `pk::Passkey` for
+    // the DB and assertions carry genuine signatures.
+
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use openssl::bn::{BigNum, BigNumContext};
+    use openssl::ec::{EcGroup, EcKey};
+    use openssl::ecdsa::EcdsaSig;
+    use openssl::nid::Nid;
+    use serde_cbor_2::value::Value as Cbor;
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+
+    fn b64url(bytes: &[u8]) -> String {
+        URL_SAFE_NO_PAD.encode(bytes)
+    }
+
+    struct SoftAuthenticator {
+        cred_id: Vec<u8>,
+        key: EcKey<openssl::pkey::Private>,
+    }
+
+    impl SoftAuthenticator {
+        fn new() -> Self {
+            let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("p256 group");
+            let key = EcKey::generate(&group).expect("p256 key");
+            let (x, y) = Self::coordinates(&key);
+            let mut seed = x;
+            seed.extend_from_slice(&y);
+            Self {
+                cred_id: Sha256::digest(seed).to_vec(),
+                key,
+            }
+        }
+
+        fn coordinates(key: &EcKey<openssl::pkey::Private>) -> (Vec<u8>, Vec<u8>) {
+            let group = key.group();
+            let mut ctx = BigNumContext::new().expect("bn ctx");
+            let mut x = BigNum::new().expect("x");
+            let mut y = BigNum::new().expect("y");
+            key.public_key()
+                .affine_coordinates(group, &mut x, &mut y, &mut ctx)
+                .expect("affine coordinates");
+            (
+                x.to_vec_padded(32).expect("x padded"),
+                y.to_vec_padded(32).expect("y padded"),
+            )
+        }
+
+        /// COSE_Key for ES256 (EC2 / P-256).
+        fn cose_key(&self) -> Vec<u8> {
+            let (x, y) = Self::coordinates(&self.key);
+            let mut key = BTreeMap::new();
+            key.insert(Cbor::Integer(1), Cbor::Integer(2)); // kty: EC2
+            key.insert(Cbor::Integer(3), Cbor::Integer(-7)); // alg: ES256
+            key.insert(Cbor::Integer(-1), Cbor::Integer(1)); // crv: P-256
+            key.insert(Cbor::Integer(-2), Cbor::Bytes(x));
+            key.insert(Cbor::Integer(-3), Cbor::Bytes(y));
+            serde_cbor_2::to_vec(&Cbor::Map(key)).expect("cose cbor")
+        }
+
+        fn client_data(&self, ty: &str, challenge: &[u8]) -> Vec<u8> {
+            serde_json::to_vec(&serde_json::json!({
+                "type": ty,
+                "challenge": b64url(challenge),
+                "origin": TEST_ISSUER,
+                "crossOrigin": false,
+            }))
+            .expect("client data json")
+        }
+
+        fn auth_data(&self, flags: u8, attested: bool) -> Vec<u8> {
+            let mut auth_data = Sha256::digest(DOMAIN.as_bytes()).to_vec(); // rpIdHash
+            auth_data.push(flags);
+            auth_data.extend_from_slice(&0u32.to_be_bytes()); // signCount
+            if attested {
+                auth_data.extend_from_slice(&[0u8; 16]); // aaguid
+                auth_data
+                    .extend_from_slice(&(u16::try_from(self.cred_id.len()).unwrap()).to_be_bytes());
+                auth_data.extend_from_slice(&self.cred_id);
+                auth_data.extend_from_slice(&self.cose_key());
+            }
+            auth_data
+        }
+
+        /// `navigator.credentials.create()` response, as the endpoint JSON.
+        fn registration_credential(&self, challenge: &[u8]) -> serde_json::Value {
+            let client_data_json = self.client_data("webauthn.create", challenge);
+            // UP | UV | AT — registration runs UserVerificationPolicy::Required.
+            let auth_data = self.auth_data(0x45, true);
+            let mut attestation = BTreeMap::new();
+            attestation.insert(Cbor::Text("fmt".into()), Cbor::Text("none".into()));
+            attestation.insert(Cbor::Text("attStmt".into()), Cbor::Map(BTreeMap::new()));
+            attestation.insert(Cbor::Text("authData".into()), Cbor::Bytes(auth_data));
+            let attestation_object =
+                serde_cbor_2::to_vec(&Cbor::Map(attestation)).expect("attestation cbor");
+            serde_json::json!({
+                "id": b64url(&self.cred_id),
+                "rawId": b64url(&self.cred_id),
+                "response": {
+                    "attestationObject": b64url(&attestation_object),
+                    "clientDataJSON": b64url(&client_data_json),
+                },
+                "type": "public-key",
+            })
+        }
+
+        /// `navigator.credentials.get()` response, as the endpoint JSON.
+        fn assertion_credential(&self, challenge: &[u8]) -> serde_json::Value {
+            let client_data_json = self.client_data("webauthn.get", challenge);
+            // UP | UV — authentication runs UserVerificationPolicy::Required.
+            let auth_data = self.auth_data(0x05, false);
+            let mut signed = auth_data.clone();
+            signed.extend_from_slice(&Sha256::digest(&client_data_json));
+            // ES256 = ECDSA over SHA-256 of the signature base; ECDSA_do_sign
+            // expects the pre-hashed digest.
+            let signature = EcdsaSig::sign(Sha256::digest(&signed).as_slice(), &self.key)
+                .expect("ecdsa sign")
+                .to_der()
+                .expect("ecdsa der");
+            serde_json::json!({
+                "id": b64url(&self.cred_id),
+                "rawId": b64url(&self.cred_id),
+                "response": {
+                    "authenticatorData": b64url(&auth_data),
+                    "clientDataJSON": b64url(&client_data_json),
+                    "signature": b64url(&signature),
+                },
+                "type": "public-key",
+            })
+        }
+    }
+
+    /// Run a real registration ceremony and persist the credential so
+    /// `username` has an active passkey and `passkey/request` takes the
+    /// login branch.
+    async fn seed_passkey(
+        state: &crate::server::ServerState,
+        username: &str,
+        auth: &SoftAuthenticator,
+    ) {
+        let webauthn = build_webauthn(DOMAIN, TEST_ISSUER).await.expect("webauthn");
+        let user_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, username.as_bytes());
+        let (challenge_opts, reg_state) = webauthn
+            .start_passkey_registration(user_uuid, username, username, None)
+            .expect("start registration");
+        let credential = serde_json::from_value::<pk::RegisterPublicKeyCredential>(
+            auth.registration_credential(challenge_opts.public_key.challenge.as_slice()),
+        )
+        .expect("registration credential");
+        let passkey = webauthn
+            .finish_passkey_registration(&credential, &reg_state)
+            .expect("finish registration");
+        let credential_bytes = serde_json::to_vec(&passkey).expect("passkey bytes");
+        let public_key_str = serde_json::to_string(passkey.get_public_key()).expect("public key");
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        tenant
+            .passkey_create(username, DOMAIN, credential_bytes, public_key_str)
+            .await
+            .expect("persist passkey");
+    }
+
+    /// Start a login challenge through the endpoint; returns `(token, challenge)`.
+    async fn login_challenge(service: &Service, username: &str) -> (uuid::Uuid, Vec<u8>) {
+        let (status, body) = post_request(service, &serde_json::json!(username), None).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a user with an active passkey gets a login challenge"
+        );
+        let token =
+            uuid::Uuid::parse_str(body["token"].as_str().expect("flow token")).expect("uuid");
+        // `PasskeyResponse.publicKey` wraps the whole `RequestChallengeResponse`,
+        // whose own `publicKey` field holds the options.
+        let challenge = URL_SAFE_NO_PAD
+            .decode(
+                body["publicKey"]["publicKey"]["challenge"]
+                    .as_str()
+                    .expect("challenge"),
+            )
+            .expect("challenge bytes");
+        (token, challenge)
+    }
+
+    // ── regression C1: login ceremonies are bound to the username ───────
+
+    #[tokio::test]
+    async fn login_verify_for_a_different_username_is_rejected() {
+        let (state, _tmp) = passkey_test_env().await;
+        let service = passkey_service(state.clone());
+        let alice_auth = SoftAuthenticator::new();
+        seed_passkey(&state, "alice", &alice_auth).await;
+
+        let (token, challenge) = login_challenge(&service, "alice").await;
+        let credential = alice_auth.assertion_credential(&challenge);
+
+        // A fully valid ceremony by alice's authenticator must never cash in
+        // for a session belonging to bob (account takeover).
+        let (status, _body) = post_verify(
+            &service,
+            &serde_json::json!({
+                "username": "bob",
+                "credential": credential,
+                "token": token,
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn login_verify_with_matching_username_succeeds() {
+        let (state, _tmp) = passkey_test_env().await;
+        let service = passkey_service(state.clone());
+        let alice_auth = SoftAuthenticator::new();
+        seed_passkey(&state, "alice", &alice_auth).await;
+
+        let (token, challenge) = login_challenge(&service, "alice").await;
+        let credential = alice_auth.assertion_credential(&challenge);
+
+        let (status, body) = post_verify(
+            &service,
+            &serde_json::json!({
+                "username": "alice",
+                "credential": credential,
+                "token": token,
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The minted session must belong to alice (claims are flattened
+        // into the JWT payload).
+        let jwt = body["data"].as_str().expect("session jwt");
+        let payload = jwt.split('.').nth(1).expect("jwt payload segment");
+        let claims: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).expect("payload b64"))
+                .expect("claims json");
+        assert_eq!(claims["username"].as_str(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn login_flow_token_is_single_use() {
+        let (state, _tmp) = passkey_test_env().await;
+        let service = passkey_service(state.clone());
+        let alice_auth = SoftAuthenticator::new();
+        seed_passkey(&state, "alice", &alice_auth).await;
+
+        let (token, challenge) = login_challenge(&service, "alice").await;
+        let credential = alice_auth.assertion_credential(&challenge);
+        let body = serde_json::json!({
+            "username": "alice",
+            "credential": credential,
+            "token": token,
+        });
+
+        let (status, _body) = post_verify(&service, &body, None).await;
+        assert_eq!(status, StatusCode::OK);
+        // Replaying the same flow token must not mint a second session.
+        let (status, _body) = post_verify(&service, &body, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }
