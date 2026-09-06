@@ -134,6 +134,14 @@ export type OpenapiOtpMobileAddVerifyRequest = {
 
 export type OpenapiOtpMobileResponse = {
     code: number;
+    /**
+     * Endpoint-dependent token field (the name is historical):
+     * - `request`: an OPAQUE flow handle — NOT a JWT. Echo it back to
+     * `verify` as `token`. The ceremony JWT stays server-side (H1):
+     * its base64 `sub` would leak the resolved username on this
+     * unauthenticated endpoint.
+     * - `verify` (success): the session JWT.
+     */
     jwt?: string | null;
     msg: string;
     ok: boolean;
@@ -1056,7 +1064,15 @@ export type OpenapiTotpRemoveTotpErrors = {
     /**
      * Failed
      */
+    400: OpenapiUtilsApiProblem;
+    /**
+     * No verified session
+     */
     401: OpenapiUtilsApiProblem;
+    /**
+     * Level gate refused the target user
+     */
+    403: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiTotpRemoveTotpError = OpenapiTotpRemoveTotpErrors[keyof OpenapiTotpRemoveTotpErrors];
@@ -1285,7 +1301,15 @@ export type OpenapiEmailRemoveErrors = {
     /**
      * Failed
      */
-    401: OpenapiEmailEmailResponse;
+    400: OpenapiEmailEmailResponse;
+    /**
+     * No verified session
+     */
+    401: OpenapiUtilsApiProblem;
+    /**
+     * Level gate refused the target user
+     */
+    403: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiEmailRemoveError = OpenapiEmailRemoveErrors[keyof OpenapiEmailRemoveErrors];
@@ -1319,7 +1343,15 @@ export type OpenapiOtpRemoveErrors = {
     /**
      * Failed
      */
-    401: OpenapiOtpMobileResponse;
+    400: OpenapiOtpMobileResponse;
+    /**
+     * No verified session
+     */
+    401: OpenapiUtilsApiProblem;
+    /**
+     * Level gate refused the target user
+     */
+    403: OpenapiUtilsApiProblem;
 };
 
 export type OpenapiOtpRemoveError = OpenapiOtpRemoveErrors[keyof OpenapiOtpRemoveErrors];
@@ -1374,7 +1406,17 @@ export type OpenapiSocialRemoveErrors = {
      * Failure
      */
     400: unknown;
+    /**
+     * No verified session
+     */
+    401: OpenapiUtilsApiProblem;
+    /**
+     * Level gate refused the target user
+     */
+    403: OpenapiUtilsApiProblem;
 };
+
+export type OpenapiSocialRemoveError = OpenapiSocialRemoveErrors[keyof OpenapiSocialRemoveErrors];
 
 export type OpenapiSocialRemoveResponses = {
     /**

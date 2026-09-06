@@ -1683,4 +1683,185 @@ mod tests {
             "an unranked caller must be refused (default-deny)"
         );
     }
+
+    // ── regression H3: credential-removal endpoints join the ladder ────
+    //
+    // `email/remove`, `otp/remove`, `social/remove` and `totp/remove` took
+    // a client-supplied `name` with no level gate, so any admin could strip
+    // root's login factors/MFA. They must enforce `require_above_user`
+    // exactly like `user_delete`.
+
+    /// Tenant with the builtin catalog: alice+bob (admin), carol (root),
+    /// dave (no role) — every ladder relation the gate must decide.
+    async fn cred_remove_env() -> (crate::server::ServerState, tempfile::TempDir) {
+        init_revocation_store().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = crate::db::Storage::init(tmp.path())
+            .await
+            .expect("storage init");
+        storage.new_tenant("test-tenant").await.expect("tenant");
+        storage
+            .add_domain(DOMAIN, "test-tenant")
+            .await
+            .expect("domain");
+        {
+            let mut tenant = storage.tenant_by_id("test-tenant").expect("tenant");
+            let bootstrap = crate::role::Caller::Bootstrap;
+            for (name, _) in crate::role::BUILTIN_ROLES {
+                tenant
+                    .role_create(&bootstrap, name, 0)
+                    .await
+                    .expect("builtin role");
+            }
+            for user in ["alice", "bob", "carol", "dave"] {
+                tenant.user_create(user).await.expect("user");
+            }
+            tenant
+                .user_add_role(&bootstrap, "alice", "admin")
+                .await
+                .expect("grant");
+            tenant
+                .user_add_role(&bootstrap, "bob", "admin")
+                .await
+                .expect("grant");
+            tenant
+                .user_add_role(&bootstrap, "carol", "root")
+                .await
+                .expect("grant");
+        }
+        let state = crate::server::ServerState::create(storage, false)
+            .await
+            .expect("server state");
+        (state, tmp)
+    }
+
+    /// The four credential-removal endpoints behind one injected session.
+    fn cred_remove_service<H: salvo::Handler + 'static>(
+        state: crate::server::ServerState,
+        injector: H,
+    ) -> Service {
+        Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state))
+                .hoop(injector)
+                .push(Router::with_path("email/remove").post(crate::email::remove))
+                .push(Router::with_path("otp/remove").post(crate::otp::remove))
+                .push(Router::with_path("social/remove").post(crate::social::remove))
+                .push(Router::with_path("totp/remove").post(crate::totp::remove_totp)),
+        )
+    }
+
+    /// The same four endpoints with no session hoop (fail-closed probe).
+    fn cred_remove_service_anon(state: crate::server::ServerState) -> Service {
+        Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state))
+                .push(Router::with_path("email/remove").post(crate::email::remove))
+                .push(Router::with_path("otp/remove").post(crate::otp::remove))
+                .push(Router::with_path("social/remove").post(crate::social::remove))
+                .push(Router::with_path("totp/remove").post(crate::totp::remove_totp)),
+        )
+    }
+
+    /// One removal call per endpoint against `target`; returns the four
+    /// statuses (email, otp, social, totp) in order.
+    async fn remove_all_four(service: &Service, target: &str) -> [(StatusCode, &'static str); 4] {
+        [
+            (
+                post_json(service, "email/remove", serde_json::json!({ "name": target, "email": "x@example.com" })).await,
+                "email/remove",
+            ),
+            (
+                post_json(service, "otp/remove", serde_json::json!({ "name": target, "mobile": "13800000000" })).await,
+                "otp/remove",
+            ),
+            (
+                post_json(service, "social/remove", serde_json::json!({ "name": target, "provider": "github", "provider_user_id": "1" })).await,
+                "social/remove",
+            ),
+            (
+                post_json(service, "totp/remove", serde_json::json!({ "name": target, "totp": "work" })).await,
+                "totp/remove",
+            ),
+        ]
+    }
+
+    /// The H3 attack: an admin strips ROOT's credentials/MFA — every
+    /// endpoint must refuse with 403.
+    #[tokio::test]
+    async fn credential_removal_denies_admin_stripping_root() {
+        let (state, _tmp) = cred_remove_env().await;
+        let service = cred_remove_service(state, inject_admin_session);
+
+        for (status, endpoint) in remove_all_four(&service, "carol").await {
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "admin must not strip root via {endpoint}"
+            );
+        }
+    }
+
+    /// Peers are refused (strict comparison, mirroring user_delete): an
+    /// admin cannot neutralize a fellow admin.
+    #[tokio::test]
+    async fn credential_removal_denies_peer_admin() {
+        let (state, _tmp) = cred_remove_env().await;
+        let service = cred_remove_service(state, inject_admin_session);
+
+        for (status, endpoint) in remove_all_four(&service, "bob").await {
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "admin must not strip a peer admin via {endpoint}"
+            );
+        }
+    }
+
+    /// Downward removals pass the gate (200 — the filtered delete of a
+    /// nonexistent credential row is a no-op success, as before the fix).
+    #[tokio::test]
+    async fn credential_removal_allows_downward_target() {
+        let (state, _tmp) = cred_remove_env().await;
+        let service = cred_remove_service(state, inject_admin_session);
+
+        for (status, endpoint) in remove_all_four(&service, "dave").await {
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "admin must be able to strip a roleless user via {endpoint}"
+            );
+        }
+    }
+
+    /// Root outranks admin: the ladder still allows upward management by
+    /// the apex (guards against over-tightening the gate).
+    #[tokio::test]
+    async fn credential_removal_allows_root_over_admin() {
+        let (state, _tmp) = cred_remove_env().await;
+        let service = cred_remove_service(state, inject_root_session);
+
+        for (status, endpoint) in remove_all_four(&service, "alice").await {
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "root must be able to strip an admin via {endpoint}"
+            );
+        }
+    }
+
+    /// No verified session → 401 on every endpoint (fail closed).
+    #[tokio::test]
+    async fn credential_removal_without_session_is_unauthorized() {
+        let (state, _tmp) = cred_remove_env().await;
+        let service = cred_remove_service_anon(state);
+
+        for (status, endpoint) in remove_all_four(&service, "dave").await {
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "{endpoint} must fail closed without a session"
+            );
+        }
+    }
 }

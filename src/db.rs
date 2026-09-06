@@ -20,6 +20,11 @@ use std::time::UNIX_EPOCH;
 
 use tokio::fs::*;
 
+/// How many delete-time DB snapshots to keep per tenant (H2). The backups
+/// are raw database files next to the data dir; unbounded accumulation
+/// turns a deletion into a permanent disclosure surface.
+const TENANT_BACKUP_RETENTION: usize = 5;
+
 #[derive(Eq, Clone, Hash, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 #[allow(clippy::upper_case_acronyms)] // OTP/TOTP are domain acronyms
@@ -309,7 +314,7 @@ impl Tenant {
         jwt: &str,
         minutes: i32,
     ) -> Result<String> {
-        let decision = crate::utils::validate_token::<JwtData>(
+        let decision = match crate::utils::validate_token::<JwtData>(
             self,
             issuer,
             domain,
@@ -317,7 +322,43 @@ impl Tenant {
             crate::utils::ValidateOpts::default(),
         )
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        {
+            Ok(decision) => decision,
+            Err(crate::utils::TokenReject::Revoked) => {
+                // H4: presenting an already-rotated (or logged-out) token
+                // is a theft indicator — decode it (the signature is still
+                // verified) to recover the chain identity and poison the
+                // whole family, so the successor minted from the stolen
+                // token stops rotating too (RFC 9700 §4.14.2 replay
+                // response, mirroring the OIDC refresh path).
+                if let Ok(tkn) =
+                    jwt_decode::<JwtData>(jwt, crate::jwt::VERIFICATION_GRACE_MINUTES, self).await
+                    && let Some(auth_time) = tkn.claims.auth_time
+                {
+                    crate::utils::poison_session_family(&tkn.claims.sub, auth_time).await;
+                    tracing::warn!(
+                        target: "auth::refresh",
+                        sub = tkn.claims.sub.as_str(),
+                        "internal session token replay detected; session family revoked"
+                    );
+                }
+                return Err(anyhow::anyhow!(
+                    "refresh token reuse detected; the session family has been revoked"
+                ));
+            }
+            Err(e) => return Err(anyhow::anyhow!("{e}")),
+        };
+        // H4: a family poisoned by an earlier reuse detection refuses
+        // every surviving chain member — the stolen token's successors
+        // must not keep rotating (RFC 9700 §4.14.2 replay response,
+        // mirroring the OIDC refresh path).
+        if let Some(auth_time) = decision.claims.auth_time
+            && crate::utils::session_family_poisoned(&decision.claims.sub, auth_time).await
+        {
+            return Err(anyhow::anyhow!(
+                "session token reuse was detected; the whole session chain has been revoked"
+            ));
+        }
         let user_id = uuid::Uuid::try_parse(&decision.claims.data.user)
             .map_err(|_| anyhow::anyhow!("token subject is not a valid user id"))?;
         let user = match self.user_by_id(user_id).await {
@@ -359,9 +400,23 @@ impl Tenant {
                 crate::ops::token_refreshed("session");
                 Ok(new_jwt)
             }
-            Ok(false) => Err(anyhow::anyhow!(
-                "refresh token reuse detected; the token was already rotated"
-            )),
+            Ok(false) => {
+                // H4: presenting an already-rotated token indicates theft —
+                // poison the whole session family so the successor minted
+                // from the stolen token stops rotating too, instead of
+                // living out its lifetime plus endless refreshes.
+                if let Some(auth_time) = decision.claims.auth_time {
+                    crate::utils::poison_session_family(&decision.claims.sub, auth_time).await;
+                    tracing::warn!(
+                        target: "auth::refresh",
+                        sub = decision.claims.sub.as_str(),
+                        "internal session token reuse detected; session family revoked"
+                    );
+                }
+                Err(anyhow::anyhow!(
+                    "refresh token reuse detected; the session family has been revoked"
+                ))
+            }
             Err(e) => Err(e),
         }
     }
@@ -580,8 +635,48 @@ impl Storage {
                         tracing::error!(tenant = name, "Failed to backup db: {}", e);
                     }
                     Ok(()) => {
+                        // H2: the turso/libSQL store keeps un-checkpointed
+                        // transactions in the WAL sidecar — a backup of
+                        // janux.db alone can miss (or corrupt) the newest
+                        // writes, so carry the sidecars when present.
+                        for sidecar in ["janux.db-wal", "janux.db-shm"] {
+                            let src = tenant_dir.join(sidecar);
+                            if let Ok(bytes) = read(&src).await
+                                && let Err(e) = write(backup_path.join(sidecar), &bytes).await
+                            {
+                                tracing::error!(tenant = name, "Failed to backup {sidecar}: {e}");
+                            }
+                        }
                         tracing::info!(tenant = name, backup = %backup_path.display(), "Tenant db backed up");
                     }
+                }
+            }
+
+            // H2: prune to the newest TENANT_BACKUP_RETENTION snapshots of
+            // THIS tenant — backups are raw DB files that accumulate
+            // forever otherwise. Entries whose suffix is not a hex
+            // timestamp are left alone (fail-safe against odd names).
+            let prefix = format!("{name}-");
+            let mut snapshots: Vec<(u64, PathBuf)> = Vec::new();
+            if let Ok(mut entries) = read_dir(&backup_dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+                    if let Some(file) = path.file_name().and_then(|f| f.to_str())
+                        && let Some(suffix) = file.strip_prefix(prefix.as_str())
+                        && let Ok(ts) = u64::from_str_radix(suffix, 16)
+                    {
+                        snapshots.push((ts, path));
+                    }
+                }
+            }
+            snapshots.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
+            for (_, stale) in snapshots.iter().skip(TENANT_BACKUP_RETENTION) {
+                if let Err(e) = remove_dir_all(stale).await {
+                    tracing::warn!(
+                        tenant = name,
+                        backup = %stale.display(),
+                        "Failed to prune stale tenant backup: {e}"
+                    );
                 }
             }
         }
@@ -753,6 +848,9 @@ mod tests {
 
     async fn refresh_test_env() -> (Storage, tempfile::TempDir) {
         init_revocation_store().await;
+        // Signing keys are encrypted at rest (H2); the process-wide
+        // encryption key is first-call-wins across test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = Storage::init(tmp.path()).await.expect("storage init");
         storage.new_tenant("test-tenant").await.expect("tenant");
@@ -871,6 +969,30 @@ mod tests {
         );
     }
 
+    /// regression H4: reuse detection must POISON the chain — the
+    /// successor minted from a stolen token may not keep rotating once
+    /// the replay surfaces; it expires with its (now unrefreshable)
+    /// family instead of extending the stolen session indefinitely.
+    #[tokio::test]
+    async fn refresh_reuse_poisons_the_whole_session_chain() {
+        let (storage, _tmp) = refresh_test_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let token = tenant
+            .authenticate_jwt(&HashSet::new(), TEST_ISSUER, DOMAIN, "alice", 15)
+            .await
+            .expect("token");
+
+        let successor = refresh(&mut tenant, &token).await.expect("first rotation");
+        assert!(
+            refresh(&mut tenant, &token).await.is_err(),
+            "replaying the rotated token must be refused"
+        );
+        assert!(
+            refresh(&mut tenant, &successor).await.is_err(),
+            "the successor of a replayed token must die with the family"
+        );
+    }
+
     #[tokio::test]
     async fn refresh_rotates_an_expired_within_leeway_token() {
         let (storage, _tmp) = refresh_test_env().await;
@@ -952,6 +1074,106 @@ mod tests {
         assert!(
             refresh(&mut tenant, &token).await.is_err(),
             "the rotated token must stay refused as reuse after gc (no second successor)"
+        );
+    }
+
+    /// regression H2: the stored private key is AES-GCM ciphertext, not
+    /// plaintext PEM — a DB or backup disclosure must not hand out the
+    /// material to forge tokens — and the decrypted key still signs.
+    #[tokio::test]
+    async fn signing_key_private_is_encrypted_at_rest() {
+        let (storage, _tmp) = refresh_test_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        // `current_key` reads the row loaded from the DB at tenant init —
+        // `private` is exactly what rests on disk.
+        let key = tenant.current_key(DOMAIN).expect("key row");
+        let stored = String::from_utf8(key.private.clone()).expect("utf8");
+        assert!(
+            !stored.contains("BEGIN PRIVATE KEY"),
+            "the private key must not be stored as plaintext PEM"
+        );
+        let decrypted = crate::crypto::decrypt_secret(&stored)
+            .expect("the stored value must decrypt with the process encryption key");
+        assert_eq!(
+            key.private_pem().expect("private_pem"),
+            decrypted,
+            "private_pem must hand consumers the plaintext"
+        );
+        assert!(decrypted.contains("PRIVATE KEY"));
+        // And it still signs verifiable tokens end to end.
+        let token = tenant
+            .authenticate_jwt(&HashSet::new(), TEST_ISSUER, DOMAIN, "alice", 15)
+            .await
+            .expect("signing with the encrypted key works");
+        assert!(!token.is_empty());
+    }
+
+    /// regression H2 (legacy): rows written before encryption at rest hold
+    /// plaintext PEM; `private_pem` must fall back to them so pre-existing
+    /// tenants keep signing after the upgrade (rotate to upgrade the row).
+    #[tokio::test]
+    async fn legacy_plaintext_signing_key_still_loads() {
+        let kp = rcgen::KeyPair::generate_for(&rcgen::PKCS_RSA_SHA256).expect("keygen");
+        let pem = kp.serialize_pem();
+        let key = crate::key::Key {
+            id: "legacy-key".to_string(),
+            public: kp.public_key_pem().into_bytes(),
+            private: pem.clone().into_bytes(),
+            domain_id: DOMAIN.to_string(),
+            domain: Default::default(),
+        };
+        assert_eq!(
+            key.private_pem().expect("legacy fallback"),
+            pem,
+            "a plaintext row must load unchanged"
+        );
+    }
+
+    /// regression H2b: tenant-delete backups are pruned to the newest
+    /// TENANT_BACKUP_RETENTION snapshots of that tenant, and the fresh
+    /// backup carries the DB (plus WAL sidecars when the store left any).
+    #[tokio::test]
+    async fn tenant_delete_backups_are_pruned_to_retention() {
+        let (storage, tmp) = refresh_test_env().await;
+        storage.new_tenant("prune-me").await.expect("tenant");
+
+        // Pre-seed seven stale snapshots with ancient hex timestamps.
+        let backups = tmp.path().join("backups");
+        std::fs::create_dir_all(&backups).expect("backups dir");
+        for ts in 1..=7u64 {
+            std::fs::create_dir_all(backups.join(format!("prune-me-{ts:x}")))
+                .expect("stale backup");
+        }
+
+        storage.delete_tenant("prune-me").await.expect("delete");
+
+        let remaining: Vec<String> = std::fs::read_dir(&backups)
+            .expect("read backups")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            remaining.len(),
+            TENANT_BACKUP_RETENTION,
+            "retention must prune stale snapshots: {remaining:?}"
+        );
+        // The oldest stale entries are gone; the fresh (largest timestamp)
+        // backup survives and holds the database file.
+        assert!(
+            !remaining.iter().any(|n| n == "prune-me-1"),
+            "the oldest snapshot must be pruned"
+        );
+        let newest = remaining
+            .iter()
+            .max_by_key(|n| {
+                n.strip_prefix("prune-me-")
+                    .and_then(|s| u64::from_str_radix(s, 16).ok())
+                    .unwrap_or(0)
+            })
+            .expect("newest backup");
+        assert!(
+            backups.join(newest).join("janux.db").exists(),
+            "the fresh backup must contain the database file"
         );
     }
 

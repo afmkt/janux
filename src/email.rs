@@ -547,11 +547,25 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     ),
     responses(
         (status_code = 200, description = "Success", body = EmailResponse),
-        (status_code = 401, description = "Failed", body = EmailResponse)
+        (status_code = 400, description = "Failed", body = EmailResponse),
+        (status_code = 401, description = "No verified session", body = ApiProblem),
+        (status_code = 403, description = "Level gate refused the target user", body = ApiProblem)
     )
 )]
 
 pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    // H3: credential removal is a user-lifecycle mutation — the caller
+    // must outrank the target on the role ladder (the same gate
+    // `user_delete` enforces), or a lower admin could strip root's login
+    // factors. Fail closed without a verified session.
+    let caller = match crate::utils::caller_from_depot(depot) {
+        Some(c) => c,
+        None => {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            res.render(Json(ApiProblem::unauthorized()));
+            return;
+        }
+    };
     let state = depot.obtain_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
@@ -559,19 +573,27 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(req_request) = extract::<ReqRequest>(req, None).await
         && !req_request.name.is_empty()
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-        && tenant
+    {
+        if let Ok(target) = tenant.user(&req_request.name).await
+            && let Err(e) = tenant.require_above_user(&caller, target.id).await
+        {
+            crate::utils::render_admin_error(res, e);
+            return;
+        }
+        if tenant
             .email_delete(&req_request.name, &req_request.email)
             .await
             .is_ok()
-    {
-        res.status_code(StatusCode::OK);
-        res.render(Json(EmailResponse {
-            ok: true,
-            code: StatusCode::OK.as_u16(),
-            msg: "Success".to_string(),
-            jwt: None,
-        }));
-        return;
+        {
+            res.status_code(StatusCode::OK);
+            res.render(Json(EmailResponse {
+                ok: true,
+                code: StatusCode::OK.as_u16(),
+                msg: "Success".to_string(),
+                jwt: None,
+            }));
+            return;
+        }
     }
 
     res.status_code(StatusCode::BAD_REQUEST);
@@ -983,6 +1005,9 @@ mod tests {
     /// In-process tenant with a signing key and one user who owns an email.
     async fn email_test_env() -> (crate::server::ServerState, tempfile::TempDir) {
         init_revocation_store().await;
+        // Signing keys are encrypted at rest (H2); the process-wide
+        // encryption key is first-call-wins across test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = crate::db::Storage::init(tmp.path())
             .await

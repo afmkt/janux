@@ -154,8 +154,14 @@ fn encode_jwt<T: Serialize>(claim: &Claim<T>, key: &Key) -> anyhow::Result<Strin
     let mut header = Header::new(Algorithm::RS256);
     header.kid = Some(key.id.clone());
 
-    jsonwebtoken::encode(&header, claim, &EncodingKey::from_rsa_pem(&key.private)?)
-        .map_err(Into::into)
+    // H2: `private` is ciphertext at rest — `private_pem` decrypts it
+    // (with the legacy-plaintext fallback for pre-encryption rows).
+    jsonwebtoken::encode(
+        &header,
+        claim,
+        &EncodingKey::from_rsa_pem(key.private_pem()?.as_bytes())?,
+    )
+    .map_err(Into::into)
 }
 
 fn compute_at_hash(access_token: &str) -> Option<String> {

@@ -34,8 +34,15 @@ impl Key {
     pub fn public_pem(&self) -> Result<String> {
         String::from_utf8(self.public.clone()).map_err(Into::into)
     }
+    /// The private signing key PEM. Stored ciphertext (AES-256-GCM, H2) is
+    /// decrypted with the process-wide key; rows written before encryption
+    /// at rest load through the legacy-plaintext fallback — the AES-GCM
+    /// auth tag makes the two forms unambiguous. Rotate (delete + recreate)
+    /// to upgrade a legacy row. A DB or backup disclosure therefore no
+    /// longer hands out the material to forge any session/ID/refresh token.
     pub fn private_pem(&self) -> Result<String> {
-        String::from_utf8(self.private.clone()).map_err(Into::into)
+        let stored = String::from_utf8(self.private.clone())?;
+        Ok(crate::crypto::decrypt_secret_or_legacy(&stored))
     }
 }
 
@@ -71,7 +78,14 @@ impl Tenant {
     pub async fn key_create(&mut self, domain: &str, name: &str) -> Result<()> {
         let alg = &rcgen::PKCS_RSA_SHA256;
         let pruned_key = rcgen::KeyPair::generate_for(alg)?;
-        let private = pruned_key.serialize_pem().into_bytes();
+        // H2: the private signing key is the crown jewel — encrypt it at
+        // rest like every other secret (TOTP/social/provider). Fail closed
+        // when the process encryption key is missing: production cannot
+        // reach this point without one (main exits during startup), and a
+        // silent plaintext fallback would recreate exactly the exposure
+        // this fixes. Reads go through `private_pem`'s legacy fallback, so
+        // pre-existing plaintext rows keep signing.
+        let private = crate::crypto::encrypt_secret(&pruned_key.serialize_pem())?.into_bytes();
         let public = pruned_key.public_key_pem().into_bytes();
 
         toasty::create!(Key {

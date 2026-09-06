@@ -808,7 +808,7 @@ pub async fn well_known(req: &mut Request, depot: &mut Depot, res: &mut Response
         ],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
-        "code_challenge_methods_supported": ["S256", "plain"],
+        "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": [
             "client_secret_post",
             "client_secret_basic",
@@ -1008,14 +1008,17 @@ async fn authorize_flow(
     let mut pkce: Option<(&'static str, String)> = None;
 
     if let Some(ref code_challenge) = params.code_challenge {
+        // OAuth 2.1 / RFC 9700 §2.1.2: S256 is the only acceptable
+        // code_challenge_method. `plain` is forbidden outright (the old
+        // TLS-gated acceptance is removed), and the method parameter is
+        // REQUIRED — RFC 7636 defaults an omitted method to `plain`, so
+        // omitting it is rejected rather than defaulted.
         match params
             .code_challenge_method
             .as_deref()
-            .unwrap_or("plain")
-            .to_lowercase()
-            .as_str()
+            .map(|m| m.to_lowercase())
         {
-            "s256" => {
+            Some(ref method) if method == "s256" => {
                 let challenge = code_challenge.as_str();
                 if !(43..=128).contains(&challenge.len())
                     || !challenge.bytes().all(|b| {
@@ -1037,59 +1040,22 @@ async fn authorize_flow(
 
                 pkce = Some(("s256", challenge.to_string()));
             }
-            "plain" => {
-                // X-Forwarded-Proto is attacker-controlled unless the server
-                // runs behind a proxy that owns it — honor it only in the
-                // same trusted-forwarding mode as host/path resolution.
-                let is_tls = if state_h.trust_forwarded_headers {
-                    req.headers()
-                        .get("X-Forwarded-Proto")
-                        .and_then(|v| v.to_str().ok())
-                        .map(|v| v.eq_ignore_ascii_case("https"))
-                        .unwrap_or_else(|| {
-                            req.uri().scheme().is_some_and(|s| s.as_str() == "https")
-                        })
-                } else {
-                    req.uri().scheme().is_some_and(|s| s.as_str() == "https")
-                };
-                if !is_tls {
-                    oauth2_error(
-                        res,
-                        "/error",
-                        "invalid_request",
-                        "code_challenge_method 'plain' requires TLS",
-                        state.as_deref(),
-                    );
-                    return;
-                }
-
-                let challenge = code_challenge.as_str();
-                if !(43..=128).contains(&challenge.len())
-                    || !challenge.bytes().all(|b| {
-                        matches!(
-                            b,
-                            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~'
-                        )
-                    })
-                {
-                    oauth2_error(
-                        res,
-                        "/error",
-                        "invalid_request",
-                        "Malformed code_challenge: must be 43-128 chars of [A-Z a-z 0-9 -._~]",
-                        state.as_deref(),
-                    );
-                    return;
-                }
-
-                pkce = Some(("plain", challenge.to_string()));
-            }
-            m => {
+            None => {
                 oauth2_error(
                     res,
                     "/error",
                     "invalid_request",
-                    &format!("Unsupported code_challenge_method: '{}'", m),
+                    "code_challenge_method is required; only S256 is accepted",
+                    state.as_deref(),
+                );
+                return;
+            }
+            Some(ref m) => {
+                oauth2_error(
+                    res,
+                    "/error",
+                    "invalid_request",
+                    &format!("Unsupported code_challenge_method: '{m}'; only S256 is accepted"),
                     state.as_deref(),
                 );
                 return;
@@ -1361,14 +1327,11 @@ pub async fn authorize_resume(req: &mut Request, depot: &mut Depot, res: &mut Re
     let requested_scope = pending["scope"].as_str().unwrap_or_default().to_string();
     let rp_state = pending["state"].as_str().map(str::to_string);
     let nonce = pending["nonce"].as_str().map(str::to_string);
-    let pkce = pending["code_challenge"].as_str().map(|c| {
-        let method = if pending["code_challenge_method"].as_str() == Some("plain") {
-            "plain"
-        } else {
-            "s256"
-        };
-        (method, c.to_string())
-    });
+    // Only s256 challenges can be parked since the H5 fix (authorize
+    // rejects `plain` and an omitted method), so the method is a constant.
+    let pkce = pending["code_challenge"]
+        .as_str()
+        .map(|c| ("s256", c.to_string()));
 
     let state = depot
         .obtain_mut::<crate::server::ServerState>()
@@ -1629,14 +1592,11 @@ pub async fn consent_submit(req: &mut Request, depot: &mut Depot, res: &mut Resp
     let requested_scope = pending["scope"].as_str().unwrap_or_default().to_string();
     let rp_state = pending["state"].as_str().map(str::to_string);
     let nonce = pending["nonce"].as_str().map(str::to_string);
-    let pkce = pending["code_challenge"].as_str().map(|c| {
-        let method = if pending["code_challenge_method"].as_str() == Some("plain") {
-            "plain"
-        } else {
-            "s256"
-        };
-        (method, c.to_string())
-    });
+    // Only s256 challenges can be parked since the H5 fix (authorize
+    // rejects `plain` and an omitted method), so the method is a constant.
+    let pkce = pending["code_challenge"]
+        .as_str()
+        .map(|c| ("s256", c.to_string()));
 
     if body.decision != "accept" {
         render_redirect_json(
@@ -2501,13 +2461,16 @@ async fn handle_auth_code(
             .as_ref()
             .and_then(|e| e["challenge"].as_str())
             .unwrap_or_default();
+        // H5: `plain` is no longer accepted anywhere (OAuth 2.1 / RFC 9700
+        // §2.1.2) — authorize refuses to park it, so only s256 entries can
+        // reach this match; the fallback keeps a hypothetical stale entry
+        // fail-closed.
         let verified = match method {
             "s256" => {
                 let computed = base64::engine::general_purpose::URL_SAFE_NO_PAD
                     .encode(sha2::Sha256::digest(verifier.as_bytes()));
                 constant_time_eq(computed.as_bytes(), stored_challenge.as_bytes())
             }
-            "plain" => constant_time_eq(verifier.as_bytes(), stored_challenge.as_bytes()),
             _ => false,
         };
         if pkce_entry.is_none() || !verified {
@@ -4460,6 +4423,9 @@ mod tests {
         // First call wins; later Storage::init re-inits are no-ops, so the
         // store stays on the stable process-lifetime directory.
         init_revocation_store().await;
+        // Signing keys are encrypted at rest (H2); the process-wide
+        // encryption key is first-call-wins across test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = crate::db::Storage::init(tmp.path())
             .await
@@ -5410,6 +5376,63 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "invalid_scope");
+    }
+
+    /// regression H5: `plain` PKCE is refused outright — the old TLS-gated
+    /// acceptance is forbidden by OAuth 2.1 / RFC 9700 §2.1.2 — and an
+    /// omitted method no longer defaults to `plain` (RFC 7636's default).
+    /// S256 must still pass the PKCE gate.
+    #[tokio::test]
+    async fn authorize_rejects_plain_and_missing_pkce_method() {
+        let (state, _tmp) = revoke_test_env().await;
+        let service = device_service(state.clone());
+        // 43-char RFC 7636 Appendix B challenge.
+        let challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+        let base = "response_type=code&client_id=client-a&redirect_uri=http%3A%2F%2Flocalhost%2Fclient-a%2Fcallback";
+
+        for query in [
+            format!("{base}&code_challenge={challenge}&code_challenge_method=plain"),
+            format!("{base}&code_challenge={challenge}"),
+        ] {
+            let res = salvo::test::TestClient::get(format!("http://localhost/authorize?{query}"))
+                .add_header("Host", "localhost", true)
+                .send(&service)
+                .await;
+            assert_eq!(
+                res.status_code,
+                Some(StatusCode::FOUND),
+                "authorize answers with an error redirect"
+            );
+            let loc = res
+                .headers()
+                .get(salvo::http::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert!(
+                loc.contains("error=invalid_request"),
+                "plain/missing method must be refused as invalid_request: {loc}"
+            );
+        }
+
+        // S256 passes the PKCE gate: the flow proceeds to the login/park
+        // stage instead of an invalid_request error redirect.
+        let res = salvo::test::TestClient::get(format!(
+            "http://localhost/authorize?{base}&code_challenge={challenge}&code_challenge_method=S256"
+        ))
+        .add_header("Host", "localhost", true)
+        .send(&service)
+        .await;
+        let loc = res
+            .headers()
+            .get(salvo::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            !loc.contains("error=invalid_request"),
+            "S256 must pass the PKCE gate: {loc}"
+        );
     }
 
     /// A client is bound to its registered grant list (unauthorized_client),

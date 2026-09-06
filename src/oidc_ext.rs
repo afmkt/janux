@@ -1005,6 +1005,9 @@ mod tests {
     ) {
         const TENANT: &str = "fanout-tenant";
         const DOMAIN: &str = "fanout.local";
+        // Signing keys are encrypted at rest (H2); the process-wide
+        // encryption key is first-call-wins across test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = crate::db::Storage::init(tmp.path())
             .await
@@ -1216,6 +1219,9 @@ mod tests {
 
     async fn http_env() -> (crate::server::ServerState, tempfile::TempDir) {
         init_revocation_store().await;
+        // Signing keys are encrypted at rest (H2); the process-wide
+        // encryption key is first-call-wins across test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = crate::db::Storage::init(tmp.path())
             .await

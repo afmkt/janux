@@ -400,6 +400,7 @@
             "type": "integer"
           },
           "jwt": {
+            "description": "Endpoint-dependent token field (the name is historical):\n- `request`: an OPAQUE flow handle — NOT a JWT. Echo it back to\n  `verify` as `token`. The ceremony JWT stays server-side (H1):\n  its base64 `sub` would leak the resolved username on this\n  unauthenticated endpoint.\n- `verify` (success): the session JWT.",
             "type": [
               "string",
               "null"
@@ -2138,7 +2139,7 @@
             },
             "description": "Success"
           },
-          "401": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2147,6 +2148,26 @@
               }
             },
             "description": "Failed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No verified session"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the target user"
           }
         },
         "summary": "Remove a TOTP entry"
@@ -2482,7 +2503,7 @@
             },
             "description": "Success"
           },
-          "401": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2491,6 +2512,26 @@
               }
             },
             "description": "Failed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No verified session"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the target user"
           }
         },
         "summary": "Remove Magic Link"
@@ -2530,7 +2571,7 @@
             },
             "description": "Success"
           },
-          "401": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2539,6 +2580,26 @@
               }
             },
             "description": "Failed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No verified session"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the target user"
           }
         },
         "summary": "Remove OTP"
@@ -2601,6 +2662,26 @@
           },
           "400": {
             "description": "Failure"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No verified session"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the target user"
           }
         },
         "summary": "Remove OAuth2/OIDC authentication record"

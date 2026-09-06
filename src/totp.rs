@@ -678,10 +678,24 @@ struct RemoveTotpRequest {
     request_body = RemoveTotpRequest,
     responses(
         (status_code = 200, description = "Success", body = ApiResponse<()>),
-        (status_code = 401, description = "Failed", body = ApiProblem)
+        (status_code = 400, description = "Failed", body = ApiProblem),
+        (status_code = 401, description = "No verified session", body = ApiProblem),
+        (status_code = 403, description = "Level gate refused the target user", body = ApiProblem)
     )
 )]
 pub async fn remove_totp(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    // H3: MFA removal is a user-lifecycle mutation — the caller must
+    // outrank the target on the role ladder (the same gate `user_delete`
+    // enforces), or a lower admin could strip root's second factor.
+    // Fail closed without a verified session.
+    let caller = match crate::utils::caller_from_depot(depot) {
+        Some(c) => c,
+        None => {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            res.render(Json(ApiProblem::unauthorized()));
+            return;
+        }
+    };
     let state = depot.obtain_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
@@ -690,14 +704,22 @@ pub async fn remove_totp(req: &mut Request, depot: &mut Depot, res: &mut Respons
         && !req_request.name.is_empty()
         && !req_request.totp.is_empty()
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-        && tenant
+    {
+        if let Ok(target) = tenant.user(&req_request.name).await
+            && let Err(e) = tenant.require_above_user(&caller, target.id).await
+        {
+            crate::utils::render_admin_error(res, e);
+            return;
+        }
+        if tenant
             .delete_totp(&req_request.name, &req_request.totp, &domain)
             .await
             .is_ok()
-    {
-        res.status_code(StatusCode::OK);
-        res.render(Json(ApiResponse::ok(())));
-        return;
+        {
+            res.status_code(StatusCode::OK);
+            res.render(Json(ApiResponse::ok(())));
+            return;
+        }
     }
 
     let err = ApiProblem::validation_error("Failure");

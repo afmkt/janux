@@ -33,9 +33,19 @@ pub struct OTP {
     pub user: Deferred<User>,
 }
 
-/// Module-level cache for OTP verification codes (token -> 6-digit code).
+/// Module-level cache for OTP verification codes (flow handle -> 6-digit code).
 pub static OTP_CODE_CACHE: LazyLock<EphemCache<String, String>> =
     LazyLock::new(|| EphemCache::new("otp_codes", Some(300)));
+
+/// Flow handle -> ceremony JWT (H1). The ceremony JWT's base64 `sub`
+/// carries the RESOLVED username, so handing it to the client on the
+/// unauthenticated `request` endpoint leaked a phone→username mapping.
+/// The client now receives an opaque random handle instead; the JWT —
+/// the server-signed envelope binding (name, mobile, signup) — never
+/// leaves the process. Same lifetime as the code cache: the handle is
+/// meaningless once the one-shot code is consumed or expired.
+static OTP_FLOW_CACHE: LazyLock<EphemCache<String, String>> =
+    LazyLock::new(|| EphemCache::new("otp_flows", Some(300)));
 
 impl Tenant {
     /// Strict signup: create the user within this ceremony and
@@ -152,6 +162,12 @@ struct MobileResponse {
     ok: bool,
     code: u16,
     msg: String,
+    /// Endpoint-dependent token field (the name is historical):
+    /// - `request`: an OPAQUE flow handle — NOT a JWT. Echo it back to
+    ///   `verify` as `token`. The ceremony JWT stays server-side (H1):
+    ///   its base64 `sub` would leak the resolved username on this
+    ///   unauthenticated endpoint.
+    /// - `verify` (success): the session JWT.
     jwt: Option<String>,
 }
 
@@ -209,11 +225,21 @@ async fn handle_user<'a>(
 
         let ret = sendsms(otp_cfg, &mobile, code.as_str()).await;
         if ret.is_ok() {
-            OTP_CODE_CACHE
-                .insert(format!("{}:{}", domain, token), code)
+            // H1: return an opaque flow handle, never the ceremony JWT —
+            // its `sub` would disclose the resolved username to whoever
+            // called this unauthenticated endpoint. Both cache entries
+            // are keyed by the handle; `verify` resolves it back.
+            let flow = crate::oidc::random_urlsafe_string();
+            let flow_key = format!("{}:{}", domain, flow);
+            OTP_FLOW_CACHE
+                .insert(flow_key.clone(), token)
                 .await
-                .ok();
-            Ok(token)
+                .map_err(|_| "Fail to start OTP ceremony".to_string())?;
+            OTP_CODE_CACHE
+                .insert(flow_key, code)
+                .await
+                .map_err(|_| "Fail to start OTP ceremony".to_string())?;
+            Ok(flow)
         } else {
             Err("Fail to send SMS".to_string())
         }
@@ -435,18 +461,20 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             return;
         }
         gate_key = Some(key);
-        if let Some(stored_code) = OTP_CODE_CACHE
-            .get_one_shot(&format!("{}:{}", domain, verify_reqest.token))
-            .await
-        {
+        let flow_key = format!("{}:{}", domain, verify_reqest.token);
+        if let Some(stored_code) = OTP_CODE_CACHE.get_one_shot(&flow_key).await {
             if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                let data_wrap = tenant
-                    .jwt_verify::<OtpData>(
-                        issuer.as_str(),
-                        &verify_reqest.name,
-                        &verify_reqest.token,
-                    )
-                    .await;
+                // H1: the client presents the opaque flow handle; the
+                // ceremony JWT it maps to never left the server. The
+                // handle is consumed alongside the one-shot code.
+                let data_wrap = match OTP_FLOW_CACHE.get_one_shot(&flow_key).await {
+                    Some(ceremony) => {
+                        tenant
+                            .jwt_verify::<OtpData>(issuer.as_str(), &verify_reqest.name, &ceremony)
+                            .await
+                    }
+                    None => Err(anyhow::anyhow!("unknown OTP flow handle")),
+                };
                 if data_wrap.is_ok() {
                     ceremony_valid = true;
                     let data = data_wrap.unwrap();
@@ -536,11 +564,25 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     ),
     responses(
         (status_code = 200, description = "Success", body = MobileResponse),
-        (status_code = 401, description = "Failed", body = MobileResponse)
+        (status_code = 400, description = "Failed", body = MobileResponse),
+        (status_code = 401, description = "No verified session", body = ApiProblem),
+        (status_code = 403, description = "Level gate refused the target user", body = ApiProblem)
     )
 )]
 
 pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    // H3: credential removal is a user-lifecycle mutation — the caller
+    // must outrank the target on the role ladder (the same gate
+    // `user_delete` enforces), or a lower admin could strip root's login
+    // factors. Fail closed without a verified session.
+    let caller = match crate::utils::caller_from_depot(depot) {
+        Some(c) => c,
+        None => {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            res.render(Json(ApiProblem::unauthorized()));
+            return;
+        }
+    };
     let state = depot.obtain_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
@@ -548,19 +590,27 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(req_request) = crate::utils::extract::<ReqRequest>(req, None).await
         && !req_request.name.is_empty()
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
-        && tenant
+    {
+        if let Ok(target) = tenant.user(&req_request.name).await
+            && let Err(e) = tenant.require_above_user(&caller, target.id).await
+        {
+            crate::utils::render_admin_error(res, e);
+            return;
+        }
+        if tenant
             .mobile_delete(&req_request.name, &req_request.mobile)
             .await
             .is_ok()
-    {
-        res.status_code(StatusCode::OK);
-        res.render(Json(MobileResponse {
-            ok: true,
-            code: StatusCode::OK.as_u16(),
-            msg: "Success".to_string(),
-            jwt: None,
-        }));
-        return;
+        {
+            res.status_code(StatusCode::OK);
+            res.render(Json(MobileResponse {
+                ok: true,
+                code: StatusCode::OK.as_u16(),
+                msg: "Success".to_string(),
+                jwt: None,
+            }));
+            return;
+        }
     }
 
     res.status_code(StatusCode::BAD_REQUEST);
@@ -891,6 +941,9 @@ mod tests {
     /// In-process tenant with a signing key and one user.
     async fn otp_test_env() -> (crate::server::ServerState, tempfile::TempDir) {
         init_revocation_store().await;
+        // Signing keys are encrypted at rest (H2); the process-wide
+        // encryption key is first-call-wins across test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         // The verify-failure gate is process-wide; wrong-code tests record
         // against the fixture account, so each env starts with it cleared
         // to keep tests independent.
@@ -930,8 +983,9 @@ mod tests {
     }
 
     /// Mints the ceremony token exactly like `request` does (minus the SMS
-    /// hop, which needs a live Aliyun endpoint) and seeds the code cache
-    /// with a known code under the same key `request` uses.
+    /// hop, which needs a live Aliyun endpoint) and seeds BOTH caches under
+    /// an opaque flow handle — the same contract `request` hands clients
+    /// (H1: the ceremony JWT itself never reaches the caller).
     async fn issue_ceremony_for(
         state: &crate::server::ServerState,
         name: &str,
@@ -953,11 +1007,17 @@ mod tests {
             )
             .await
             .expect("ceremony token");
+        let flow = crate::oidc::random_urlsafe_string();
+        let flow_key = format!("{}:{}", DOMAIN, flow);
+        OTP_FLOW_CACHE
+            .insert(flow_key.clone(), token)
+            .await
+            .expect("flow insert");
         OTP_CODE_CACHE
-            .insert(format!("{}:{}", DOMAIN, token), code.to_string())
+            .insert(flow_key, code.to_string())
             .await
             .expect("cache insert");
-        token
+        flow
     }
 
     /// Signin ceremony token for the fixture user (signup defaults to false
@@ -1006,6 +1066,72 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["ok"], true);
         assert!(!body["jwt"].as_str().unwrap_or("").is_empty());
+    }
+
+    /// regression H1: the token `request` hands out is an opaque flow
+    /// handle, not the ceremony JWT — no `header.payload.signature`
+    /// structure, no base64 `sub` leaking the resolved username.
+    #[tokio::test]
+    async fn ceremony_handle_is_opaque_not_a_jwt() {
+        let (state, _tmp) = otp_test_env().await;
+        let flow = issue_ceremony(&state, "123456").await;
+
+        assert_ne!(
+            flow.split('.').count(),
+            3,
+            "the flow handle must not be JWT-shaped"
+        );
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        assert!(
+            tenant
+                .jwt_verify::<OtpData>(TEST_ISSUER, "alice", &flow)
+                .await
+                .is_err(),
+            "the flow handle must not verify as a ceremony JWT"
+        );
+    }
+
+    /// regression H1: a raw ceremony JWT is no longer a valid `verify`
+    /// token — only the flow handle resolves to the server-side envelope,
+    /// so a JWT obtained by any other means cannot drive the ceremony.
+    #[tokio::test]
+    async fn verify_with_raw_ceremony_jwt_is_rejected() {
+        let (state, _tmp) = otp_test_env().await;
+        let service = otp_service(state.clone());
+        // Mint the ceremony JWT directly (the pre-H1 client-visible token)
+        // and seed ONLY the code cache under it — the old contract.
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let raw_jwt = tenant
+            .jwt_authenticate(
+                TEST_ISSUER,
+                DOMAIN,
+                "alice",
+                &OtpData {
+                    mobile: MOBILE.to_string(),
+                    signup: false,
+                },
+                15,
+            )
+            .await
+            .expect("ceremony token");
+        drop(tenant);
+        OTP_CODE_CACHE
+            .insert(format!("{}:{}", DOMAIN, raw_jwt), "123456".to_string())
+            .await
+            .expect("cache insert");
+
+        let (status, body) = post_verify(
+            &service,
+            &serde_json::json!({
+                "token": raw_jwt,
+                "name": "alice",
+                "mobile": MOBILE,
+                "code": "123456",
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_ne!(body["ok"], true);
     }
 
     /// The pre-fix frontend sent `token: ''` because `request` discarded

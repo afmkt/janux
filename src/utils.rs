@@ -566,6 +566,45 @@ pub async fn revoke_token(
     Ok(newly)
 }
 
+/// Marker covering a whole internal session-rotation chain (H4). Every
+/// token in a `/auth/refresh` chain shares its `sub` and ORIGINAL
+/// `auth_time` (refresh preserves both), so the pair is a family key
+/// without any token-shape change. Once poisoned, every surviving member
+/// of the chain fails the family check on its next refresh attempt and
+/// the chain dies out within one token lifetime — the RFC 9700 §4.14.2
+/// replay response, mirroring the OIDC refresh-token family
+/// (`oidc_refresh_family:*`). Two logins of the same user within the same
+/// second share a family; poisoning then conservatively kills both.
+pub fn session_family_marker(sub: &str, auth_time: usize) -> String {
+    format!("session_family:{sub}:{auth_time}")
+}
+
+/// The poison marker only has to outlive the newest chain member minted
+/// before the poisoning (session tokens live 15 minutes at every
+/// `refresh_jwt`/`authenticate_jwt` call site); 24 h is ample headroom
+/// and expired markers are gc'd by the revocation store.
+const SESSION_FAMILY_POISON_TTL_SEC: i64 = 24 * 3600;
+
+/// Poison an internal session family after refresh-token reuse (theft
+/// indicator): successors of the stolen token stop rotating immediately.
+pub async fn poison_session_family(sub: &str, auth_time: usize) {
+    let exp = jiff::Timestamp::from_second(
+        jiff::Timestamp::now().as_second() + SESSION_FAMILY_POISON_TTL_SEC,
+    )
+    .unwrap_or_else(|_| jiff::Timestamp::now());
+    crate::jwt::InvalidJwt::global()
+        .invalid_raw(&session_family_marker(sub, auth_time), exp)
+        .await
+        .ok();
+}
+
+/// Whether the internal session family has been poisoned.
+pub async fn session_family_poisoned(sub: &str, auth_time: usize) -> bool {
+    crate::jwt::InvalidJwt::global()
+        .is_valid(&session_family_marker(sub, auth_time))
+        .await
+}
+
 fn jwt_verify_from(decision: TokenDecision<crate::db::JwtData>, domain: &str) -> JwtVerify {
     JwtVerify {
         can_access: decision.can_access,

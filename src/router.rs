@@ -610,6 +610,28 @@ mod tests {
         );
     }
 
+    /// regression H5: discovery advertises S256 as the ONLY PKCE method —
+    /// `plain` is forbidden by OAuth 2.1 / RFC 9700 §2.1.2 and authorize
+    /// rejects it outright.
+    #[tokio::test]
+    async fn discovery_advertises_only_s256_pkce() {
+        use salvo::test::ResponseExt;
+        let service = public_service(empty_state().await);
+        let mut req = get_from("203.0.113.34:5000", "/.well-known/openid-configuration");
+        req.headers_mut().insert(
+            salvo::http::header::HOST,
+            "pkce.example.com".parse().unwrap(),
+        );
+        let mut res = service.handle(req).await;
+        assert_eq!(res.status_code, Some(StatusCode::OK));
+        let doc: serde_json::Value = res.take_json().await.expect("json body");
+        assert_eq!(
+            doc["code_challenge_methods_supported"],
+            serde_json::json!(["S256"]),
+            "plain must not be advertised (OAuth 2.1)"
+        );
+    }
+
     /// A request with no usable host at all still 404s — the skeleton needs
     /// at least a Host header to derive an issuer from.
     #[tokio::test]
