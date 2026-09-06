@@ -484,6 +484,7 @@ async fn mint_token_response(
     scope: String,
     nonce: Option<String>,
     auth_time: Option<usize>,
+    mfa: std::collections::HashSet<String>,
 ) -> Result<TokenResponse, String> {
     let now = Timestamp::now().as_second();
     let auth_time = auth_time.unwrap_or(now as usize);
@@ -493,7 +494,8 @@ async fn mint_token_response(
         .current_key(domain)
         .map_err(|_| "No active signing key for this tenant".to_string())?;
 
-    let mfa: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // The factor set comes from the approval ceremony's session, so
+    // amr/acr describe how the user actually authenticated.
     let amr = amr_values(&mfa);
     let acr = acr_value(&mfa);
 
@@ -1832,7 +1834,12 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                 SlowDown,
                 Pending,
                 Denied,
-                Approved { user_id: String, scope: String },
+                Approved {
+                    user_id: String,
+                    scope: String,
+                    mfa: std::collections::HashSet<String>,
+                    auth_time: usize,
+                },
                 Invalid,
             }
             let poll = match OIDC_DEVICE_CACHE
@@ -1868,7 +1875,27 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                             entry["status"] = serde_json::json!("consumed");
                             let user_id = entry["user_id"].as_str().unwrap_or_default().to_string();
                             let scope = entry["scope"].as_str().unwrap_or_default().to_string();
-                            Poll::Approved { user_id, scope }
+                            // The approver's factors and original auth
+                            // instant ride in the entry; a missing
+                            // auth_time (entry approved by a pre-fix
+                            // build, TTL-bounded) falls back to poll
+                            // time as before.
+                            let mfa = entry["mfa"]
+                                .as_array()
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|v| v.as_str().map(str::to_string))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let auth_time =
+                                entry["auth_time"].as_u64().unwrap_or(now as u64) as usize;
+                            Poll::Approved {
+                                user_id,
+                                scope,
+                                mfa,
+                                auth_time,
+                            }
                         }
                         _ => Poll::Invalid,
                     }
@@ -1942,7 +1969,12 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     );
                     return;
                 }
-                Poll::Approved { user_id, scope } => {
+                Poll::Approved {
+                    user_id,
+                    scope,
+                    mfa,
+                    auth_time,
+                } => {
                     // Cleanup only — the status flip above already made a
                     // second mint impossible.
                     OIDC_DEVICE_CACHE.codes.remove(&key).await;
@@ -1975,7 +2007,8 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                         &user_id,
                         scope,
                         None,
-                        None,
+                        Some(auth_time),
+                        mfa,
                     )
                     .await
                     {
@@ -3925,6 +3958,14 @@ pub async fn device_login_approve(req: &mut Request, depot: &mut Depot, res: &mu
         }
     };
     let user_id = verify.jwt_data.user.clone();
+    // The approver's session factors and ORIGINAL authentication instant
+    // ride along in the device entry: the token endpoint mints
+    // amr/acr/auth_time from the approval, not from poll time — RPs
+    // enforcing max_age or step-up get truthful answers for this grant.
+    let mfa = verify.jwt_data.mfa.clone();
+    let auth_time = verify
+        .auth_time
+        .unwrap_or_else(|| Timestamp::now().as_second() as usize);
 
     let state = depot
         .obtain_mut::<crate::server::ServerState>()
@@ -4088,6 +4129,8 @@ pub async fn device_login_approve(req: &mut Request, depot: &mut Depot, res: &mu
             .get_mut(&key, |entry| {
                 entry["status"] = serde_json::json!("approved");
                 entry["user_id"] = serde_json::json!(user_id);
+                entry["mfa"] = serde_json::to_value(&mfa).unwrap_or_default();
+                entry["auth_time"] = serde_json::json!(auth_time);
             })
             .await;
     } else {
@@ -5338,6 +5381,147 @@ mod tests {
         assert!(
             body["id_token"].is_string(),
             "scope=openid must mint an ID token"
+        );
+    }
+
+    /// Decode a JWT's claims without verification — the signature path is
+    /// covered elsewhere; these assertions are about claim CONTENT.
+    fn jwt_claims(jwt: &str) -> serde_json::Value {
+        let payload = jwt.split('.').nth(1).expect("jwt payload segment");
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .expect("jwt payload base64");
+        serde_json::from_slice(&bytes).expect("jwt claims json")
+    }
+
+    /// regression: device-grant tokens must carry the APPROVER's session
+    /// factors (amr/acr) and original auth_time — not an empty factor set
+    /// and the poll moment. RPs enforcing max_age or step-up via
+    /// acr/auth_time rely on these being truthful for this grant.
+    #[tokio::test]
+    async fn device_grant_tokens_carry_session_amr_acr_and_auth_time() {
+        let (state, _tmp) = revoke_test_env().await;
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant.user_create("alice").await.expect("user");
+        }
+        let service = device_service(state.clone());
+
+        let mut res = salvo::test::TestClient::post("http://localhost/device_authorization")
+            .add_header("Host", "localhost", true)
+            .raw_form("client_id=client-a&client_secret=secret-a&scope=openid".to_string())
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code.expect("status code"), StatusCode::OK);
+        let body = res.take_string().await.unwrap_or_default();
+        let auth: serde_json::Value =
+            serde_json::from_str(&body).expect("device authorization response");
+        let device_code = auth["device_code"]
+            .as_str()
+            .expect("device_code")
+            .to_string();
+
+        // Approve with a session carrying real factors.
+        let mfa: std::collections::HashSet<String> =
+            ["email".to_string(), "totp".to_string()].into();
+        let session = {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant
+                .authenticate_jwt(&mfa, TEST_ISSUER, "localhost", "alice", 15)
+                .await
+                .expect("session token")
+        };
+        let res = salvo::test::TestClient::post("http://localhost/device-login/approve")
+            .add_header("Host", "localhost", true)
+            .add_header("Authorization", format!("Bearer {session}"), true)
+            .json(&serde_json::json!({
+                "user_code": auth["user_code"].as_str().expect("user_code"),
+                "action": "approve",
+            }))
+            .send(&service)
+            .await;
+        assert_eq!(
+            res.status_code.expect("status code"),
+            StatusCode::OK,
+            "approval ceremony must succeed"
+        );
+
+        // The approval itself recorded the session's factors and auth time.
+        let key = format!("device:{device_code}");
+        let recorded = OIDC_DEVICE_CACHE.codes.get(&key).await.expect("entry");
+        let recorded_mfa: std::collections::HashSet<String> =
+            serde_json::from_value(recorded["mfa"].clone()).expect("mfa array");
+        assert_eq!(
+            recorded_mfa, mfa,
+            "the entry must carry the session factors"
+        );
+        let recorded_at = recorded["auth_time"]
+            .as_u64()
+            .expect("the approval must record auth_time");
+        let now = Timestamp::now().as_second() as u64;
+        assert!(
+            (now.saturating_sub(60)..=now + 60).contains(&recorded_at),
+            "auth_time must be the session's authentication instant"
+        );
+
+        // Backdate the recorded auth_time so the minted tokens can only
+        // carry it FROM THE ENTRY — a poll-time default would be `now`.
+        let backdated = (Timestamp::now().as_second() - 600) as usize;
+        OIDC_DEVICE_CACHE
+            .codes
+            .get_mut(&key, |entry| {
+                entry["auth_time"] = serde_json::json!(backdated);
+            })
+            .await;
+
+        let grant = "urn:ietf:params:oauth:grant-type:device_code";
+        let (status, body) = post_token(
+            &service,
+            &format!(
+                "grant_type={grant}&device_code={device_code}&client_id=client-a&client_secret=secret-a"
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "device exchange must succeed: {body}"
+        );
+
+        let mut expected_amr = amr_values(&mfa).expect("factors map to amr");
+        expected_amr.sort();
+        let expected_acr = acr_value(&mfa).expect("factors map to acr");
+
+        let at_claims = jwt_claims(body["access_token"].as_str().expect("access_token"));
+        let mut at_amr: Vec<String> =
+            serde_json::from_value(at_claims["amr"].clone()).expect("amr claim");
+        at_amr.sort();
+        assert_eq!(at_amr, expected_amr, "access token amr");
+        assert_eq!(
+            at_claims["acr"].as_str(),
+            Some(expected_acr.as_str()),
+            "access token acr"
+        );
+        assert_eq!(
+            at_claims["auth_time"].as_u64(),
+            Some(backdated as u64),
+            "access token auth_time must be the approval's, not poll time"
+        );
+
+        let id_claims = jwt_claims(body["id_token"].as_str().expect("id_token"));
+        let mut id_amr: Vec<String> =
+            serde_json::from_value(id_claims["amr"].clone()).expect("amr claim");
+        id_amr.sort();
+        assert_eq!(id_amr, expected_amr, "id token amr");
+        assert_eq!(
+            id_claims["acr"].as_str(),
+            Some(expected_acr.as_str()),
+            "id token acr"
+        );
+        assert_eq!(
+            id_claims["auth_time"].as_u64(),
+            Some(backdated as u64),
+            "id token auth_time must be the approval's, not poll time"
         );
     }
 
