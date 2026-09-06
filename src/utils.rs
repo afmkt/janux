@@ -343,18 +343,21 @@ fn issuer_url(host: &str, req: &Request, state: &ServerState) -> String {
     format!("{}://{}", scheme, host)
 }
 
+/// Extract the bearer token from the `Authorization` header. The
+/// auth-scheme is case-insensitive (RFC 6749 §2.1, RFC 6750 §2.1), so
+/// `Bearer`, `bearer` and `BEARER` all match. This is the SINGLE bearer
+/// extractor — the internal `/api/v1/*` paths and the OIDC resource
+/// endpoints (`/userinfo`) both go through it so their scheme handling
+/// can never drift apart. The `to_str()` filter guarantees visible
+/// ASCII, so the 7-byte prefix slice is always char-boundary safe.
 pub fn get_jwt(req: &Request) -> Option<&str> {
     req.headers()
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
         .and_then(|h| {
-            // Check if the header starts with "Bearer " (case-insensitive)
-            // and return the part after the prefix.
-            if h.to_lowercase().starts_with("bearer ") {
-                Some(&h["bearer ".len()..])
+            if h.len() >= 7 && h[..7].eq_ignore_ascii_case("bearer ") {
+                Some(&h[7..])
             } else {
-                // If you support plain token strings without the prefix,
-                // remove this block or return None if strictly "Bearer" is required.
                 None
             }
         })
@@ -1629,5 +1632,36 @@ mod tests {
         let state = VERIFY_FAILURES.get(&key).await.expect("state");
         assert_eq!(state.failures, 1);
         clear_verify_failures(&key).await;
+    }
+
+    /// regression: the auth-scheme is case-insensitive (RFC 6749 §2.1 /
+    /// RFC 6750 §2.1) — `BEARER` must extract the token exactly like
+    /// `Bearer`, and non-bearer schemes or short values must not match.
+    #[test]
+    fn get_jwt_matches_bearer_scheme_case_insensitively() {
+        fn req_with_auth(value: &str) -> Request {
+            let mut req = Request::new();
+            req.headers_mut().insert(
+                salvo::http::header::AUTHORIZATION,
+                salvo::http::HeaderValue::from_str(value).expect("header value"),
+            );
+            req
+        }
+
+        for scheme in ["Bearer", "bearer", "BEARER", "BeArEr"] {
+            let req = req_with_auth(&format!("{scheme} abc.def.ghi"));
+            assert_eq!(
+                get_jwt(&req),
+                Some("abc.def.ghi"),
+                "scheme `{scheme}` must match case-insensitively"
+            );
+        }
+        assert_eq!(get_jwt(&req_with_auth("Basic dXNlcjpwYXNz")), None);
+        assert_eq!(
+            get_jwt(&req_with_auth("bearer")),
+            None,
+            "a scheme without the space and token must not match"
+        );
+        assert_eq!(get_jwt(&Request::new()), None, "a missing header");
     }
 }

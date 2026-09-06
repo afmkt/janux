@@ -343,19 +343,6 @@ fn render_redirect_json(res: &mut Response, status: StatusCode, url: String) {
     res.render(Json(OidcRedirectResponse { redirect: url }));
 }
 
-fn get_bearer_token(req: &Request) -> Option<&str> {
-    req.headers()
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| {
-            if h.starts_with("Bearer ") || h.starts_with("bearer ") {
-                Some(&h[7..])
-            } else {
-                None
-            }
-        })
-}
-
 fn generate_device_code() -> String {
     let mut bytes = [0u8; 32];
     rand::fill(&mut bytes);
@@ -2989,7 +2976,9 @@ fn userinfo_error(res: &mut Response, status: StatusCode, error: &str, descripti
     )
 )]
 pub async fn userinfo(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let bearer = match get_bearer_token(req) {
+    // The single bearer extractor (utils::get_jwt) — the auth-scheme is
+    // case-insensitive per RFC 6750 §2.1, matching the internal endpoints.
+    let bearer = match crate::utils::get_jwt(req) {
         Some(t) => t.to_string(),
         None => {
             res.status_code(StatusCode::UNAUTHORIZED);
@@ -4416,6 +4405,45 @@ mod tests {
             },
         )
         .expect("sign access token")
+    }
+
+    fn userinfo_service(state: crate::server::ServerState) -> Service {
+        Service::new(
+            Router::with_path("userinfo")
+                .get(crate::oidc::userinfo)
+                .hoop(salvo::affix_state::inject(state)),
+        )
+    }
+
+    /// regression: auth-schemes are case-insensitive (RFC 6749 §2.1 /
+    /// RFC 6750 §2.1) — `BEARER <token>` must reach `/userinfo` exactly
+    /// like `Bearer <token>` instead of 401ing at extraction.
+    #[tokio::test]
+    async fn userinfo_accepts_uppercase_bearer_scheme() {
+        let (state, _tmp) = revoke_test_env().await;
+        let service = userinfo_service(state.clone());
+        let access_token = {
+            let tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            let key = tenant.current_key("localhost").expect("key");
+            mint_access_token(&key, "client-a")
+        };
+
+        for scheme in ["Bearer", "BEARER", "beArEr"] {
+            let mut res = salvo::test::TestClient::get("http://localhost/userinfo")
+                .add_header("Host", "localhost", true)
+                .add_header("Authorization", format!("{scheme} {access_token}"), true)
+                .send(&service)
+                .await;
+            assert_eq!(
+                res.status_code.expect("status code"),
+                StatusCode::OK,
+                "`{scheme}` must be accepted on /userinfo"
+            );
+            let body: serde_json::Value =
+                serde_json::from_str(&res.take_string().await.unwrap_or_default())
+                    .expect("json body");
+            assert_eq!(body["sub"], "user1");
+        }
     }
 
     async fn post_revoke(service: &Service, form: &str) -> (StatusCode, String) {
