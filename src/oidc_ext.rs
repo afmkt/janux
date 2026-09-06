@@ -933,6 +933,10 @@ mod tests {
             "openid profile"
         );
         assert!(validate_dcr_scope(Some("admin")).is_err());
+        // regression C2: the machine-provisioning scope lives outside the
+        // user-consent vocabulary, so a self-service DCR registration can
+        // never grant itself the `scim` role.
+        assert!(validate_dcr_scope(Some("scim")).is_err());
     }
 
     fn test_key() -> crate::key::Key {

@@ -2,7 +2,9 @@
 //!
 //! The preferred API for user management (README §7): IdPs drive the user
 //! lifecycle through `/scim/v2/Users` under a machine principal minted by
-//! the `client_credentials` grant carrying the builtin `scim` role. The
+//! the `client_credentials` grant. The token carries the builtin `scim`
+//! role only when the `scim` scope was requested (or defaults from the
+//! registration) AND an admin registered that scope for the client. The
 //! surrogate `User.id` is the SCIM resource id; `User.name` is
 //! `userName`; `User.external_id` persists the IdP join key.
 
@@ -892,7 +894,10 @@ mod tests {
                     "client_credentials",
                     "",
                     "client_secret_post",
-                    "",
+                    // The registered scope is the admin-consent step: the
+                    // grant only embeds the `scim` role for clients that
+                    // carry it here.
+                    "scim",
                 )
                 .await
                 .expect("machine client");

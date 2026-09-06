@@ -105,6 +105,15 @@ pub const STANDARD_ADMIN_POLICIES: &[(&str, &str)] = &[
     // user: self-service (handlers act on the caller's own account)
     ("/api/v1/admin/user/activate/self", "user"),
     ("/api/v1/admin/user/delete/self", "user"),
+    // scim: machine provisioning. The builtin `scim` role is useless
+    // without these rows (protect is default-deny), so runtime-created
+    // tenants must mirror the seed file. The machine principal itself is
+    // NOT bootstrapped: an admin registers it per IdP connection via
+    // admin/oauth2client/create with default_scopes = "scim" — that
+    // registration is the consent step the client_credentials grant
+    // enforces (requested ∩ registered).
+    ("/scim/v2/Users", "scim"),
+    ("/scim/v2/Users/{id}", "scim"),
 ];
 
 /// Bootstrap a runtime-created tenant (`admin/tenant/create`): the builtin
@@ -162,6 +171,7 @@ pub async fn bootstrap_tenant(
 #[cfg(test)]
 mod tests {
 
+    use super::STANDARD_ADMIN_POLICIES;
     use crate::server::JanuxConfig;
 
     /// The seed.toml shape is the RBAC bootstrap source of truth:
@@ -253,6 +263,23 @@ mod tests {
                 .policies
                 .iter()
                 .any(|p| p.role == "root" && p.resource == "/api/v1/admin/tenant/list")
+        );
+
+        // STANDARD_ADMIN_POLICIES claims to mirror the seed file so
+        // runtime-created tenants come up like the seeded one. Pin the
+        // SCIM rows: without them the builtin `scim` role is dead under
+        // default-deny in every tenant created via admin/tenant/create.
+        for p in tenant.policies.iter().filter(|p| p.role == "scim") {
+            assert!(
+                STANDARD_ADMIN_POLICIES.contains(&(p.resource.as_str(), p.role.as_str())),
+                "seed policy {} (role {}) is missing from STANDARD_ADMIN_POLICIES",
+                p.resource,
+                p.role
+            );
+        }
+        assert!(
+            STANDARD_ADMIN_POLICIES.contains(&("/scim/v2/Users", "scim")),
+            "runtime tenants must seed the SCIM collection policy"
         );
     }
 }

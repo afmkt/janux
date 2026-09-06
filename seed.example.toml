@@ -130,7 +130,18 @@ policies = [
     # ── scim: machine provisioning (G-S1/G-S2). `{id}` is the canonical
     #    resource the SCIM protect hoop substitutes for the dynamic path
     #    segment — policies match exactly (G-43), so one row covers all
-    #    resource instances. ─
+    #    resource instances. The role + policy rows are the default
+    #    provisioning; the machine principal itself is NOT seeded (a
+    #    committed client secret would be a standing provisioning
+    #    credential). Register one per IdP connection as admin — that
+    #    registration is the consent the client_credentials grant
+    #    enforces (requested ∩ registered scope):
+    #      POST /api/v1/admin/oauth2client/create
+    #        { client_id: "okta-scim", secret: "<random>",
+    #          grant_types: "client_credentials",
+    #          token_endpoint_auth_method: "client_secret_post",
+    #          default_scopes: "scim" }
+    # ─
     { domain = "localhost", resource = "/scim/v2/Users", role = "scim", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/scim/v2/Users/{id}", role = "scim", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
 ]

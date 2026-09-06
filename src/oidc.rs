@@ -397,17 +397,42 @@ async fn require_active_user(tenant: &mut crate::db::Tenant, user_id: &str) -> R
 /// backstop and `/revoke` is the off switch.
 const CLIENT_CREDENTIALS_TOKEN_LIFETIME_MINUTES: i32 = 90 * 24 * 60;
 
+/// The scope vocabulary of the `client_credentials` grant. `scim` is the
+/// machine-provisioning scope: it maps to the builtin `scim` role. It is
+/// deliberately NOT in `KNOWN_SCOPES` (the user-consent vocabulary), so it
+/// can never appear on a consent screen, in a DCR registration, or on a
+/// user token — an admin grants it only by registering it as a client's
+/// scope, which is this server's admin-consent step.
+pub(crate) const MACHINE_SCOPES: &[&str] = &["scim"];
+
+/// The scope→role mapping for machine principals: every effective scope
+/// confers the builtin role of the same name.
+fn roles_for_machine_scopes(scopes: &[String]) -> std::collections::HashSet<String> {
+    scopes
+        .iter()
+        .filter(|s| MACHINE_SCOPES.contains(&s.as_str()))
+        .cloned()
+        .collect()
+}
+
 /// The client_credentials grant (RFC 6749 §4.4): machine principals
 /// for SCIM provisioning. Mints a long-lived, session-shaped JWT bound to
-/// the client's service identity (`OAuth2Client.uuid`) carrying the
-/// `scim` role, so `protect`/RBAC evaluate it unchanged. The grant
-/// requires client authentication — public clients
-/// (`token_endpoint_auth_method = "none"`) are refused.
+/// the client's service identity (`OAuth2Client.uuid`) so `protect`/RBAC
+/// evaluate it unchanged. The grant requires client authentication —
+/// public clients (`token_endpoint_auth_method = "none"`) are refused.
+///
+/// Roles come from the effective scope — the requested scope intersected
+/// with the scopes an admin registered for the client (RFC 6749 §3.3;
+/// when the parameter is omitted the registered machine scopes are the
+/// default). A client can therefore never confer more than its
+/// registration consents to, and a confidential client without the
+/// `scim` scope gets `invalid_scope` instead of a provisioning token.
 async fn handle_client_credentials(
     tenant: &mut crate::db::Tenant,
     client: &OAuth2Client,
     issuer: &str,
     domain: &str,
+    requested_scope: Option<&str>,
     res: &mut Response,
 ) {
     if client.token_endpoint_auth_method == "none" {
@@ -416,6 +441,57 @@ async fn handle_client_credentials(
             StatusCode::UNAUTHORIZED,
             "invalid_client",
             "client_credentials requires a confidential client",
+        );
+        return;
+    }
+    // Effective scope = requested ∩ registered. Every requested scope must
+    // be valid for this grant AND registered for the client by an admin;
+    // an omitted parameter defaults to the registered machine scopes.
+    let registered = client.get_scope();
+    let effective: Vec<String> = match requested_scope.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(requested) => {
+            let mut eff: Vec<String> = Vec::new();
+            for s in requested.split_whitespace() {
+                if !MACHINE_SCOPES.contains(&s) {
+                    token_error(
+                        res,
+                        StatusCode::BAD_REQUEST,
+                        "invalid_scope",
+                        &format!("scope '{s}' is not valid for the client_credentials grant"),
+                    );
+                    return;
+                }
+                if !registered.iter().any(|r| r == s) {
+                    token_error(
+                        res,
+                        StatusCode::BAD_REQUEST,
+                        "invalid_scope",
+                        &format!("scope '{s}' is not registered for this client"),
+                    );
+                    return;
+                }
+                if !eff.iter().any(|e| e == s) {
+                    eff.push(s.to_string());
+                }
+            }
+            eff
+        }
+        None => registered
+            .iter()
+            .filter(|s| MACHINE_SCOPES.contains(&s.as_str()))
+            .cloned()
+            .collect(),
+    };
+    let roles = roles_for_machine_scopes(&effective);
+    if roles.is_empty() {
+        // Fail closed: without a machine scope this grant would mint a
+        // token that can do nothing — surface the registration mistake
+        // instead of papering over it with an inert token.
+        token_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_scope",
+            "client_credentials requires a machine scope (e.g. 'scim') registered for this client",
         );
         return;
     }
@@ -436,7 +512,7 @@ async fn handle_client_credentials(
         username: format!("client:{}", client.id),
         domain: domain.to_string(),
         mfa: std::collections::HashSet::new(),
-        roles: std::collections::HashSet::from(["scim".to_string()]),
+        roles,
     };
     match jwt_authenticate(
         issuer,
@@ -460,7 +536,7 @@ async fn handle_client_credentials(
                 access_token,
                 token_type: "Bearer".into(),
                 expires_in: (CLIENT_CREDENTIALS_TOKEN_LIFETIME_MINUTES as u64) * 60,
-                scope: None,
+                scope: Some(effective.join(" ")),
                 id_token: None,
                 refresh_token: None,
             }));
@@ -2024,7 +2100,15 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             }
         }
         "client_credentials" => {
-            handle_client_credentials(&mut tenant, &client, &issuer, domain, res).await
+            handle_client_credentials(
+                &mut tenant,
+                &client,
+                &issuer,
+                domain,
+                params.scope.as_deref(),
+                res,
+            )
+            .await
         }
         _ => {
             token_error(
@@ -5171,8 +5255,10 @@ mod tests {
     // ── client_credentials grant (RFC 6749 §4.4) ───────────────────────────
 
     /// The grant mints a long-lived session-shaped JWT bound to the
-    /// client's service identity and carrying the `scim` role — the
-    /// machine principal SCIM provisioning runs under.
+    /// client's service identity and carrying the `scim` role — but only
+    /// when the `scim` scope survives the requested ∩ registered
+    /// intersection. An omitted scope parameter defaults to the
+    /// registered machine scopes (RFC 6749 §3.3).
     #[tokio::test]
     async fn client_credentials_mints_scim_service_token() {
         let (state, _tmp) = revoke_test_env().await;
@@ -5186,16 +5272,17 @@ mod tests {
                     "client_credentials",
                     "",
                     "client_secret_post",
-                    "",
+                    "scim",
                 )
                 .await
                 .expect("client");
         }
         let service = token_service(state.clone());
 
+        // Explicit request for the registered scope.
         let (status, body) = post_token(
             &service,
-            "grant_type=client_credentials&client_id=scim-client&client_secret=scim-secret",
+            "grant_type=client_credentials&client_id=scim-client&client_secret=scim-secret&scope=scim",
         )
         .await;
         assert_eq!(
@@ -5203,12 +5290,25 @@ mod tests {
             StatusCode::OK,
             "client_credentials must mint: {body}"
         );
+        assert_eq!(body["scope"], "scim", "the effective scope is reported");
         let service_token = body["access_token"]
             .as_str()
             .expect("access_token")
             .to_string();
         assert_eq!(body["token_type"], "Bearer");
         assert!(body["refresh_token"].is_null(), "no refresh token for now");
+
+        // Omitted scope defaults to the registered machine scopes. Run
+        // BOTH token requests before touching `tenant_by_domain`: that
+        // hands out a DashMap write guard, and holding it across a request
+        // would deadlock against the handler's own tenant lookup.
+        let (status, body) = post_token(
+            &service,
+            "grant_type=client_credentials&client_id=scim-client&client_secret=scim-secret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "default scope must mint: {body}");
+        assert_eq!(body["scope"], "scim");
 
         let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
         let client = tenant
@@ -5224,6 +5324,92 @@ mod tests {
             "the service token must carry the scim role"
         );
         assert_eq!(data.username, "client:scim-client");
+    }
+
+    /// regression C2: the `scim` role is no longer unconditional. A
+    /// confidential client whose registration does not carry the `scim`
+    /// scope must never receive a provisioning token — neither by
+    /// requesting the scope nor by omitting the parameter.
+    #[tokio::test]
+    async fn client_credentials_without_registered_scim_scope_is_refused() {
+        let (state, _tmp) = revoke_test_env().await;
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant
+                .oauth2client_create(
+                    "machine-no-scim",
+                    "secret",
+                    &[],
+                    "client_credentials",
+                    "",
+                    "client_secret_post",
+                    "openid",
+                )
+                .await
+                .expect("client");
+        }
+        let service = token_service(state.clone());
+
+        // Requesting `scim` without it being registered: refused.
+        let (status, body) = post_token(
+            &service,
+            "grant_type=client_credentials&client_id=machine-no-scim&client_secret=secret&scope=scim",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_scope");
+
+        // Omitting the scope: the registered default has no machine scope,
+        // so there is nothing to mint — fail closed instead of issuing an
+        // inert (or worse, privileged) token.
+        let (status, body) = post_token(
+            &service,
+            "grant_type=client_credentials&client_id=machine-no-scim&client_secret=secret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_scope");
+    }
+
+    /// regression C2: the machine vocabulary is separate from the user
+    /// consent vocabulary — user-facing scopes have no meaning on this
+    /// grant even when registered for the client.
+    #[tokio::test]
+    async fn client_credentials_rejects_scopes_outside_the_machine_vocabulary() {
+        let (state, _tmp) = revoke_test_env().await;
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant
+                .oauth2client_create(
+                    "hybrid-client",
+                    "secret",
+                    &[],
+                    "client_credentials authorization_code",
+                    "code",
+                    "client_secret_post",
+                    "openid scim",
+                )
+                .await
+                .expect("client");
+        }
+        let service = token_service(state.clone());
+
+        let (status, body) = post_token(
+            &service,
+            "grant_type=client_credentials&client_id=hybrid-client&client_secret=secret&scope=openid",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_scope");
+
+        // One invalid scope poisons the whole request — no partial grant.
+        let (status, body) = post_token(
+            &service,
+            "grant_type=client_credentials&client_id=hybrid-client&client_secret=secret&scope=scim%20openid",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_scope");
     }
 
     /// A client is bound to its registered grant list (unauthorized_client),
