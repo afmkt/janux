@@ -213,7 +213,7 @@ fn render_email(config: &ResendDTO, to: &str, subject: &str, link: &str) -> anyh
     context.insert("subject", subject);
     context.insert("from", &config.from);
     context.insert("to", to);
-    Ok(tera.render("email", &context).unwrap())
+    tera.render("email", &context).map_err(Into::into)
 }
 
 /// Return context the magic link carries through the email hop.
@@ -289,7 +289,8 @@ async fn handle_user<'a>(
             ctx,
         )
         .map_err(|e| format!("Invalid verify_url in email config: {e}"))?;
-        let content = render_email(&cfg, &email, subject, link.as_str()).unwrap();
+        let content = render_email(&cfg, &email, subject, link.as_str())
+            .map_err(|e| format!("Failed to render email: {e}"))?;
         if send(&cfg, &email, subject, content.as_ref()).await.is_ok() {
             MLINK_CACHE
                 .insert(format!("{}:{}", domain, token), user_name)
@@ -1780,5 +1781,31 @@ mod tests {
         // And load round-trips back to plaintext for consumers.
         let reloaded = ResendDTO::load(&mut tenant).await.expect("reload");
         assert_eq!(reloaded.resend_key, "re_test_key");
+    }
+
+    /// regression: a broken email template must surface as an error the
+    /// caller turns into a clean failure, not a panic inside render.
+    #[test]
+    fn render_email_surfaces_template_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("broken.html");
+        std::fs::write(&path, "{{ nope }}").expect("write");
+        let cfg = ResendDTO {
+            from: "noreply@example.com".into(),
+            resend_key: "re_test_key".into(),
+            template: path.to_string_lossy().to_string(),
+            verify_url: "http://localhost/email/verify".into(),
+            base_url: None,
+        };
+        assert!(
+            render_email(
+                &cfg,
+                "alice@example.com",
+                "Janux login",
+                "http://localhost/l"
+            )
+            .is_err(),
+            "a template referencing a missing variable must error, not panic"
+        );
     }
 }

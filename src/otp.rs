@@ -274,10 +274,22 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                 return;
             }
             if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                let cfg = OTPDTO::load(&mut tenant)
-                    .await
-                    .ok_or("Failed to load OTP config")
-                    .unwrap();
+                // A tenant without SMS provider config fails closed with a
+                // clean error (same shape as the add flow) instead of
+                // panicking the request task.
+                let cfg = match OTPDTO::load(&mut tenant).await {
+                    Some(c) => c,
+                    None => {
+                        res.status_code(StatusCode::UNAUTHORIZED);
+                        res.render(Json(MobileResponse {
+                            ok: false,
+                            code: StatusCode::UNAUTHORIZED.as_u16(),
+                            msg: "Unauthorized: Failed to load OTP config".to_string(),
+                            jwt: None,
+                        }));
+                        return;
+                    }
+                };
                 if let Ok(user) = tenant.user_by_mobile(&req_request.mobile).await {
                     // The signin ceremony binds to the RESOLVED account,
                     // not the claimed name — re-check the gate on the
@@ -1446,6 +1458,30 @@ mod tests {
             res.status_code.expect("status code"),
             StatusCode::TOO_MANY_REQUESTS,
             "the 4th request for the same number must be throttled — formatting must not evade"
+        );
+    }
+
+    /// regression: a tenant without SMS provider config must fail closed
+    /// with a clean error, not panic the request task on the missing
+    /// config unwrap.
+    #[tokio::test]
+    async fn request_without_sms_config_fails_closed() {
+        // otp_test_env seeds no otp.* config values.
+        let (state, _tmp) = otp_test_env().await;
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state))
+                .push(Router::with_path("otp/request").post(request)),
+        );
+        let res = salvo::test::TestClient::post("http://localhost/otp/request")
+            .add_header("Host", DOMAIN, true)
+            .json(&serde_json::json!({ "name": "alice", "mobile": "13800002222" }))
+            .send(&service)
+            .await;
+        assert_eq!(
+            res.status_code.expect("status code"),
+            StatusCode::UNAUTHORIZED,
+            "missing SMS config must fail closed, not panic"
         );
     }
 

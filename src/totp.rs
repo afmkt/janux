@@ -409,7 +409,9 @@ pub async fn enroll(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                 // The new TOTP stays inactive until `verify` proves possession
                 // of the secret with a valid code — enrolling must never
                 // deactivate the user's existing, working TOTP.
-                if let Ok(qr) = tp.qr() {
+                // Both QR and otpauth URL must build; a failure falls
+                // through to the 401 below instead of panicking.
+                if let (Ok(qr), Ok(uri)) = (tp.qr(), tp.uri()) {
                     let jdata = TotpEnrollData {
                         domain: domain.clone(),
                         user: user.clone(),
@@ -429,7 +431,7 @@ pub async fn enroll(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                             user,
                             name: req_request.name,
                             qr,
-                            uri: tp.uri().unwrap(),
+                            uri,
                             domain,
                             token: token.clone(),
                         };

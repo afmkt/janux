@@ -112,11 +112,18 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 pub(crate) fn redirect_to(res: &mut Response, url: &str) {
+    // The URL is assembled from client- and config-supplied parts, so it
+    // can carry bytes a header value cannot represent (non-ASCII or
+    // control chars, e.g. a CRLF injection attempt); fail closed with a
+    // 400 instead of panicking the request task.
+    let Ok(location) = salvo::http::HeaderValue::from_str(url) else {
+        res.status_code(StatusCode::BAD_REQUEST);
+        res.render(Json(ApiProblem::bad_request("invalid redirect target")));
+        return;
+    };
     res.status_code(StatusCode::FOUND);
-    res.headers_mut().insert(
-        salvo::http::header::LOCATION,
-        salvo::http::HeaderValue::from_str(url).expect("valid header"),
-    );
+    res.headers_mut()
+        .insert(salvo::http::header::LOCATION, location);
 }
 
 pub(crate) fn random_urlsafe_string() -> String {
@@ -4867,6 +4874,30 @@ mod tests {
             body,
             serde_json::json!({"active": false}),
             "a cached entry without an issuer must fail closed"
+        );
+    }
+
+    /// regression: a redirect URL carrying bytes a header value cannot
+    /// represent (control chars — e.g. a CRLF injection attempt — or
+    /// non-ASCII) must fail closed with a 400, not panic the request task.
+    #[test]
+    fn redirect_to_fails_closed_on_unparsable_url() {
+        let mut res = salvo::http::Response::new();
+        redirect_to(&mut res, "https://example.com/cb\r\nX-Injected: 1");
+        assert_eq!(res.status_code, Some(StatusCode::BAD_REQUEST));
+        assert!(
+            res.headers().get(salvo::http::header::LOCATION).is_none(),
+            "an unparsable redirect target must not set a Location"
+        );
+
+        let mut res = salvo::http::Response::new();
+        redirect_to(&mut res, "https://example.com/cb?ok=1");
+        assert_eq!(res.status_code, Some(StatusCode::FOUND));
+        assert_eq!(
+            res.headers()
+                .get(salvo::http::header::LOCATION)
+                .expect("location"),
+            "https://example.com/cb?ok=1"
         );
     }
 

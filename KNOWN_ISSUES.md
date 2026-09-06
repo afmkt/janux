@@ -31,8 +31,8 @@ Four issues found in one review pass; grouped here rather than scattered across 
 ### G-117 — Bearer scheme accepted case-insensitively only on internal endpoints
 `get_jwt` (`src/utils.rs:326`) lowercases the header before matching, but `get_bearer_token` (`src/oidc.rs:335-346`) accepts only the literal prefixes `Bearer ` / `bearer `. RFC 6749 §2.1 / RFC 6750: auth-schemes are case-insensitive, so `BEARER <token>` works on `/api/v1/*` but 401s on `/userinfo`. Unify both helpers.
 
-### G-118 — CORS origin echo panics on malformed configured origins
-`cors_middleware` inserts the matched Origin into `Access-Control-Allow-Origin` with `origin.parse().unwrap()` (`src/cors.rs:36`). A malformed (non-ASCII) value in the tenant's CORS allow-list panics the request task instead of returning an error — same fail-open-to-crash class as G-107, but reachable from tenant admin config rather than delivery config. Fail closed: skip the CORS headers when the value does not parse as a header value.
+### ~~G-118 — CORS origin echo panics on malformed configured origins~~ (closed 2026-09-05 — false positive as filed; hardened anyway)
+The filed panic was verified unreachable: the echoed value is the *request's* Origin after `HeaderValue::to_str()` (visible ASCII only), and `parse::<HeaderValue>` accepts a strict superset of that charset (http 1.4.2: `is_visible_ascii` ⊆ `is_valid`), so the `unwrap` could not fail; allow-list values from `load_domain_cors` are only compared (`contains`), never inserted into a header, so a malformed configured origin can never reach a parse, and a non-ASCII Origin on the wire fails `to_str()` and skips the whole block. Hardened anyway to keep the invariant local: the echo now runs through a fail-closed `let Ok(origin_value) = origin.parse()` guard in the condition chain — an unparsable value skips the CORS headers and the request continues, so a future edit that echoes a configured allow-list value instead of the request origin cannot reintroduce the panic. Regression test: `cors_origin_echo_fails_closed` (allow-listed echo, non-ASCII obs-text Origin skips fail-closed, non-allow-listed origin gets nothing).
 
 ---
 
@@ -128,15 +128,15 @@ TOTP has no recovery codes; a user who loses every factor (phone gone, email ina
 ### G-106 — No session visibility or global revocation
 Users cannot list their active sessions or revoke them ("sign out everywhere"); there is no admin equivalent per user either. Deactivation kills sessions only at the refresh boundary by design (docs/DESIGN.md §2), which is fine for admin action, but a user who suspects token theft has no self-service remedy beyond waiting one token lifetime per device. Needs a session index (jti-keyed, per user) and a revoke-all primitive on top of the existing `InvalidJwt` store.
 
-### G-107 — Panic paths in request handlers
-Misconfiguration crashes the request task instead of returning an error: `otp/request` unwraps a missing SMS config (`src/otp.rs:256`), magic-link rendering unwraps Tera results (`src/email.rs:292`), TOTP enroll unwraps the otpauth URL (`src/totp.rs:373`), and redirect builders `expect("valid header")` on URL-derived header values (`src/oidc.rs:114`). A tenant with broken config (or an attacker who can induce one) turns into 500s/connection resets rather than clean 4xx/5xx problems. Replace with fail-closed error responses.
+### ~~G-107 — Panic paths in request handlers~~ (closed 2026-09-05)
+Misconfiguration crashed the request task instead of returning an error: `otp/request` unwrapped a missing SMS config, magic-link rendering unwrapped Tera results (at the call site AND inside `render_email`), TOTP enroll unwrapped the otpauth URL, and `redirect_to` expected URL-derived `Location` header values to parse. All four now fail closed: missing SMS config renders the same 401 `MobileResponse` the add flow already used; Tera failures propagate as `Err` through the magic-link `Result`; enroll falls through to its 401 unless both QR and URI build (`if let (Ok(qr), Ok(uri))`); and `redirect_to` — the single builder behind all six OIDC redirect sites — renders a 400 `ApiProblem` when the URL carries bytes a header value cannot represent (non-ASCII or control chars, e.g. a CRLF injection attempt). Regression tests: `request_without_sms_config_fails_closed`, `render_email_surfaces_template_errors`, `redirect_to_fails_closed_on_unparsable_url`. The same-class CORS entry (G-118) was verified a false positive as filed and hardened separately.
 
 ---
 
 ## Testing & CI integrity
 
-### G-108 — CI does not actually run integration or e2e tests
-The integration job runs `cargo test --test playwright` — no such target exists (the target is `all_tests`, `Cargo.toml`), so the job fails or never ran green. The "E2E Passkey + WebAuthn" job is an echo stub that executes nothing. Clippy is `continue-on-error: true`. Net effect: CI enforces fmt + build + unit tests only, while the suite in `tests/` (integration + 5 e2e flow files) is unverified in CI.
+### ~~G-108 — CI does not actually run integration or e2e tests~~ (closed 2026-09-05)
+The filed defects (nonexistent `--test playwright` target, echo-stub e2e job, `continue-on-error` clippy) were verified already fixed in the current `ci.yml`: the integration job runs `cargo test --test z_integration_tests -- --test-threads=1`, the e2e job installs Playwright Chromium and runs `cargo test --test all_tests -- --test-threads=1`, and clippy runs `-D warnings` as a hard gate. The remaining gap is closed here: the unit job ran the lib suite with default parallelism even though it shares process-wide singletons (revocation store, throttle/gate caches) and is order-sensitive (G-127 class), so it now runs `-- --test-threads=1` like the integration and e2e jobs.
 
 ### G-109 — Seed test depends on gitignored local files
 `seed_toml_bootstraps_builtin_roles` loads `base.toml` + `seed.toml` (`src/seed.rs:167`), both gitignored and untracked — on a fresh checkout (i.e. CI) the test cannot pass. Either track a committed test copy (like `tests/test_config.toml`) or point the test at one.
