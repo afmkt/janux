@@ -1382,7 +1382,12 @@ mod tests {
     // ── regression tests ──────────────────────────────────────────────
 
     /// Tenant with OTP config pointing at a dead endpoint — SMS dispatch
-    /// fails fast, which is all the throttle probe needs.
+    /// fails fast, which is all the throttle probe needs. The endpoint is
+    /// a BARE HOST (the production shape, cf. seed.toml's
+    /// `dysmsapi.aliyuncs.com`): `call_api` prepends `https://`, so a
+    /// value like `http://127.0.0.1:9` would mangle into
+    /// `https://http://127.0.0.1:9/` — a real DNS lookup of the hostname
+    /// "http" that stalls seconds per request with no client timeout.
     async fn otp_throttle_env() -> (crate::server::ServerState, tempfile::TempDir) {
         init_revocation_store().await;
         // Provider keys are encrypted at rest on save; the key is
@@ -1409,7 +1414,7 @@ mod tests {
                 ("otp.template_code", "tpl"),
                 ("otp.sign_name", "sign"),
                 ("otp.region_id", "cn-hangzhou"),
-                ("otp.endpoint", "http://127.0.0.1:9"),
+                ("otp.endpoint", "127.0.0.1:9"),
             ];
             for (key, value) in config {
                 tenant
@@ -1436,6 +1441,17 @@ mod tests {
                 .hoop(salvo::affix_state::inject(state))
                 .push(Router::with_path("otp/request").post(request)),
         );
+
+        // The throttle is a fixed 60 s wall-clock window: if a minute
+        // boundary falls between the first and the fourth request, the
+        // budget resets and the 4th slips through (the C3 flake). Start
+        // only with enough runway left in the current window; tokio sleep
+        // never wakes early, so landing on the boundary is safe — the
+        // fresh window carries the full budget.
+        let remaining = 60 - jiff::Timestamp::now().as_second().rem_euclid(60);
+        if remaining < 5 {
+            tokio::time::sleep(std::time::Duration::from_secs(remaining as u64)).await;
+        }
 
         for i in 0..3 {
             let res = salvo::test::TestClient::post("http://localhost/otp/request")
