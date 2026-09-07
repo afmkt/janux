@@ -13,11 +13,12 @@ import {
 import '@mantine/core/styles.css'
 import {
   NOT_PROVISIONED_TEXT,
+  SESSION_COOKIE,
   fetchDiscovery,
+  markSession,
   postJson,
   routeAfterAuth,
   sessionJwt,
-  storeSession,
   type Discovery,
 } from './api'
 import { passkeyCeremony } from './webauthn'
@@ -67,7 +68,11 @@ function App() {
   const [socialCode, setSocialCode] = useState<string | null>(landing.code)
 
   const finish = useCallback(async (jwt: string) => {
-    storeSession(jwt)
+    // G-139: the session itself travels in the HttpOnly cookie the verify
+    // response set (every verify call below passes `cookie`); the JWT is
+    // used in-memory only for the immediate resume hop and never
+    // persisted to JS-readable storage.
+    markSession()
     const navigated = await routeAfterAuth(jwt)
     if (!navigated) setPhase('done')
   }, [])
@@ -78,7 +83,7 @@ function App() {
       // Social callback landing (G-60): exchange the one-shot code for the
       // session JWT, then route onward (OIDC resume / redirect).
       landingHandled = true
-      postJson('/api/v1/auth/social/redeem', { code: landing.code })
+      postJson('/api/v1/auth/social/redeem', { code: landing.code, cookie: SESSION_COOKIE })
         .then((data) => finish(sessionJwt(data)))
         .catch((e: Error) => {
           setError(e.message)
@@ -108,6 +113,7 @@ function App() {
             token: landing.token,
             name: landing.username,
             email: landing.email,
+            cookie: SESSION_COOKIE,
           })
             .then((data) => finish(sessionJwt(data)))
             .catch((e: Error) => setError(e.message))
@@ -195,6 +201,7 @@ function App() {
         name: username.trim(),
         mobile: identifier.trim(),
         code: otpCode.trim(),
+        cookie: SESSION_COOKIE,
       })
       await finish(sessionJwt(data))
     } catch (e) {

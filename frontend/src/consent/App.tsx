@@ -10,7 +10,7 @@ import {
   Title,
 } from '@mantine/core'
 import '@mantine/core/styles.css'
-import { clearSession, loadSession } from '../shared/session'
+import { clearSession } from '../shared/session'
 
 const consentState = new URLSearchParams(window.location.search).get('state')
 
@@ -34,14 +34,10 @@ function App() {
 
   useEffect(() => {
     if (!consentState) return
-    const jwt = loadSession()
-    if (!jwt) {
-      backToLogin()
-      return
-    }
-    fetch(`/consent/info?state=${encodeURIComponent(consentState)}`, {
-      headers: { Authorization: `Bearer ${jwt}` },
-    })
+    // G-139: the session travels in the HttpOnly cookie the browser
+    // attaches automatically — a missing or expired session surfaces as
+    // the 401 below, which routes back through login.
+    fetch(`/consent/info?state=${encodeURIComponent(consentState)}`)
       .then(async (res) => {
         const data = (await res.json().catch(() => ({}))) as {
           ok?: boolean
@@ -62,19 +58,20 @@ function App() {
   }, [])
 
   const decide = useCallback(async (decision: 'accept' | 'deny') => {
-    const jwt = loadSession()
-    if (!jwt || !consentState) return
+    if (!consentState) return
     setBusy(true)
     setError(null)
     try {
       const res = await fetch('/consent', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${jwt}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ state: consentState, decision }),
       })
+      if (res.status === 401) {
+        clearSession()
+        backToLogin()
+        return
+      }
       const data = (await res.json().catch(() => ({}))) as { redirect?: string; detail?: string }
       if (data.redirect) {
         window.location.href = data.redirect

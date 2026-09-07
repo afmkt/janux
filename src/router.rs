@@ -289,6 +289,11 @@ pub fn api() -> Router {
                         .post(crate::email::remove),
                 )
                 .push(
+                    Router::with_path("user/attach_email")
+                        .hoop(crate::audit::audit)
+                        .post(crate::email::attach),
+                )
+                .push(
                     Router::with_path("user/remove_mobile")
                         .hoop(crate::audit::audit)
                         .post(crate::otp::remove),

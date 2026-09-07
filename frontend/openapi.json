@@ -51,6 +51,13 @@
               "null"
             ]
           },
+          "admin_email": {
+            "description": "Optional verified email for the first admin (G-131). Without it the\nnew tenant's admin is credential-less and can never sign in: strict\nsignup refuses the pre-existing username, and every attach path\n(SCIM client, `user/attach_email`) itself requires an admin session\nfor THIS tenant. The creator vouches for the address — it lands as\na verified credential, and the magic-link ceremony mints the first\nsession.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "domain": {
             "description": "First domain of the new tenant; the standard admin policy set is\nbound to it. Without a domain the\ntenant stays default-deny locked until one is added.",
             "type": [
@@ -80,6 +87,21 @@
           "TRACE"
         ],
         "type": "string"
+      },
+      "openapi.email.AttachEmailRequest": {
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ],
+        "type": "object"
       },
       "openapi.email.EmailAddRequest": {
         "properties": {
@@ -726,6 +748,13 @@
         "properties": {
           "code": {
             "type": "string"
+          },
+          "cookie": {
+            "description": "When set, the session JWT is additionally stored in an HttpOnly\ncookie under this name (G-139: keeps the token out of JS-readable\nstorage for browser callers).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2797,6 +2826,65 @@
           }
         },
         "summary": "Add role to the user"
+      }
+    },
+    "/api/v1/admin/user/attach_email": {
+      "post": {
+        "description": "G-131 bootstrap/repair path: seeded and admin-created users are credential-less, and strict signup refuses a pre-existing username — without an admin-driven attach such a user could never sign in (only DB surgery recovered them). The admin VOUCHES for the address (no ownership ceremony — the same trust model SCIM email provisioning uses), so the row lands verified and the user can immediately sign in with a magic link. Level-gated like every credential mutation (H3): the caller must outrank the target, so peers cannot grant each other login factors. Re-attaching an address the same user already owns is an idempotent upgrade; an address owned by ANOTHER user is refused.",
+        "operationId": "openapi.email.attach",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.email.AttachEmailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.email.EmailResponse"
+                }
+              }
+            },
+            "description": "Unknown user, or the address belongs to another user"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No verified session"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the target user"
+          }
+        },
+        "summary": "Attach a verified email credential to a user (admin vouches)"
       }
     },
     "/api/v1/admin/user/create": {

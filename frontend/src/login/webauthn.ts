@@ -1,3 +1,5 @@
+import { SESSION_COOKIE } from '../shared/session'
+
 function base64urlToBytes(value: string): Uint8Array<ArrayBuffer> {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (value.length % 4)) % 4)
   const binary = atob(padded)
@@ -79,6 +81,8 @@ export async function passkeyCeremony(
         },
       },
       token: challengeData.token,
+      // G-139: land the session in the HttpOnly cookie, not in JS storage.
+      cookie: SESSION_COOKIE,
     }),
   })
   const verifyData = (await verifyRes.json().catch(() => ({}))) as {

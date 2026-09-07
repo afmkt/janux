@@ -71,6 +71,7 @@ pub const STANDARD_ADMIN_POLICIES: &[(&str, &str)] = &[
     ("/api/v1/admin/user/add_role", "admin"),
     ("/api/v1/admin/user/remove_role", "admin"),
     ("/api/v1/admin/user/remove_email", "admin"),
+    ("/api/v1/admin/user/attach_email", "admin"),
     ("/api/v1/admin/user/remove_mobile", "admin"),
     ("/api/v1/admin/user/remove_social", "admin"),
     ("/api/v1/admin/user/roles", "admin"),
@@ -127,6 +128,7 @@ pub async fn bootstrap_tenant(
     tenant_name: &str,
     domain: Option<&str>,
     admin: Option<&str>,
+    admin_email: Option<&str>,
 ) -> Result<()> {
     {
         let mut tenant = storage
@@ -165,6 +167,17 @@ pub async fn bootstrap_tenant(
         tenant
             .user_add_role(&Caller::Bootstrap, admin, "admin")
             .await?;
+        // G-131: the first admin must be able to SIGN IN. Created users are
+        // credential-less and strict signup refuses the pre-existing
+        // username, while every other attach path (SCIM client,
+        // `user/attach_email`) itself needs an admin session for THIS
+        // tenant — so the vouched email, when provided, is attached as a
+        // verified credential here at the trust anchor.
+        if let Some(email) = admin_email {
+            tenant
+                .email_create_verified(admin, &email.to_lowercase())
+                .await?;
+        }
     }
     Ok(())
 }
@@ -229,6 +242,25 @@ mod tests {
                 "admin lacks {role}"
             );
         }
+
+        // G-131: the bootstrap admin must vouch an email credential —
+        // without it the seeded admin can never sign in (strict signup
+        // refuses the pre-existing username and no self-service attach
+        // path exists for a credential-less account).
+        assert!(
+            admin.email.as_deref().is_some_and(|e| e.contains('@')),
+            "the seeded admin must vouch an email credential (G-131)"
+        );
+
+        // G-133: magic links must land on a route that EXISTS — the
+        // hosted /login SPA consumes token/username/email from the query.
+        // The old /api/v1/auth/email/landing value 404'd out of the box.
+        let verify_url = url::Url::parse(&tenant.resend.verify_url).expect("verify_url must parse");
+        assert_eq!(
+            verify_url.path(),
+            "/login",
+            "seeded verify_url must point at the hosted login SPA"
+        );
 
         // user_add_role no longer creates unknown roles (Step 4), so every
         // role a seeded user carries must be declared above.
@@ -303,9 +335,15 @@ mod tests {
             .await
             .expect("storage init");
         storage.new_tenant("fresh").await.expect("tenant");
-        super::bootstrap_tenant(&storage, "fresh", Some("fresh.local"), Some("admin@fresh"))
-            .await
-            .expect("bootstrap");
+        super::bootstrap_tenant(
+            &storage,
+            "fresh",
+            Some("fresh.local"),
+            Some("admin@fresh"),
+            Some("First-Admin@fresh.example"),
+        )
+        .await
+        .expect("bootstrap");
 
         let mut tenant = storage.tenant_by_id("fresh").expect("tenant");
 
@@ -355,6 +393,62 @@ mod tests {
         assert!(
             granted.iter().any(|r| r.id == "admin"),
             "the bootstrap admin must hold the admin role"
+        );
+
+        // G-131: the vouched email landed as a VERIFIED credential
+        // (lowercased), so the first admin can immediately run a
+        // magic-link signin instead of being locked out of a
+        // credential-less account.
+        let by_email = tenant
+            .user_by_email("first-admin@fresh.example")
+            .await
+            .expect("the bootstrap admin email must be attached");
+        assert_eq!(by_email.id, admin.id);
+        let emails = tenant
+            .all_emails(Some("admin@fresh"))
+            .await
+            .expect("emails");
+        assert!(
+            emails.iter().any(|e| e.verified),
+            "the vouched credential must be verified — signin, not signup"
+        );
+    }
+
+    /// G-131: a seeded user's vouched email lands as a VERIFIED credential
+    /// (lowercased), idempotently across re-seeds — which also makes
+    /// "add the email, restart" the repair path for an already-booted
+    /// credential-less account.
+    #[tokio::test]
+    async fn seed_user_email_attaches_verified_credential() {
+        let storage = crate::db::Storage::init(BOOTSTRAP_STORE_DIR.path())
+            .await
+            .expect("storage init");
+        storage.new_tenant("email-seed").await.expect("tenant");
+        let dto = crate::user::UserDTO {
+            id: "seeded".into(),
+            active: true,
+            roles: vec!["user".into()],
+            email: Some("Seeded@Example.com".into()),
+        };
+        let mut tenant = storage.tenant_by_id("email-seed").expect("tenant");
+        // user_add_role never creates unknown roles — declare it first.
+        tenant
+            .role_create(&crate::role::Caller::Bootstrap, "user", 0)
+            .await
+            .expect("role");
+        dto.save(&mut tenant).await.expect("seed user");
+        // Seeding runs on every boot — the attach must be idempotent.
+        dto.save(&mut tenant).await.expect("re-seed");
+
+        let owner = tenant
+            .user_by_email("seeded@example.com")
+            .await
+            .expect("vouched email attached lowercase");
+        assert_eq!(owner.name, "seeded");
+        let emails = tenant.all_emails(Some("seeded")).await.expect("emails");
+        assert!(
+            emails.iter().any(|e| e.verified),
+            "the vouched credential must be verified — signin, not signup"
         );
     }
 }

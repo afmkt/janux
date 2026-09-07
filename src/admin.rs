@@ -11,6 +11,14 @@ pub struct NewTenant {
     pub domain: Option<String>,
     /// First admin user; created and granted the builtin `admin` role.
     pub admin: Option<String>,
+    /// Optional verified email for the first admin (G-131). Without it the
+    /// new tenant's admin is credential-less and can never sign in: strict
+    /// signup refuses the pre-existing username, and every attach path
+    /// (SCIM client, `user/attach_email`) itself requires an admin session
+    /// for THIS tenant. The creator vouches for the address — it lands as
+    /// a verified credential, and the magic-link ceremony mints the first
+    /// session.
+    pub admin_email: Option<String>,
 }
 
 #[endpoint(
@@ -46,6 +54,7 @@ pub async fn new_tenant(req: &mut Request, depot: &mut Depot, res: &mut Response
                 &body.name,
                 body.domain.as_deref(),
                 body.admin.as_deref(),
+                body.admin_email.as_deref(),
             )
             .await
             {

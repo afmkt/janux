@@ -69,7 +69,7 @@ The OP implements three profiles on top of Basic + Config, and deliberately stop
 Two spec mechanisms adapt to the stateless-session design (§2), and this is deliberate:
 
 - **No `sid` anywhere.** There is no server-side session registry, so logout tokens identify the user by `sub` only and discovery advertises `backchannel_logout_session_supported: false`. The RP set to notify comes from the user's non-revoked consent grants (`AuthGrant`) — the only durable record of where a user holds an active OIDC authorization.
-- **`/end_session` terminates the session presented to it (Bearer JWT), not a cookie.** Login factors set cookies under client-chosen names (§1-era API), so no fixed session cookie exists for the OP to clear.
+- **`/end_session` terminates the session presented to it (Bearer JWT or the canonical `janux.session` HttpOnly cookie — `get_jwt` accepts both) and expires that cookie on the way out (G-139); the internal `/auth/logout` does the same.** JS cannot delete an HttpOnly cookie, so logout endpoints clear it server-side. Login factors may additionally set cookies under client-chosen names (§1-era API); those remain the caller's business.
 
 Extended client metadata (`backchannel_logout_uri`, `post_logout_redirect_uris`, `client_name`, dynamic provenance) lives in the tenant `Config` store under `oidc.client.<client_id>`, not in `OAuth2Client` columns: tenant databases created before a feature tolerate `push_schema` failures on existing tables, so a new column would silently never appear there while queries reference it. Admin surface: `admin/oauth2client/meta` sets the metadata for statically created clients. Open residuals: G-125, G-126.
 

@@ -11,7 +11,7 @@ Janux plays two roles at once:
 1. **Auth server** — passwordless login flows (`/api/v1/auth/*`) that mint JWT sessions, plus a hosted login/consent UI (`/login`, `/consent`).
 2. **OIDC provider (IdP)** — `/.well-known/openid-configuration`, `/authorize`, `/token`, `/userinfo`, JWKS. External services ("relying parties", RPs) redirect users here and receive tokens back.
 
-Tenants are resolved from the request `Host` header. `seed.toml` bootstraps tenant `localhost` with domain `localhost`, users `admin`/`demo` (no credentials — first magic-link verify attaches the credential), and RBAC policies. The admin API is protected by those policies, so you need a real `admin` session JWT before you can register an OAuth2 client.
+Tenants are resolved from the request `Host` header. `seed.toml` bootstraps tenant `localhost` with domain `localhost`, users `admin`/`demo`, and RBAC policies. The admin's seed entry vouches an `email` — seeding attaches it as a VERIFIED credential on every boot (G-131), so set it to an inbox you control before first launch; a seeded user *without* an email has no credential and cannot sign in (strict signup refuses the pre-existing username — there is no attach-on-first-verify). The admin API is protected by those policies, so you need a real `admin` session JWT before you can register an OAuth2 client.
 
 ---
 
@@ -20,7 +20,7 @@ Tenants are resolved from the request `Host` header. `seed.toml` bootstraps tena
 1. `just run` (builds the frontend into `frontend/dist`, then `cargo run`). Server binds `0.0.0.0:8080` (`base.toml`).
 2. Before this works cleanly, fix two config gotchas:
    - `base.toml` has `trust_forwarded_headers = true` — that mode assumes a reverse proxy in front. Since you're hitting the server directly, create `janux.toml` (gitignored, highest precedence — see `src/server.rs` config layering) with `trust_forwarded_headers = false`, and run `cargo run -- -c base -c seed -c janux` (or check `src/main.rs:48` for the exact flag handling).
-   - `seed.toml` `[seed.resend] verify_url` is `http://localhost/api/v1/auth/email/landing` (port 80). Your server runs on 8080 — change it to `http://localhost:8080/api/v1/auth/email/landing` so magic links point at your running instance.
+   - `seed.toml` `[seed.resend] verify_url` is `http://localhost/login` (port 80) — the hosted login SPA that consumes the link's `token`/`username`/`email` query params (G-133). Your server runs on 8080 — change it to `http://localhost:8080/login` so magic links point at your running instance. Also set the admin's seed `email` to your real inbox if you haven't already (G-131).
 3. Verify discovery: `curl -s http://localhost:8080/.well-known/openid-configuration | jq`. The `issuer` must be `http://localhost:8080` (derived from Host, `src/utils.rs:312`). Note the `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `jwks_uri`.
 4. Verify JWKS: `curl -s http://localhost:8080/.well-known/jwks.json` — you should see an RSA key. That's what RPs use to verify tokens.
 
@@ -30,14 +30,14 @@ Tenants are resolved from the request `Host` header. `seed.toml` bootstraps tena
 
 ## Phase 2 — Get an admin session via magic link
 
-1. Request a magic link for the seeded admin:
+1. Request a magic link for the seeded admin, using the inbox vouched in `seed.toml`:
    ```sh
    curl -X POST http://localhost:8080/api/v1/auth/email/request \
      -H 'Content-Type: application/json' \
-     -d '{"name":"admin","email":"<your real inbox>"}'
+     -d '{"name":"admin","email":"<the vouched inbox>"}'
    ```
-   (`ReqRequest` shape: `src/email.rs:126`. If your `seed.toml` configures a live mail provider, a real email arrives.)
-2. Open the email and click the link → hits `/api/v1/auth/email/landing` → verifies → this **attaches the email credential to user `admin`** and mints a session. Observe the response: a JWT and a `Set-Cookie`.
+   (`ReqRequest` shape: `src/email.rs`. If your `seed.toml` configures a live mail provider, a real email arrives. Signin is strict: the credential must already be attached — the seed's `email` field did that, and "add the email, restart" is the repair path for a credential-less account. Later, admins can attach credentials to other users via `admin/user/attach_email`.)
+2. Open the email and click the link → it lands on the hosted `/login` SPA with `token`/`username`/`email` in the query (G-133), which auto-verifies and establishes the session: the JWT lands in the canonical `janux.session` HttpOnly cookie (G-139) and in the response body for non-browser callers.
 3. Save the JWT — it's your Bearer token for the admin API. Decode it (`jwt.io` or `jq` on the base64 parts) and look at the claims: `sub`, `iss`, `exp`, roles. This is the same token format RPs will later validate.
 
 **Checkpoint:** `curl -H "Authorization: Bearer <jwt>" http://localhost:8080/api/v1/admin/oauth2client/list` returns 200 (proves RBAC `protect` + policy gate work).
@@ -74,7 +74,7 @@ Create a new small service, e.g. `sample_rp/` — a single-file FastAPI app on p
 - Generate a random `state` and a PKCE `code_verifier` (43–128 chars of `[A-Za-z0-9-._~]`); compute `code_challenge = BASE64URL(SHA256(code_verifier))` — no padding. Store both in a short-lived signed/encrypted cookie or server-side dict keyed by `state`.
 - Respond `302` to `http://localhost:8080/authorize?response_type=code&client_id=sample-rp&redirect_uri=http://localhost:3000/callback&scope=openid profile email offline_access&state=<state>&code_challenge=<challenge>&code_challenge_method=S256`.
 
-**What happens inside Janux while the user is away** (watch this in your browser's network tab — it's the whole point of the exercise): `/authorize` validates client_id + redirect_uri + PKCE, *parks* the request, and redirects to the hosted `/login?client_id=...` SPA → you sign in (magic link again, or the now-attached email factor) → the SPA calls `/authorize/resume` with your session JWT → first time, the consent page (`/consent`) appears → approve → Janux `302`s back to your `redirect_uri` with `?code=...&state=...`.
+**What happens inside Janux while the user is away** (watch this in your browser's network tab — it's the whole point of the exercise): `/authorize` validates client_id + redirect_uri + PKCE, *parks* the request, and redirects to the hosted `/login?client_id=...` SPA → you sign in (magic link again) → the SPA calls `/authorize/resume` with your session → first time, the consent page (`/consent`) appears → approve → Janux `302`s back to your `redirect_uri` with `?code=...&state=...`.
 
 **Endpoint 2: `GET /callback`** — exchange the code.
 - Verify `state` matches what you stored (reject otherwise — this is CSRF protection).
@@ -110,7 +110,7 @@ Hosted pages: `/login` (also `/signup`), `/admin`, `/consent`, `/device-login` (
 
 1. Open `http://localhost:8080/login`.
 2. Enter username `admin`, select the **Email** factor, type a real inbox you control, submit.
-3. Open the inbox, click the magic link. It returns to the login page, auto-verifies, and shows "Signed in." — the session JWT is stored in `sessionStorage` (`frontend/src/shared/session.ts`).
+3. Open the inbox, click the magic link. It returns to the login page, auto-verifies, and shows "Signed in." — the session JWT lands in the canonical `janux.session` **HttpOnly cookie** (G-139: no JS-readable token storage); `frontend/src/shared/session.ts` keeps only a non-sensitive per-tab presence marker.
    - Prerequisite from the earlier guide: `verify_url` in `seed.toml` must point at the same host:port you're browsing, or the emailed link hits a dead port.
 4. Repeat with username `demo` in a **different browser/profile** later — it exercises the same flow for a non-admin user.
 
@@ -120,7 +120,7 @@ Same page, **SMS** factor: username + mobile number → enter the code that arri
 
 ## 3. Admin UI at `/admin`
 
-Open `/admin` **in the same tab** you signed in on — the session lives in per-tab `sessionStorage`; a fresh tab shows unauthorized. Signed in as `admin` (seeded with root+admin+user roles), walk the tabs:
+Open `/admin` **in the same tab** you signed in on — the session cookie is browser-wide, but the admin UI gates its initial render on a per-tab presence marker, so a fresh tab bounces to the login page. Signed in as `admin` (seeded with root+admin+user roles), walk the tabs:
 
 | Tab | Operations to perform |
 |---|---|

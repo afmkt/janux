@@ -716,6 +716,100 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 }
 
 #[derive(Deserialize, Serialize, Debug, ToSchema)]
+pub struct AttachEmailRequest {
+    pub name: String,
+    pub email: String,
+}
+
+#[endpoint(
+    summary = "Attach a verified email credential to a user (admin vouches)",
+    description = "G-131 bootstrap/repair path: seeded and admin-created users are credential-less, and strict signup refuses a pre-existing username — without an admin-driven attach such a user could never sign in (only DB surgery recovered them). The admin VOUCHES for the address (no ownership ceremony — the same trust model SCIM email provisioning uses), so the row lands verified and the user can immediately sign in with a magic link. Level-gated like every credential mutation (H3): the caller must outrank the target, so peers cannot grant each other login factors. Re-attaching an address the same user already owns is an idempotent upgrade; an address owned by ANOTHER user is refused.",
+    request_body = AttachEmailRequest,
+    responses(
+        (status_code = 200, description = "Success", body = EmailResponse),
+        (status_code = 400, description = "Unknown user, or the address belongs to another user", body = EmailResponse),
+        (status_code = 401, description = "No verified session", body = ApiProblem),
+        (status_code = 403, description = "Level gate refused the target user", body = ApiProblem)
+    )
+)]
+pub async fn attach(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let caller = match crate::utils::caller_from_depot(depot) {
+        Some(c) => c,
+        None => {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            res.render(Json(ApiProblem::unauthorized()));
+            return;
+        }
+    };
+    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let domain = crate::utils::get_domain(req, state)
+        .unwrap_or("")
+        .to_string();
+    if let Some(req_request) = extract::<AttachEmailRequest>(req, None).await
+        && !req_request.name.is_empty()
+        && !req_request.email.is_empty()
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+    {
+        // Same normalization as the self-service add flow: addresses are
+        // stored lowercase (G-105 partial — the wire boundary folds case).
+        let email = req_request.email.to_lowercase();
+        let target = match tenant.user(&req_request.name).await {
+            Ok(t) => t,
+            Err(_) => {
+                res.status_code(StatusCode::BAD_REQUEST);
+                res.render(Json(EmailResponse {
+                    ok: false,
+                    code: StatusCode::BAD_REQUEST.as_u16(),
+                    msg: "Unknown user".to_string(),
+                    jwt: None,
+                }));
+                return;
+            }
+        };
+        // H3, symmetric with `remove`: granting a login factor is a
+        // user-lifecycle mutation — the caller must outrank the target.
+        if let Err(e) = tenant.require_above_user(&caller, target.id).await {
+            crate::utils::render_admin_error(res, e);
+            return;
+        }
+        match tenant
+            .email_create_verified(&req_request.name, &email)
+            .await
+        {
+            Ok(()) => {
+                res.status_code(StatusCode::OK);
+                res.render(Json(EmailResponse {
+                    ok: true,
+                    code: StatusCode::OK.as_u16(),
+                    msg: "Success".to_string(),
+                    jwt: None,
+                }));
+            }
+            // The only failure left is foreign ownership — ownership
+            // disputes are never settled by whoever asks (class rule).
+            Err(_) => {
+                res.status_code(StatusCode::BAD_REQUEST);
+                res.render(Json(EmailResponse {
+                    ok: false,
+                    code: StatusCode::BAD_REQUEST.as_u16(),
+                    msg: "Email already in use".to_string(),
+                    jwt: None,
+                }));
+            }
+        }
+        return;
+    }
+
+    res.status_code(StatusCode::BAD_REQUEST);
+    res.render(Json(EmailResponse {
+        ok: false,
+        code: StatusCode::BAD_REQUEST.as_u16(),
+        msg: "Failure".to_string(),
+        jwt: None,
+    }))
+}
+
+#[derive(Deserialize, Serialize, Debug, ToSchema)]
 struct AllEmailRequest {
     pub name: Option<String>,
 }
@@ -848,6 +942,19 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // session-gated — the identity comes from the validated session
     // (hoop), never from the request body.
     let user = match depot.obtain_mut::<JwtVerify>() {
+        // G-132 sudo mode: attaching a login credential requires a freshly
+        // AUTHENTICATED session, not a merely rotated one — a stolen
+        // session must not be able to make the takeover persistent.
+        Ok(v) if !crate::verify::session_is_fresh(v) => {
+            crate::verify::mark_reauth_required(res);
+            res.render(Json(EmailResponse {
+                ok: false,
+                code: StatusCode::FORBIDDEN.as_u16(),
+                msg: "Re-authentication required before changing credentials".to_string(),
+                jwt: None,
+            }));
+            return;
+        }
         Ok(v) => v.jwt_data.username.clone(),
         Err(_) => {
             res.status_code(StatusCode::UNAUTHORIZED);
@@ -1344,7 +1451,7 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
     }
@@ -1368,7 +1475,7 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
     }
@@ -1382,6 +1489,183 @@ mod tests {
                 .hoop(salvo::affix_state::inject(state))
                 .push(Router::with_path("verify").hoop(session).post(verify)),
         )
+    }
+
+    /// Stands in for a session whose authentication is OLDER than the sudo
+    /// window (G-132) — the shape a stolen-and-rotated chain presents
+    /// (`refresh_jwt` preserves the original `auth_time`).
+    #[handler]
+    async fn inject_stale_alice_session(
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
+        depot.inject(JwtVerify {
+            can_access: true,
+            jwt_data: crate::db::JwtData {
+                user: "alice".to_string(),
+                username: "alice".to_string(),
+                domain: DOMAIN.to_string(),
+                mfa: HashSet::new(),
+                roles: HashSet::new(),
+            },
+            expect_mfa: false,
+            domain: DOMAIN.to_string(),
+            auth_time: Some(
+                (jiff::Timestamp::now().as_second() - crate::verify::SUDO_WINDOW_SEC as i64 - 60)
+                    .max(0) as usize,
+            ),
+        });
+        ctrl.call_next(req, depot, res).await;
+    }
+
+    /// G-132: attaching an email credential requires a freshly
+    /// AUTHENTICATED session — a stale one gets 403 plus the
+    /// machine-readable `X-Reauth-Required` signal, and no ceremony is
+    /// started (no mail leaves the building).
+    #[tokio::test]
+    async fn add_email_refuses_stale_session() {
+        let (state, _tmp) = email_test_env().await;
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .push(
+                    Router::with_path("add")
+                        .hoop(inject_stale_alice_session)
+                        .post(add),
+                ),
+        );
+        let mut res = salvo::test::TestClient::post("http://localhost/add")
+            .add_header("Host", DOMAIN, true)
+            .json(&serde_json::json!({ "email": "fresh@example.com" }))
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::FORBIDDEN);
+        assert_eq!(
+            res.headers()
+                .get(crate::verify::REAUTH_HEADER)
+                .and_then(|v| v.to_str().ok()),
+            Some("true"),
+            "the 403 must carry the re-auth signal"
+        );
+        use salvo::test::ResponseExt;
+        let body = res.take_string().await.unwrap_or_default();
+        let json: serde_json::Value = serde_json::from_str(&body).expect("json body");
+        assert_eq!(json["ok"], false);
+    }
+
+    /// Stands in for the `protect` hoop on the admin surface: an `admin`
+    /// (level 80) session for alice, injected as the RBAC caller.
+    #[handler]
+    async fn inject_admin_caller(
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
+        depot.inject(JwtVerify {
+            can_access: true,
+            jwt_data: crate::db::JwtData {
+                user: uuid::Uuid::nil().to_string(),
+                username: "alice".to_string(),
+                domain: DOMAIN.to_string(),
+                mfa: HashSet::new(),
+                roles: HashSet::from(["admin".to_string()]),
+            },
+            expect_mfa: false,
+            domain: DOMAIN.to_string(),
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
+        });
+        ctrl.call_next(req, depot, res).await;
+    }
+
+    async fn post_attach(
+        service: &Service,
+        name: &str,
+        email: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        use salvo::test::ResponseExt;
+        let mut res = salvo::test::TestClient::post("http://localhost/user/attach_email")
+            .add_header("Host", DOMAIN, true)
+            .json(&serde_json::json!({ "name": name, "email": email }))
+            .send(service)
+            .await;
+        let status = res.status_code.expect("status code");
+        let body = res.take_string().await.unwrap_or_default();
+        (
+            status,
+            serde_json::from_str(&body).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    /// G-131: the admin-vouched attach gives a credential-less user its
+    /// FIRST login credential (seeded/admin-created users cannot self-
+    /// signup over a pre-existing username). The row lands verified and
+    /// lowercased; re-attach is idempotent; an address owned by another
+    /// user is refused; and the H3 level gate applies — an admin cannot
+    /// vouch credentials onto a root-level account.
+    #[tokio::test]
+    async fn attach_email_vouches_a_first_credential() {
+        let (state, _tmp) = email_test_env().await;
+        {
+            let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+            let bootstrap = crate::role::Caller::Bootstrap;
+            for (name, _) in crate::role::BUILTIN_ROLES {
+                tenant
+                    .role_create(&bootstrap, name, 0)
+                    .await
+                    .expect("builtin role");
+            }
+            tenant.user_create("newbie").await.expect("newbie");
+            tenant.user_create("boss").await.expect("boss");
+            tenant
+                .user_add_role(&bootstrap, "boss", "root")
+                .await
+                .expect("boss holds root");
+        }
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .hoop(inject_admin_caller)
+                .push(Router::with_path("user/attach_email").post(attach)),
+        );
+
+        // The credential-less user gets a first, VERIFIED credential —
+        // stored lowercase (the wire boundary folds case).
+        let (status, body) = post_attach(&service, "newbie", "Newbie@Example.com").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        {
+            let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+            let owner = tenant
+                .user_by_email("newbie@example.com")
+                .await
+                .expect("attached lowercase");
+            assert_eq!(owner.name, "newbie");
+            let emails = tenant.all_emails(Some("newbie")).await.expect("emails");
+            assert!(
+                emails.iter().any(|e| e.verified),
+                "a vouched credential lands verified — signin, not signup"
+            );
+        }
+
+        // Idempotent re-attach for the same user.
+        let (status, _) = post_attach(&service, "newbie", "newbie@example.com").await;
+        assert_eq!(status, StatusCode::OK, "re-attach is an idempotent upgrade");
+
+        // An address owned by ANOTHER user is refused — ownership disputes
+        // are never settled by whoever asks.
+        let (status, body) = post_attach(&service, "newbie", ALICE_EMAIL).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_ne!(body["ok"], true);
+
+        // Unknown user → 400, not a silent no-op.
+        let (status, _) = post_attach(&service, "ghost", "ghost@example.com").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // H3: admin (80) may not vouch credentials onto root (100).
+        let (status, _) = post_attach(&service, "boss", "boss@example.com").await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     /// Provision bob with an email so he can run a signin ceremony.
@@ -1680,7 +1964,7 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
     }
@@ -1703,7 +1987,7 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
     }

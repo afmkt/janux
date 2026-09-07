@@ -11,7 +11,6 @@ import {
   Title,
 } from '@mantine/core'
 import '@mantine/core/styles.css'
-import { loadSession } from '../shared/session'
 
 const urlCode = new URLSearchParams(window.location.search).get('user_code')
 
@@ -86,25 +85,20 @@ function App() {
   const decide = async (action: 'approve' | 'deny') => {
     const trimmed = code.trim()
     if (!trimmed) return
-    const jwt = loadSession()
-    if (!jwt) {
-      window.location.href = loginRedirect(trimmed)
-      return
-    }
     setBusy(true)
     setError(null)
     try {
+      // G-139: the session travels in the HttpOnly cookie the browser
+      // attaches automatically; a 401 falls back to login, carrying the
+      // code through so the decision can be retried after signing in.
       const res = await fetch('/device-login/approve', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${jwt}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_code: trimmed, action }),
       })
       const data = (await res.json().catch(() => ({}))) as ApproveResponse
-      if (res.status === 401 && data.redirect) {
-        window.location.href = data.redirect
+      if (res.status === 401) {
+        window.location.href = data.redirect ?? loginRedirect(trimmed)
         return
       }
       if (!res.ok) {

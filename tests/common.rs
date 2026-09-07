@@ -418,6 +418,7 @@ fn seed_policy_rows(domain: &str) -> String {
         "/api/v1/admin/user/add_role",
         "/api/v1/admin/user/remove_role",
         "/api/v1/admin/user/remove_email",
+        "/api/v1/admin/user/attach_email",
         "/api/v1/admin/user/remove_mobile",
         "/api/v1/admin/user/remove_social",
         "/api/v1/admin/user/roles",

@@ -62,11 +62,13 @@ The suite is built to light up as these land:
    (12/min) and admin (12/min) are hardcoded per-IP (`router.rs`); any
    conformance run exhausts them in seconds. Needs a config knob used by the
    generated test config. Until then, flow tests 429 intermittently.
-2. **Seed user emails** — seeded users get no email credential
-   (`UserDTO {id, active, roles}`), so the seeded admin cannot log in
-   black-box and OAuth2 clients cannot be registered via the admin API.
-   Tests depending on it skip with this reason. Add `emails: Vec<String>`
-   to `UserDTO` (attach at seed time).
+2. **Seed user emails** — LANDED server-side (2026-09-07, G-131):
+   `UserDTO.email` (optional) vouches a VERIFIED credential at seed time,
+   and `bootstrap_tenant`/`admin/tenant/create` accept `admin_email`, so a
+   seeded admin can log in black-box and register OAuth2 clients via the
+   admin API. The generated harness config does not set the field yet —
+   wiring it (and un-skipping the dependent tests) is tracked with the
+   suite's CI integration (gaps.md G-136).
 3. **Seed a signing key** — seeded tenants have an empty JWKS (keys are
    created only via the admin-gated `key/create`), so no ID token can be
    signed until an admin acts. The seed should create one key per seeded

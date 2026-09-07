@@ -29,10 +29,14 @@
 # - Flip mfa = true on destructive rows once TOTP step-up is part of
 #   the admin workflow.
 #
-# SECURITY: development bootstrap only. Seeded users carry no
-# credential — the first magic-link / SMS-OTP verify performed with
-# username "admin" attaches that credential to the admin account, so
-# never run this seed on a publicly reachable host.
+# SECURITY: development bootstrap only. A seeded user WITHOUT `email`
+# has no credential and can never sign in — strict signup refuses the
+# pre-existing username (the old attach-on-first-verify takeover hole is
+# closed). Give bootstrap accounts their credential via the `email`
+# field below (seeded VERIFIED on every boot — idempotent, and the
+# repair path for an already-booted credential-less admin is "add the
+# email, restart"), or later via `admin/user/attach_email`. Replace the
+# placeholder addresses before running on a publicly reachable host.
 # ================================================================
 
 [[seed]]
@@ -58,9 +62,13 @@ domains = [{ id = "localhost", cors = [] }, { id = "0.0.0.0", cors = [] }]
 # policy_create can resolve them.
 roles = ["root", "admin", "scim", "user", "guest"]
 
-# Bootstrap accounts (no credential attached — see SECURITY note).
+# Bootstrap accounts. `email` (optional) vouches that address as a
+# VERIFIED login credential at seed time (G-131) — set the admin's to an
+# inbox you control; that is what makes the magic-link quickstart sign-in
+# work. An account without it has no credential and cannot sign in until
+# one is attached.
 users = [
-    { id = "admin", active = true, roles = ["root", "admin", "user"] },
+    { id = "admin", active = true, roles = ["root", "admin", "user"], email = "admin@example.com" },
     { id = "demo", active = true, roles = ["user"] },
 ]
 
@@ -83,6 +91,7 @@ policies = [
     { domain = "localhost", resource = "/api/v1/admin/user/add_role", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/user/remove_role", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/user/remove_email", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/attach_email", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/user/remove_mobile", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/user/remove_social", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/user/roles", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
@@ -151,7 +160,11 @@ policies = [
 from = "noreply@example.com"
 resend_key = "your-resend-api-key"
 template = "./email/verify.html"
-verify_url = "http://localhost/api/v1/auth/email/landing"
+# Where the magic link lands: the hosted login SPA, which reads
+# token/username/email from the query and auto-verifies (G-133 — the old
+# /api/v1/auth/email/landing value pointed at a route that never
+# existed, so every emailed link 404'd).
+verify_url = "http://localhost/login"
 
 
 [seed.alisms]

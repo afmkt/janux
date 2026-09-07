@@ -729,6 +729,19 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // session-gated — the identity comes from the validated session
     // (hoop), never from the request body.
     let user = match depot.obtain_mut::<JwtVerify>() {
+        // G-132 sudo mode: attaching a login credential requires a freshly
+        // AUTHENTICATED session, not a merely rotated one — a stolen
+        // session must not be able to make the takeover persistent.
+        Ok(v) if !crate::verify::session_is_fresh(v) => {
+            crate::verify::mark_reauth_required(res);
+            res.render(Json(MobileResponse {
+                ok: false,
+                code: StatusCode::FORBIDDEN.as_u16(),
+                msg: "Re-authentication required before changing credentials".to_string(),
+                jwt: None,
+            }));
+            return;
+        }
         Ok(v) => v.jwt_data.username.clone(),
         Err(_) => {
             res.status_code(StatusCode::UNAUTHORIZED);
@@ -1391,7 +1404,7 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
     }
@@ -1415,7 +1428,7 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
     }
@@ -1429,6 +1442,64 @@ mod tests {
                 .hoop(salvo::affix_state::inject(state))
                 .push(Router::with_path("verify").hoop(session).post(verify)),
         )
+    }
+
+    /// Stands in for a session whose authentication is OLDER than the sudo
+    /// window (G-132) — the shape a stolen-and-rotated chain presents
+    /// (`refresh_jwt` preserves the original `auth_time`).
+    #[handler]
+    async fn inject_stale_alice_session(
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
+        depot.inject(JwtVerify {
+            can_access: true,
+            jwt_data: crate::db::JwtData {
+                user: "alice".to_string(),
+                username: "alice".to_string(),
+                domain: DOMAIN.to_string(),
+                mfa: HashSet::new(),
+                roles: HashSet::new(),
+            },
+            expect_mfa: false,
+            domain: DOMAIN.to_string(),
+            auth_time: Some(
+                (jiff::Timestamp::now().as_second() - crate::verify::SUDO_WINDOW_SEC as i64 - 60)
+                    .max(0) as usize,
+            ),
+        });
+        ctrl.call_next(req, depot, res).await;
+    }
+
+    /// G-132: attaching a mobile credential requires a freshly
+    /// AUTHENTICATED session — a stale one gets 403 and no SMS leaves.
+    #[tokio::test]
+    async fn add_mobile_refuses_stale_session() {
+        let (state, _tmp) = otp_test_env().await;
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .push(
+                    Router::with_path("add")
+                        .hoop(inject_stale_alice_session)
+                        .post(add),
+                ),
+        );
+        let res = salvo::test::TestClient::post("http://localhost/add")
+            .add_header("Host", DOMAIN, true)
+            .json(&serde_json::json!({ "mobile": "13800000001" }))
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::FORBIDDEN);
+        assert_eq!(
+            res.headers()
+                .get(crate::verify::REAUTH_HEADER)
+                .and_then(|v| v.to_str().ok()),
+            Some("true"),
+            "the 403 must carry the re-auth signal"
+        );
     }
 
     /// Provision bob with a mobile so he can run a signin ceremony.
@@ -1656,7 +1727,7 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
     }
@@ -1679,7 +1750,7 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
     }

@@ -24,6 +24,16 @@ export type OpenapiAdminNewTenant = {
      */
     admin?: string | null;
     /**
+     * Optional verified email for the first admin (G-131). Without it the
+     * new tenant's admin is credential-less and can never sign in: strict
+     * signup refuses the pre-existing username, and every attach path
+     * (SCIM client, `user/attach_email`) itself requires an admin session
+     * for THIS tenant. The creator vouches for the address — it lands as
+     * a verified credential, and the magic-link ceremony mints the first
+     * session.
+     */
+    admin_email?: string | null;
+    /**
      * First domain of the new tenant; the standard admin policy set is
      * bound to it. Without a domain the
      * tenant stays default-deny locked until one is added.
@@ -33,6 +43,11 @@ export type OpenapiAdminNewTenant = {
 };
 
 export type OpenapiDbHttpMethod = 'GET' | 'POST' | 'PUT' | 'OPTIONS' | 'DELETE' | 'PATCH' | 'CONNECT' | 'HEAD' | 'TRACE';
+
+export type OpenapiEmailAttachEmailRequest = {
+    email: string;
+    name: string;
+};
 
 export type OpenapiEmailEmailAddRequest = {
     email: string;
@@ -265,6 +280,12 @@ export type OpenapiSocialAddProvider = {
 
 export type OpenapiSocialRedeemRequest = {
     code: string;
+    /**
+     * When set, the session JWT is additionally stored in an HttpOnly
+     * cookie under this name (G-139: keeps the token out of JS-readable
+     * storage for browser callers).
+     */
+    cookie?: string | null;
 };
 
 export type OpenapiSocialRemoveProvider = {
@@ -1379,6 +1400,39 @@ export type OpenapiUserAddRoleResponses = {
 };
 
 export type OpenapiUserAddRoleResponse = OpenapiUserAddRoleResponses[keyof OpenapiUserAddRoleResponses];
+
+export type OpenapiEmailAttachData = {
+    body: OpenapiEmailAttachEmailRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/admin/user/attach_email';
+};
+
+export type OpenapiEmailAttachErrors = {
+    /**
+     * Unknown user, or the address belongs to another user
+     */
+    400: OpenapiEmailEmailResponse;
+    /**
+     * No verified session
+     */
+    401: OpenapiUtilsApiProblem;
+    /**
+     * Level gate refused the target user
+     */
+    403: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiEmailAttachError = OpenapiEmailAttachErrors[keyof OpenapiEmailAttachErrors];
+
+export type OpenapiEmailAttachResponses = {
+    /**
+     * Success
+     */
+    200: OpenapiEmailEmailResponse;
+};
+
+export type OpenapiEmailAttachResponse = OpenapiEmailAttachResponses[keyof OpenapiEmailAttachResponses];
 
 export type OpenapiUserAddUserData = {
     body: OpenapiUserAddUser;

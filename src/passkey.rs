@@ -474,6 +474,14 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             // policy engine so MFA step-up is not circular.
             match crate::utils::validate_session(req, depot).await {
                 Some(session) if session.jwt_data.username == passkey_req.0 => {
+                    // G-132 sudo mode: registering a passkey attaches a
+                    // login credential — require a freshly AUTHENTICATED
+                    // session, not a merely rotated one.
+                    if !crate::verify::session_is_fresh(&session) {
+                        crate::verify::mark_reauth_required(res);
+                        res.render(Json(ApiProblem::forbidden()));
+                        return;
+                    }
                     return register(&domain, &origin, &passkey_req, &all_creds, res).await;
                 }
                 _ => {
@@ -668,6 +676,14 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 )]
 pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let user = match depot.obtain_mut::<JwtVerify>() {
+        // G-132 sudo mode: wiping every passkey of an account requires a
+        // freshly AUTHENTICATED session — a stolen-and-rotated session
+        // must not be able to strip the victim's factors.
+        Ok(v) if !crate::verify::session_is_fresh(v) => {
+            crate::verify::mark_reauth_required(res);
+            res.render(Json(ApiProblem::forbidden()));
+            return;
+        }
         Ok(v) => v.jwt_data.username.clone(),
         Err(_) => {
             res.status_code(StatusCode::UNAUTHORIZED);
@@ -778,6 +794,116 @@ mod tests {
             .authenticate_jwt(&HashSet::new(), TEST_ISSUER, DOMAIN, "alice", 15)
             .await
             .expect("session token")
+    }
+
+    /// A real session for `alice` whose AUTHENTICATION is older than the
+    /// sudo window (G-132): minted directly with an aged `auth_time` — the
+    /// shape a stolen-and-rotated chain presents (`refresh_jwt` preserves
+    /// the original `auth_time`).
+    async fn stale_alice_token(state: &crate::server::ServerState) -> String {
+        let tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let key = tenant.current_key(DOMAIN).expect("key");
+        let old = (jiff::Timestamp::now().as_second() - crate::verify::SUDO_WINDOW_SEC as i64 - 60)
+            .max(0) as usize;
+        crate::jwt::jwt_authenticate(
+            TEST_ISSUER,
+            "alice",
+            &crate::db::JwtData {
+                user: "alice".to_string(),
+                username: "alice".to_string(),
+                domain: DOMAIN.to_string(),
+                mfa: HashSet::new(),
+                roles: HashSet::new(),
+            },
+            &key,
+            15,
+            crate::jwt::JwtOidcParams {
+                client_id: DOMAIN.to_string(),
+                nonce: None,
+                amr: None,
+                acr: None,
+                access_token: None,
+                auth_time: Some(old),
+            },
+        )
+        .expect("stale session token")
+    }
+
+    /// G-132: passkey REGISTRATION attaches a login credential, so it
+    /// requires a freshly authenticated session — a stale one gets 403 +
+    /// `X-Reauth-Required` instead of a challenge; a fresh one proceeds.
+    #[tokio::test]
+    async fn passkey_register_refuses_stale_session() {
+        let (state, _tmp) = passkey_test_env().await;
+        let service = passkey_service(state.clone());
+
+        let stale = stale_alice_token(&state).await;
+        let res = salvo::test::TestClient::post(format!("http://{DOMAIN}/passkey/request"))
+            .add_header("Host", DOMAIN, true)
+            .add_header("Authorization", format!("Bearer {stale}"), true)
+            .json(&serde_json::json!("alice"))
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::FORBIDDEN);
+        assert_eq!(
+            res.headers()
+                .get(crate::verify::REAUTH_HEADER)
+                .and_then(|v| v.to_str().ok()),
+            Some("true"),
+            "the 403 must carry the re-auth signal"
+        );
+
+        // Positive control: a freshly authenticated session gets the
+        // registration challenge.
+        let fresh = alice_token(&state).await;
+        let (status, _body) =
+            post_request(&service, &serde_json::json!("alice"), Some(&fresh)).await;
+        assert_eq!(status, StatusCode::OK, "a fresh session may register");
+    }
+
+    /// G-132: wiping every passkey of an account is a credential mutation
+    /// too — a stale session must not be able to strip the victim's
+    /// factors, a fresh one passes the gate.
+    #[tokio::test]
+    async fn passkey_remove_refuses_stale_session() {
+        let (state, _tmp) = passkey_test_env().await;
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .push(
+                    Router::with_path("passkey/remove")
+                        .hoop(crate::verify::session)
+                        .post(remove),
+                ),
+        );
+
+        let stale = stale_alice_token(&state).await;
+        let res = salvo::test::TestClient::post(format!("http://{DOMAIN}/passkey/remove"))
+            .add_header("Host", DOMAIN, true)
+            .add_header("Authorization", format!("Bearer {stale}"), true)
+            .json(&serde_json::json!({}))
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::FORBIDDEN);
+        assert_eq!(
+            res.headers()
+                .get(crate::verify::REAUTH_HEADER)
+                .and_then(|v| v.to_str().ok()),
+            Some("true")
+        );
+
+        let fresh = alice_token(&state).await;
+        let res = salvo::test::TestClient::post(format!("http://{DOMAIN}/passkey/remove"))
+            .add_header("Host", DOMAIN, true)
+            .add_header("Authorization", format!("Bearer {fresh}"), true)
+            .json(&serde_json::json!({}))
+            .send(&service)
+            .await;
+        assert_ne!(
+            res.status_code.expect("status"),
+            StatusCode::FORBIDDEN,
+            "a fresh session passes the sudo gate"
+        );
     }
 
     async fn post_request(

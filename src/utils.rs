@@ -436,6 +436,16 @@ fn issuer_url(host: &str, req: &Request, state: &ServerState) -> String {
 /// endpoints (`/userinfo`) both go through it so their scheme handling
 /// can never drift apart. The `to_str()` filter guarantees visible
 /// ASCII, so the 7-byte prefix slice is always char-boundary safe.
+/// The canonical session cookie name (G-139). The verify endpoints set an
+/// HttpOnly cookie under this name when the request carries
+/// `cookie: "janux.session"`, and `get_jwt` reads it back — so browser
+/// callers can keep the session JWT out of JS-readable storage entirely
+/// (no sessionStorage/localStorage exfiltration surface for XSS). The
+/// Authorization header takes precedence: non-browser clients and RPs keep
+/// using Bearer, and SameSite=Strict means cross-site requests never carry
+/// the cookie, so cookie auth adds no CSRF surface.
+pub const SESSION_COOKIE: &str = "janux.session";
+
 pub fn get_jwt(req: &Request) -> Option<&str> {
     req.headers()
         .get("Authorization")
@@ -446,6 +456,25 @@ pub fn get_jwt(req: &Request) -> Option<&str> {
             } else {
                 None
             }
+        })
+        .or_else(|| session_cookie_jwt(req))
+}
+
+/// The session JWT from the canonical cookie, if present. Parsed from the
+/// raw `Cookie` header because `get_jwt` takes `&Request` while salvo's
+/// cookie-jar accessor needs `&mut`; JWTs are base64url, so there is no
+/// quoting or escaping to undo. Public so `refresh` can tell whether the
+/// rotated token must be re-set into the cookie (G-139).
+pub fn session_cookie_jwt(req: &Request) -> Option<&str> {
+    req.headers()
+        .get(salvo::http::header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .find_map(|pair| {
+            let (name, value) = pair.split_once('=')?;
+            let value = value.trim();
+            (name.trim() == SESSION_COOKIE && !value.is_empty()).then_some(value)
         })
 }
 
@@ -1229,6 +1258,65 @@ mod tests {
             "/",
         );
         assert_eq!(get_domain(&req, &state), Some("tenant.example.com"));
+    }
+
+    // ── get_jwt: Bearer first, canonical session cookie fallback (G-139) ──
+
+    #[test]
+    fn get_jwt_prefers_bearer_and_falls_back_to_the_session_cookie() {
+        // Nothing at all.
+        let req = Request::new();
+        assert_eq!(get_jwt(&req), None);
+
+        // The Authorization header wins.
+        let mut req = Request::new();
+        req.headers_mut().insert(
+            salvo::http::header::AUTHORIZATION,
+            "Bearer header-token".parse().unwrap(),
+        );
+        assert_eq!(get_jwt(&req), Some("header-token"));
+
+        // Case-insensitive scheme (G-117) still wins over the cookie.
+        let mut req = Request::new();
+        req.headers_mut().insert(
+            salvo::http::header::AUTHORIZATION,
+            "bearer header-token".parse().unwrap(),
+        );
+        req.headers_mut().insert(
+            salvo::http::header::COOKIE,
+            format!("other=1; {SESSION_COOKIE}=cookie-token")
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(get_jwt(&req), Some("header-token"));
+
+        // Without the header the canonical cookie is used, alongside
+        // unrelated cookies.
+        let mut req = Request::new();
+        req.headers_mut().insert(
+            salvo::http::header::COOKIE,
+            format!("theme=dark; {SESSION_COOKIE}=cookie-token; other=x")
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(get_jwt(&req), Some("cookie-token"));
+
+        // A non-canonical cookie is ignored.
+        let mut req = Request::new();
+        req.headers_mut().insert(
+            salvo::http::header::COOKIE,
+            "janux.other=nope".parse().unwrap(),
+        );
+        assert_eq!(get_jwt(&req), None);
+
+        // An empty cookie value is ignored — that is the cleared state
+        // `logout` leaves behind.
+        let mut req = Request::new();
+        req.headers_mut().insert(
+            salvo::http::header::COOKIE,
+            format!("{SESSION_COOKIE}=").parse().unwrap(),
+        );
+        assert_eq!(get_jwt(&req), None);
     }
 
     // ── get_path: always the real path ────────────────────────────────

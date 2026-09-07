@@ -1,11 +1,11 @@
-import { client } from '../api/client.gen'
-import { clearSession, loadSession } from '../shared/session'
+import { clearSession, hasSession } from '../shared/session'
 
 export function setupAuth(): boolean {
-  const jwt = loadSession()
-  if (!jwt) return false
-  client.setConfig({ headers: { Authorization: `Bearer ${jwt}` } })
-  return true
+  // G-139: the session JWT lives in an HttpOnly cookie the browser
+  // attaches to every same-origin request — there is no token for JS to
+  // hold or leak. The sessionStorage marker only gates the initial
+  // render; every 401 falls back to sessionExpired().
+  return hasSession()
 }
 
 export function sessionExpired(): void {

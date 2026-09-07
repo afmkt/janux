@@ -716,6 +716,11 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
         spawn_backchannel_delivery(targets);
     }
 
+    // G-139: the canonical session cookie is HttpOnly — only the server
+    // can remove it from the jar, so RP-initiated logout expires it on
+    // both response paths (harmless when no cookie was ever set).
+    crate::verify::set_session_cookie(res, None);
+
     // ── Respond ────────────────────────────────────────────────────────
     match redirect_target {
         Some(uri) => {

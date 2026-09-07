@@ -21,8 +21,7 @@ Prerequisites: Rust (stable), Node 22, [just](https://github.com/casey/just).
 
 ```sh
 cp base.example.toml base.toml      # edit bind/data_dir/encryption_key
-cp seed.example.toml seed.toml      # bootstrap tenant: roles, users, policies, providers
-cp .env.example .env                # provider credentials (mail, SMS, social OAuth)
+cp seed.example.toml seed.toml      # bootstrap tenant; set the admin's `email` to an inbox you control (first sign-in)
 
 just dev           # backend + frontend dev servers
 just run           # build frontend, run server
@@ -30,7 +29,7 @@ just openapi       # regenerate frontend/openapi.json + TS client
 just test          # unit + integration + e2e
 ```
 
-With no providers configured in `.env`/`seed.toml`, the corresponding factors simply don't activate; the server still runs and serves the OIDC/admin/SCIM surfaces.
+With no providers configured in `seed.toml`, the corresponding factors simply don't activate; the server still runs and serves the OIDC/admin/SCIM surfaces. Provider credentials (mail, SMS, social OAuth) are per-tenant seed config — **not** environment variables; `.env.example` documents the only env vars the server reads (`JANUX_CONFIG_FILE`, `RUN_ENV`, `JANUX__*` field overrides) and nothing loads a `.env` file automatically.
 
 ## Docker
 
@@ -67,7 +66,7 @@ Layered TOML: `janux -c base -c seed` (later files override; `JANUX_*` env vars 
 |---|---|---|
 | `base.example.toml` / `base.toml` | bind address, data dir, encryption key, proxy trust | example tracked, local gitignored |
 | `seed.example.toml` / `seed.toml` | bootstrap tenant (roles, users, policies, provider config) | example tracked, local gitignored |
-| `.env.example` / `.env` | provider credentials (Aliyun SMS/mail, Resend, GitHub OAuth, JWT secret) | example tracked, local gitignored |
+| `.env.example` | documents the only env vars the server reads (`JANUX_CONFIG_FILE`, `RUN_ENV`, `JANUX__*` overrides) — not auto-loaded; provider credentials live in `seed.toml` (G-134) | example tracked |
 | `tests/test_config.toml` | test config with dummy values | tracked |
 
 The seed shape is pinned by the `seed_toml_bootstraps_builtin_roles` test, so a typo fails at `cargo test` time instead of as a lockout on first boot.

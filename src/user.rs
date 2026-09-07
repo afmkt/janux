@@ -23,6 +23,16 @@ pub struct UserDTO {
     pub id: String,
     pub active: bool,
     pub roles: Vec<String>,
+    /// Optional email credential attached (VERIFIED) at seed time — the
+    /// G-131 bootstrap path. Seeded users are credential-less and strict
+    /// signup refuses a pre-existing username, so the first admin can never
+    /// sign in unless the seed vouches for an address: seeding is the trust
+    /// anchor (Bootstrap caller) and runs on every boot, which also makes
+    /// "add the email, restart" the repair path for an already-booted
+    /// credential-less admin. Set it to an inbox the deployment operator
+    /// controls.
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 impl UserDTO {
@@ -69,6 +79,15 @@ impl UserDTO {
                             .await?;
                     }
                 }
+            }
+            // G-131: attach the vouched email as a VERIFIED credential.
+            // Idempotent across restarts (re-attaching the same user's
+            // address is an upgrade/no-op); an address owned by another
+            // user fails the boot loudly instead of silently stealing it.
+            if let Some(email) = &self.email {
+                tenant
+                    .email_create_verified(&self.id, &email.to_lowercase())
+                    .await?;
             }
         }
         Ok(())

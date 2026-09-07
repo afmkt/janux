@@ -115,16 +115,25 @@ completely rewritten login flow. The contract:
      username-only).
 2. **Ceremonies** (all `POST`, JSON; success carries a session `jwt`):
    - Email magic link: `request` `{name, email, client_id?, state?, redirect_uri?}`
-     → user clicks the link → `verify` `{token, name, email}`.
+     → user clicks the link → `verify` `{token, name, email, cookie?}`.
    - SMS OTP: `request` `{name, mobile}` → returns a ceremony `jwt` →
-     `verify` `{token, name, mobile, code}`.
+     `verify` `{token, name, mobile, code, cookie?}`.
    - Passkey: `request`/`verify` per WebAuthn (see
-     `frontend/src/login/webauthn.ts` for the exact ceremony).
+     `frontend/src/login/webauthn.ts` for the exact ceremony; `verify`
+     takes the same optional `cookie`).
    - Social: redirect the browser to the provider's `request` URL,
      carrying `client_id`/`state`/`redirect_uri` through; the callback
-     lands with `?code=` → `POST /api/v1/auth/social/redeem` `{code}`.
-3. **Session**: store the session JWT (see `frontend/src/shared/session.ts`)
-   and use it as `Authorization: Bearer` for the OIDC resume/consent APIs.
+     lands with `?code=` → `POST /api/v1/auth/social/redeem` `{code, cookie?}`.
+3. **Session** (G-139): pass `cookie: "janux.session"` in the verify/redeem
+   body and the server stores the session JWT in an HttpOnly
+   (Secure, SameSite=Strict) cookie that the browser attaches to every
+   same-origin API call — the OIDC resume/consent/device endpoints and the
+   admin console all authenticate from it, and JS never holds the token.
+   `frontend/src/shared/session.ts` keeps only a non-sensitive per-tab
+   presence marker for UI gating; `logout`/`end_session` expire the cookie
+   server-side. Non-browser clients skip `cookie` and use the response-body
+   `jwt` as `Authorization: Bearer` (the header always wins over the
+   cookie).
 4. **OIDC resume**: after login, `GET/POST /authorize/resume` continues a
    parked authorization-code flow; `/consent/info` + `POST /consent` drive
    the consent screen; `/device-login/info` + `/device-login/approve`

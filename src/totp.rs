@@ -345,6 +345,13 @@ struct EnrollTotpResponse {
 )]
 pub async fn enroll(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let user = match depot.obtain_mut::<JwtVerify>() {
+        // G-132 sudo mode: enrolling a step-up credential requires a
+        // freshly AUTHENTICATED session, not a merely rotated one.
+        Ok(v) if !crate::verify::session_is_fresh(v) => {
+            crate::verify::mark_reauth_required(res);
+            res.render(Json(ApiProblem::forbidden()));
+            return;
+        }
         Ok(v) => v.jwt_data.username.clone(),
         Err(_) => {
             res.status_code(StatusCode::UNAUTHORIZED);
@@ -829,7 +836,7 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
     }
@@ -865,6 +872,55 @@ mod tests {
         )
     }
 
+    /// Stands in for a session whose authentication is OLDER than the sudo
+    /// window (G-132) — the shape a stolen-and-rotated chain presents
+    /// (`refresh_jwt` preserves the original `auth_time`).
+    #[handler]
+    async fn inject_stale_alice_session(
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
+        depot.inject(JwtVerify {
+            can_access: true,
+            jwt_data: JwtData {
+                user: "alice".to_string(),
+                username: "alice".to_string(),
+                domain: DOMAIN.to_string(),
+                mfa: HashSet::new(),
+                roles: HashSet::new(),
+            },
+            expect_mfa: false,
+            domain: DOMAIN.to_string(),
+            auth_time: Some(
+                (jiff::Timestamp::now().as_second() - crate::verify::SUDO_WINDOW_SEC as i64 - 60)
+                    .max(0) as usize,
+            ),
+        });
+        ctrl.call_next(req, depot, res).await;
+    }
+
+    /// G-132: enrolling a step-up credential requires a freshly
+    /// AUTHENTICATED session — a stale one gets 403 and no secret is
+    /// generated or re-exposed.
+    #[tokio::test]
+    async fn enroll_refuses_stale_session() {
+        let (state, _tmp) = totp_test_env().await;
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .push(
+                    Router::with_path("enroll")
+                        .hoop(inject_stale_alice_session)
+                        .post(enroll),
+                ),
+        );
+        let (status, _body) =
+            post_enroll(&service, &serde_json::json!({ "name": "device1" })).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
     /// Stands in for a session belonging to a DIFFERENT user (mallory)
     /// carrying an OTP factor — the laundering probe.
     #[handler]
@@ -885,7 +941,7 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
     }

@@ -61,7 +61,7 @@ export function sessionJwt(data: CeremonyResult): string {
   return jwt
 }
 
-export { clearSession, loadSession, storeSession } from '../shared/session'
+export { SESSION_COOKIE, clearSession, hasSession, markSession } from '../shared/session'
 
 function sameOriginRedirect(target: string): string | null {
   try {

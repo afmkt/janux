@@ -721,6 +721,13 @@ pub async fn link(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // session-gated — the identity the IdP binding attaches to is
     // the session's own user, never anything client-supplied.
     let user = match depot.obtain_mut::<JwtVerify>() {
+        // G-132 sudo mode: linking an external identity requires a freshly
+        // AUTHENTICATED session, not a merely rotated one.
+        Ok(v) if !crate::verify::session_is_fresh(v) => {
+            crate::verify::mark_reauth_required(res);
+            res.render(Json(ApiProblem::forbidden()));
+            return;
+        }
         Ok(v) => v.jwt_data.username.clone(),
         Err(_) => {
             res.status_code(StatusCode::UNAUTHORIZED);
@@ -1019,6 +1026,10 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 #[derive(Deserialize, Debug, ToSchema)]
 struct RedeemRequest {
     code: String,
+    /// When set, the session JWT is additionally stored in an HttpOnly
+    /// cookie under this name (G-139: keeps the token out of JS-readable
+    /// storage for browser callers).
+    cookie: Option<String>,
 }
 
 #[derive(Serialize, Debug, ToSchema)]
@@ -1050,6 +1061,17 @@ pub async fn redeem(req: &mut Request, _depot: &mut Depot, res: &mut Response) {
         && let Some(entry) = SOCIAL_LOGIN_CODE_CACHE.get_one_shot(&body.code).await
         && bind.as_deref() == Some(entry.bind.as_str())
     {
+        // G-139: same HttpOnly session-cookie option as the other verify
+        // endpoints (attributes are server-side, H5/G-111).
+        if let Some(name) = body.cookie {
+            let cookie = Cookie::build((name, entry.jwt.clone()))
+                .path("/")
+                .http_only(true)
+                .secure(true)
+                .same_site(SameSite::Strict)
+                .build();
+            res.add_cookie(cookie);
+        }
         res.status_code(StatusCode::OK);
         res.render(Json(RedeemResponse {
             ok: true,
@@ -1861,9 +1883,72 @@ mod tests {
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
-            auth_time: None,
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
         });
         ctrl.call_next(req, depot, res).await;
+    }
+
+    /// Stands in for a session whose authentication is OLDER than the sudo
+    /// window (G-132) — the shape a stolen-and-rotated chain presents
+    /// (`refresh_jwt` preserves the original `auth_time`).
+    #[handler]
+    async fn inject_stale_alice_session(
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
+        depot.inject(JwtVerify {
+            can_access: true,
+            jwt_data: crate::db::JwtData {
+                user: "alice".to_string(),
+                username: "alice".to_string(),
+                domain: DOMAIN.to_string(),
+                mfa: std::collections::HashSet::new(),
+                roles: std::collections::HashSet::new(),
+            },
+            expect_mfa: false,
+            domain: DOMAIN.to_string(),
+            auth_time: Some(
+                (jiff::Timestamp::now().as_second() - crate::verify::SUDO_WINDOW_SEC as i64 - 60)
+                    .max(0) as usize,
+            ),
+        });
+        ctrl.call_next(req, depot, res).await;
+    }
+
+    /// G-132: starting the identity-link dance attaches an external login
+    /// credential, so it requires a freshly AUTHENTICATED session — a stale
+    /// one gets 403 + `X-Reauth-Required` and no IdP redirect is parked.
+    #[tokio::test]
+    async fn link_refuses_stale_session() {
+        // Own domain: the provider registry cache is keyed by domain and
+        // process-wide — endpoint tests must not share it.
+        const STALE_DOMAIN: &str = "stale-link.test";
+        let issuer = spawn_mock_issuer().await;
+        let (state, _tmp) = social_test_env_for(&issuer, STALE_DOMAIN).await;
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .push(
+                    Router::with_path("social/{id}/link")
+                        .hoop(inject_stale_alice_session)
+                        .get(link),
+                ),
+        );
+
+        let res = salvo::test::TestClient::get("http://social.test/social/mockp/link")
+            .add_header("Host", STALE_DOMAIN, true)
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::FORBIDDEN));
+        assert_eq!(
+            res.headers()
+                .get(crate::verify::REAUTH_HEADER)
+                .and_then(|v| v.to_str().ok()),
+            Some("true"),
+            "the 403 must carry the re-auth signal"
+        );
     }
 
     /// The link dance parks a session flagged with the session user and no
