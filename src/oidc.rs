@@ -720,7 +720,12 @@ pub async fn well_known(req: &mut Request, depot: &mut Depot, res: &mut Response
     // this tenant has configured, and where their request/verify endpoints
     // live. Origin-relative URLs; presence means enabled. The `identifier`
     // field tells a login page which extra input the factor needs (null =
-    // username-only). ACR values carry the same set, per OIDC Discovery.
+    // username-only). `acr_values_supported` carries the same factor-name
+    // vocabulary tokens emit in `acr` (G-94): a token's `acr` is the
+    // strongest factor achieved (see `db::acr_value`), so the list must
+    // cover every value a token can carry — including `totp`, which is
+    // always available as a session-gated step-up on a provisioned tenant
+    // even though it has no login-ceremony entry in `janux_factors`.
     let mut acr_values: Vec<String> = Vec::new();
     let mut factors = serde_json::Map::new();
     let mut dcr_enabled = false;
@@ -774,6 +779,7 @@ pub async fn well_known(req: &mut Request, depot: &mut Depot, res: &mut Response
             }
         }
         acr_values.push("passkey".into());
+        acr_values.push("totp".into());
         factors.insert(
             "passkey".into(),
             serde_json::json!({

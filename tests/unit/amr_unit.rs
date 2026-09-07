@@ -2,7 +2,8 @@
 //!
 //! Covers:
 //! 1. Mapping internal factor labels to registered RFC 8176 `amr` values.
-//! 2. Deriving the `acr` assurance level from the factor set.
+//! 2. Deriving the `acr` factor-name value from the factor set (strongest
+//!    wins — the discovery vocabulary, G-94).
 //! 3. A real sign/decode round-trip proving the claims reach the JWT,
 //!    including that a supplied `auth_time` is preserved (refresh semantics).
 
@@ -62,7 +63,7 @@ fn test_amr_multi_factor_sorted_and_deduped() {
     assert_eq!(a, Some(vec!["mca".to_string(), "otp".to_string()]));
 }
 
-// ─── acr_value: assurance level derivation ───────────────────────────────────
+// ─── acr_value: factor-name derivation (strongest wins) ─────────────────────
 
 #[test]
 fn test_acr_empty_is_none() {
@@ -70,17 +71,43 @@ fn test_acr_empty_is_none() {
 }
 
 #[test]
-fn test_acr_single_factor_is_1() {
-    assert_eq!(acr_value(&set(&["email"])), Some("1".into()));
-    assert_eq!(acr_value(&set(&["passkey"])), Some("1".into()));
-    assert_eq!(acr_value(&set(&["totp"])), Some("1".into())); // totp alone is not MFA per policy.rs
+fn test_acr_single_factor_is_its_own_name() {
+    // The vocabulary matches discovery's `acr_values_supported` (G-94);
+    // the internal `oauth2` label (and legacy `Social`) map to `social`.
+    assert_eq!(acr_value(&set(&["email"])), Some("email".into()));
+    assert_eq!(acr_value(&set(&["otp"])), Some("otp".into()));
+    assert_eq!(acr_value(&set(&["passkey"])), Some("passkey".into()));
+    assert_eq!(acr_value(&set(&["totp"])), Some("totp".into()));
+    assert_eq!(acr_value(&set(&["oauth2"])), Some("social".into()));
+    assert_eq!(acr_value(&set(&["Social"])), Some("social".into()));
 }
 
 #[test]
-fn test_acr_totp_plus_second_factor_is_2() {
-    // Mirrors the policy engine's MFA definition (totp && len > 1).
-    assert_eq!(acr_value(&set(&["totp", "email"])), Some("2".into()));
-    assert_eq!(acr_value(&set(&["totp", "passkey"])), Some("2".into()));
+fn test_acr_multi_factor_reports_strongest() {
+    // Strength order: passkey > totp > otp > email > social. The canonical
+    // step-up session reports "totp" — the old "2" = MFA semantics
+    // (policy engine's definition: totp && len > 1).
+    assert_eq!(acr_value(&set(&["totp", "email"])), Some("totp".into()));
+    assert_eq!(
+        acr_value(&set(&["totp", "passkey"])),
+        Some("passkey".into())
+    );
+    assert_eq!(acr_value(&set(&["email", "otp"])), Some("otp".into()));
+    assert_eq!(acr_value(&set(&["email", "oauth2"])), Some("email".into()));
+}
+
+#[test]
+fn test_acr_unknown_label_falls_back_deterministically() {
+    // Forward-compat: a non-empty set never loses the claim.
+    assert_eq!(
+        acr_value(&set(&["future-factor"])),
+        Some("future-factor".into())
+    );
+    assert_eq!(
+        acr_value(&set(&["zebra", "alpha"])),
+        Some("alpha".into()),
+        "first-sorted label, independent of insertion order"
+    );
 }
 
 // ─── JWT round-trip: claims actually land in the signed token ────────────────
@@ -143,7 +170,7 @@ fn test_fresh_auth_stamps_amr_acr_and_current_auth_time() {
 
     let claims = decode_claims(&token, &key);
     assert_eq!(claims.amr, Some(vec!["mca".to_string(), "otp".to_string()]));
-    assert_eq!(claims.acr, Some("2".to_string()));
+    assert_eq!(claims.acr, Some("totp".to_string()));
     let at = claims.auth_time.expect("auth_time must be present");
     assert!(at >= before && at <= before + 5, "auth_time should be ~now");
     assert_eq!(claims.sub, "alice");
@@ -178,7 +205,7 @@ fn test_supplied_auth_time_is_preserved() {
     let claims = decode_claims(&token, &key);
     assert_eq!(claims.auth_time, Some(original_auth_time));
     assert_eq!(claims.amr, Some(vec!["hwk".to_string()]));
-    assert_eq!(claims.acr, Some("1".to_string()));
+    assert_eq!(claims.acr, Some("passkey".to_string()));
 }
 
 #[test]
@@ -208,5 +235,5 @@ fn test_social_only_auth_omits_amr_but_keeps_acr() {
         claims.amr, None,
         "no registered RFC 8176 value for federated login"
     );
-    assert_eq!(claims.acr, Some("1".to_string()));
+    assert_eq!(claims.acr, Some("social".to_string()));
 }

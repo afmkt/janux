@@ -77,15 +77,37 @@ pub fn amr_values(mfa: &HashSet<String>) -> Option<Vec<String>> {
     Some(out)
 }
 
+/// The `acr` vocabulary is the factor names themselves — the same vocabulary
+/// discovery advertises in `acr_values_supported` (G-94), not opaque numeric
+/// levels. A multi-factor session reports the *strongest* factor achieved per
+/// the order below; the full method list always travels in `amr` (RFC 8176).
+/// Internal labels map to their external names (`oauth2`/legacy `Social` →
+/// `social`). The canonical step-up session (`{email, totp}`) reports `totp`,
+/// preserving the old `"2"` = MFA semantics.
 pub fn acr_value(mfa: &HashSet<String>) -> Option<String> {
     if mfa.is_empty() {
         return None;
     }
-    if mfa.contains("totp") && mfa.len() > 1 {
-        Some("2".to_string())
-    } else {
-        Some("1".to_string())
+    // Strongest first: hardware-backed user-verified passkeys are
+    // phishing-resistant; TOTP step-up next; then possession factors;
+    // federated login inherits the external IdP's (unknown) assurance.
+    const STRENGTH_ORDER: &[(&str, &str)] = &[
+        ("passkey", "passkey"),
+        ("totp", "totp"),
+        ("otp", "otp"),
+        ("email", "email"),
+        ("oauth2", "social"),
+        ("Social", "social"),
+    ];
+    if let Some((_, external)) = STRENGTH_ORDER
+        .iter()
+        .find(|(internal, _)| mfa.contains(*internal))
+    {
+        return Some(external.to_string());
     }
+    // Unknown factor label (forward-compat): deterministic first-sorted label
+    // so a non-empty set never loses the claim.
+    mfa.iter().min().cloned()
 }
 
 #[derive(Debug, PartialEq, toasty::Embed, Serialize, Deserialize, Clone, ToSchema)]
