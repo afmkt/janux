@@ -1259,10 +1259,10 @@ mod tests {
     async fn policy_create_denies_own_and_superior_roles() {
         let (state, _tmp) = role_admin_env().await;
         let service = role_admin_service(state, inject_admin_session);
-        let policy = |role: &str| {
+        let policy = |resource: &str, role: &str| {
             serde_json::json!({
                 "domain": DOMAIN,
-                "resource": "/api/v1/admin/tenant/delete",
+                "resource": resource,
                 "action": null,
                 "role": role,
                 "source": "Nothing",
@@ -1272,14 +1272,43 @@ mod tests {
             })
         };
 
-        let status = post_json(&service, "policy/create", policy("admin")).await;
+        let status = post_json(
+            &service,
+            "policy/create",
+            policy("/api/v1/admin/tenant/delete", "admin"),
+        )
+        .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "own role refused");
 
-        let status = post_json(&service, "policy/create", policy("root")).await;
+        let status = post_json(
+            &service,
+            "policy/create",
+            policy("/api/v1/admin/tenant/delete", "root"),
+        )
+        .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "superior role refused");
 
-        let status = post_json(&service, "policy/create", policy("user")).await;
+        let status = post_json(
+            &service,
+            "policy/create",
+            policy("/api/v1/admin/user/list", "user"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "downward policy write succeeds");
+
+        // G-129 (resource-power axis): tenant/* is root-powered — an
+        // admin cannot bind it to ANY role, not even one far below it.
+        let status = post_json(
+            &service,
+            "policy/create",
+            policy("/api/v1/admin/tenant/delete", "user"),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "root-powered resource refused for a sub-root caller"
+        );
     }
 
     /// R6 at the endpoint level: policy deletion is bounded the same way.

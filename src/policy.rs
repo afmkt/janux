@@ -144,6 +144,55 @@ pub struct CanAccess {
     pub expect_mfa: bool,
 }
 
+/// Template match of a stored resource against a request path: equal segment
+/// counts, and every resource segment either equals the path segment or is a
+/// `{param}` placeholder covering any value — the same matching
+/// `TargetResolver::FromPath` applies for capture.
+fn resource_matches_path(resource: &[String], path: &[&str]) -> bool {
+    resource.len() == path.len()
+        && resource
+            .iter()
+            .zip(path.iter())
+            .all(|(r, p)| (r.starts_with('{') && r.ends_with('}')) || r == p)
+}
+
+/// The root-powered resource paths: the cross-tenant lifecycle surface.
+/// These handlers act globally on `Storage` — create, delete, and enumerate
+/// ANY tenant — so the policy rows binding them are the only thing reserving
+/// them to `root` (DESIGN §3 "tenant/* bound to root only"; mirrors the root
+/// block of `seed::STANDARD_ADMIN_POLICIES`).
+const ROOT_POWERED_RESOURCES: &[&str] = &[
+    "/api/v1/admin/tenant/list",
+    "/api/v1/admin/tenant/create",
+    "/api/v1/admin/tenant/delete",
+];
+
+/// Does the resource template cover a root-powered path? The candidate is
+/// the template: its `{param}` segments cover any literal, so evasions like
+/// `tenant/{op}` or `{surface}/delete` are caught. A missing or extra
+/// leading slash is normalized so both stored forms are refused.
+/// Fail-closed: refusing a binding that could not actually match at runtime
+/// (e.g. a `{param}` template in the exact-match branch) is harmless.
+fn is_root_powered(resource_seg: &[&str]) -> bool {
+    fn norm<'a>(segs: &'a [&'a str]) -> &'a [&'a str] {
+        if segs.first() == Some(&"") {
+            &segs[1..]
+        } else {
+            segs
+        }
+    }
+    let candidate = norm(resource_seg);
+    ROOT_POWERED_RESOURCES.iter().any(|root| {
+        let root_seg: Vec<&str> = root.split('/').collect();
+        let root_seg = norm(&root_seg);
+        root_seg.len() == candidate.len()
+            && root_seg
+                .iter()
+                .zip(candidate.iter())
+                .all(|(r, c)| (c.starts_with('{') && c.ends_with('}')) || c == r)
+    })
+}
+
 impl Policy {
     pub fn can_access(
         &self,
@@ -161,6 +210,14 @@ impl Policy {
             if self.source == SourceResolver::Nothing && self.target == TargetResolver::Nothing {
                 // path match exactly
                 path.iter().map(|s| s.to_string()).collect::<Vec<String>>() == self.resource
+            } else if !resource_matches_path(&self.resource, path) {
+                // G-129: the resource template constrains the path in EVERY
+                // branch. FromQuery/FromHeader targets used to skip path
+                // matching entirely, so a policy with an innocent-looking
+                // resource applied to every path in the domain — including
+                // the root-powered tenant lifecycle surface — turning any
+                // sub-level binding into a potential grant of root power.
+                false
             } else {
                 let s = self.resolve_source(jwt);
                 let t = self.resolve_target(path, query, header);
@@ -279,6 +336,10 @@ impl Tenant {
     /// gate (rule R5): API callers may only attach policies to roles
     /// strictly below their own effective level — a role can never expand
     /// its own permission set (or a peer's / superior's).
+    ///
+    /// gate (resource power, G-129): independently of the target role's
+    /// level, binding a root-powered resource (`tenant/*`) requires
+    /// root-level effective power — see [`Tenant::require_root_power_for`].
     #[allow(clippy::too_many_arguments)]
     pub async fn policy_create(
         &mut self,
@@ -295,6 +356,7 @@ impl Tenant {
         let resource_seg: Vec<&str> = resource.split("/").collect();
         let role = self.role(role_name).await?;
         self.require_below(caller, &role).await?;
+        self.require_root_power_for(caller, &resource_seg).await?;
         let ret = toasty::create!(Policy {
             domain_id: domain.to_string(),
             action,
@@ -318,13 +380,39 @@ impl Tenant {
 
         Ok(ret)
     }
+    /// Gate for the resource-power axis (G-129), complementing the level
+    /// gate (R5/R6) which only bounds the target role's LEVEL: binding a
+    /// root-powered resource is itself an act of root power, so it requires
+    /// a caller whose effective level reaches the apex — `Bootstrap`
+    /// (`i64::MAX`) or a `root` (100) session. Without this gate an admin
+    /// (80) attaches `tenant/*` to a puppet role at 79, grants themselves
+    /// that role, and wields cross-tenant power the ladder reserves to
+    /// root — contradicting DESIGN §3: "a policy can widen *which*
+    /// endpoints are callable, never *what power* they confer". Applies to
+    /// allow and deny rows alike: root-powered bindings are root's to make
+    /// and root's to remove.
+    pub async fn require_root_power_for(
+        &mut self,
+        caller: &crate::role::Caller,
+        resource_seg: &[&str],
+    ) -> Result<()> {
+        if !is_root_powered(resource_seg) {
+            return Ok(());
+        }
+        match self.effective_level(caller).await {
+            Some(level) if level >= crate::role::ROOT_LEVEL => Ok(()),
+            _ => Err(crate::role::AdminError::Forbidden.into()),
+        }
+    }
+
     /// Delete the policy matching `(domain, resource, action, role)` from the
     /// database and remove it from the in-memory [`PolicyCache`], keeping the
     /// cache consistent with the DB.
     ///
     /// gate (rule R6): symmetric to [`Tenant::policy_create`] — detaching
     /// policies is bounded by the same level test, so a role cannot strip the
-    /// constraints of a peer's or superior's permission set either.
+    /// constraints of a peer's or superior's permission set either. The
+    /// resource-power gate (G-129) applies symmetrically as well.
     pub async fn policy_delete(
         &mut self,
         caller: &crate::role::Caller,
@@ -336,6 +424,8 @@ impl Tenant {
         let resource_seg: Vec<String> = resource.split("/").map(|s| s.to_string()).collect();
         let role = self.role(role_name).await?;
         self.require_below(caller, &role).await?;
+        let seg_refs: Vec<&str> = resource_seg.iter().map(|s| s.as_str()).collect();
+        self.require_root_power_for(caller, &seg_refs).await?;
 
         // toasty cannot filter on the list-typed `resource` column, so
         // select the (domain, role) candidates and match in Rust, deleting
@@ -454,7 +544,7 @@ pub async fn all_policies(req: &mut Request, depot: &mut Depot, res: &mut Respon
     responses(
         (status_code = 200, description = "Policy created successfully", body = ApiResponse<()>),
         (status_code = 400, description = "Bad request", body = ApiProblem),
-        (status_code = 403, description = "Level gate refused the role", body = ApiProblem)
+        (status_code = 403, description = "Level or resource-power gate refused", body = ApiProblem)
     )
 )]
 pub async fn add_policy(req: &mut Request, depot: &mut Depot, res: &mut Response) {
@@ -523,7 +613,7 @@ pub struct DeletePolicy {
     responses(
         (status_code = 200, description = "Success", body = ApiResponse<()>),
         (status_code = 400, description = "Bad request", body = ApiProblem),
-        (status_code = 403, description = "Level gate refused the role", body = ApiProblem)
+        (status_code = 403, description = "Level or resource-power gate refused", body = ApiProblem)
     )
 )]
 pub async fn delete_policy(req: &mut Request, depot: &mut Depot, res: &mut Response) {

@@ -734,7 +734,135 @@ fn test_resolve_target_from_path_non_template_segment_mismatch() {
     assert!(target.is_none());
 }
 
-// ─── 9. Edge cases ──────────────────────────────────────────────────────────
+// ─── 9. Resolver policies stay path-constrained (G-129) ─────────────────────
+
+#[test]
+fn test_query_target_policy_does_not_leak_to_other_paths() {
+    // Before the G-129 engine fix, FromQuery/FromHeader targets skipped
+    // path matching entirely: this policy applied to EVERY path in the
+    // domain (including the root-powered tenant lifecycle surface) as
+    // long as the query condition held.
+    let policy = make_policy(
+        "api.example.com",
+        None,
+        &["posts"],
+        "user",
+        SourceResolver::User,
+        TargetResolver::FromQuery {
+            qname: "owner".into(),
+        },
+        false,
+        true,
+    );
+    let jwt = make_jwt("alice", "api.example.com", &[], &["user"]);
+    let mut query = HashMap::new();
+    query.insert("owner".into(), "alice".into());
+
+    assert!(
+        policy
+            .can_access(
+                &HttpMethod::GET,
+                "api.example.com",
+                &jwt,
+                &vec!["posts"],
+                &query,
+                &HashMap::new()
+            )
+            .is_some_and(|a| a.can_access),
+        "the policy still applies to its own resource"
+    );
+    assert!(
+        policy
+            .can_access(
+                &HttpMethod::GET,
+                "api.example.com",
+                &jwt,
+                &vec!["", "api", "v1", "admin", "tenant", "delete"],
+                &query,
+                &HashMap::new()
+            )
+            .is_none(),
+        "it must not leak onto an unrelated (root-powered) path"
+    );
+}
+
+#[test]
+fn test_nothing_source_with_query_target_is_path_constrained() {
+    // source=Nothing + FromQuery matched every path LACKING the query
+    // param before the fix (s=None ⇒ t.is_none(), resource unchecked) —
+    // a whole-domain grant hiding behind an innocent resource string.
+    let policy = make_policy(
+        "api.example.com",
+        None,
+        &["posts"],
+        "user",
+        SourceResolver::Nothing,
+        TargetResolver::FromQuery { qname: "x".into() },
+        false,
+        true,
+    );
+    let jwt = make_jwt("alice", "api.example.com", &[], &["user"]);
+
+    assert!(
+        policy
+            .can_access(
+                &HttpMethod::GET,
+                "api.example.com",
+                &jwt,
+                &vec!["posts"],
+                &HashMap::new(),
+                &HashMap::new()
+            )
+            .is_some(),
+        "matches its own resource when the param is absent"
+    );
+    assert!(
+        policy
+            .can_access(
+                &HttpMethod::GET,
+                "api.example.com",
+                &jwt,
+                &vec!["", "api", "v1", "admin", "tenant", "delete"],
+                &HashMap::new(),
+                &HashMap::new()
+            )
+            .is_none(),
+        "must not match a path outside its resource template"
+    );
+}
+
+#[test]
+fn test_param_template_stays_within_its_shape() {
+    // A `{param}` segment covers one path segment of the SAME template —
+    // it never widens the policy onto other shapes.
+    let policy = make_policy(
+        "api.example.com",
+        None,
+        &["", "api", "v1", "admin", "user", "{op}"],
+        "admin",
+        SourceResolver::Nothing,
+        TargetResolver::FromPath { pname: "op".into() },
+        false,
+        true,
+    );
+    let jwt = make_jwt("alice", "api.example.com", &[], &["admin"]);
+
+    // Different segment count → no match, regardless of resolvers.
+    assert!(
+        policy
+            .can_access(
+                &HttpMethod::POST,
+                "api.example.com",
+                &jwt,
+                &vec!["", "api", "v1", "admin", "tenant", "delete", "extra"],
+                &HashMap::new(),
+                &HashMap::new()
+            )
+            .is_none()
+    );
+}
+
+// ─── 10. Edge cases ──────────────────────────────────────────────────────────
 
 #[test]
 fn test_path_with_additional_segments_fails_exact_match() {

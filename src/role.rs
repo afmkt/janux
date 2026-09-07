@@ -35,6 +35,12 @@ pub fn builtin_level(name: &str) -> Option<i64> {
         .map(|(_, l)| *l)
 }
 
+/// The effective level required to bind root-powered resources (the
+/// cross-tenant lifecycle surface) to a role: the apex `root` level itself
+/// (G-129, see `crate::policy::require_root_power_for`). Tied to the catalog
+/// so the two cannot drift.
+pub const ROOT_LEVEL: i64 = BUILTIN_ROLES[0].1;
+
 /// The principal performing a role-administration operation (gate).
 #[derive(Debug, Clone)]
 pub enum Caller {

@@ -399,8 +399,17 @@ impl Tenant {
             }
         };
         let key = self.current_key(domain)?;
+        // G-128: roles are authorization state, not authentication history —
+        // reload them from the DB on every rotation (exactly as the login
+        // path in `authenticate_jwt` does), so a revoked role stops
+        // propagating within one token lifetime and a fresh grant is picked
+        // up on the next refresh. `mfa` deliberately stays as-minted: it
+        // records the factors proven at `auth_time` (and feeds amr/acr),
+        // not the current credential inventory.
+        let roles = self.user_roles(user.id).await?;
         let mut d = decision.claims.data;
         d.username = user.name.clone();
+        d.roles = HashSet::from_iter(roles.into_iter().map(|a| a.id));
         let new_jwt = jwt_authenticate(
             issuer,
             &d.user,
@@ -1610,6 +1619,167 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn policy_create_root_resource_requires_root_power() {
+        // G-129 (resource-power axis): the level gate bounds the target
+        // role's LEVEL; this gate bounds what the binding CONFERS. An
+        // admin must not attach the cross-tenant lifecycle surface to a
+        // puppet role below itself — the old escalation chain was
+        // role_create@79 → bind tenant/delete → user_add_role(self).
+        let (storage, _tmp) = role_gate_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let alice = jwt_caller("alice", &["admin"]);
+        let carol = jwt_caller("carol", &["root", "admin", "user"]);
+        let bootstrap = crate::role::Caller::Bootstrap;
+        let nothing = crate::policy::SourceResolver::Nothing;
+        let no_target = crate::policy::TargetResolver::Nothing;
+        tenant
+            .role_create(&alice, "ops", 79)
+            .await
+            .expect("puppet role one level below admin");
+
+        for resource in [
+            "/api/v1/admin/tenant/delete",
+            "/api/v1/admin/tenant/create",
+            "/api/v1/admin/tenant/list",
+            // template evasions: a `{param}` segment covering the root path
+            "/api/v1/admin/tenant/{op}",
+            "/api/v1/admin/{surface}/delete",
+            // leading-slash-less form (inert at runtime, refused anyway)
+            "api/v1/admin/tenant/delete",
+        ] {
+            let err = tenant
+                .policy_create(
+                    &alice, DOMAIN, None, resource, "ops", &nothing, &no_target, false, true,
+                )
+                .await
+                .expect_err("admin must not bind root-powered resources");
+            assert!(is_forbidden(&err), "expected Forbidden for {resource}");
+        }
+
+        // Deny rows are gated the same way: root-powered bindings are
+        // root's to make and root's to remove.
+        let err = tenant
+            .policy_create(
+                &alice,
+                DOMAIN,
+                None,
+                "/api/v1/admin/tenant/delete",
+                "ops",
+                &nothing,
+                &no_target,
+                false,
+                false,
+            )
+            .await
+            .expect_err("deny bindings are root-powered too");
+        assert!(is_forbidden(&err));
+
+        // Resolver shapes do not smuggle the binding past the gate: the
+        // resource template is what decides, whatever source/target say.
+        let err = tenant
+            .policy_create(
+                &alice,
+                DOMAIN,
+                None,
+                "/api/v1/admin/tenant/delete",
+                "ops",
+                &crate::policy::SourceResolver::User,
+                &crate::policy::TargetResolver::FromQuery {
+                    qname: "name".into(),
+                },
+                false,
+                true,
+            )
+            .await
+            .expect_err("resolver shape must not bypass the resource gate");
+        assert!(is_forbidden(&err));
+
+        // A root-level caller may delegate the lifecycle surface downward,
+        // and Bootstrap (the seed path) is unrestricted.
+        tenant
+            .policy_create(
+                &carol,
+                DOMAIN,
+                None,
+                "/api/v1/admin/tenant/list",
+                "ops",
+                &nothing,
+                &no_target,
+                false,
+                true,
+            )
+            .await
+            .expect("root may bind tenant/list to a sub-level role");
+        tenant
+            .policy_create(
+                &bootstrap,
+                DOMAIN,
+                None,
+                "/api/v1/admin/tenant/delete",
+                "ops",
+                &nothing,
+                &no_target,
+                false,
+                true,
+            )
+            .await
+            .expect("bootstrap binds freely");
+
+        // Non-root resources are untouched: admin keeps its own surface.
+        tenant
+            .policy_create(
+                &alice,
+                DOMAIN,
+                None,
+                "/api/v1/admin/user/list",
+                "ops",
+                &nothing,
+                &no_target,
+                false,
+                true,
+            )
+            .await
+            .expect("admin still binds non-root resources downward");
+    }
+
+    #[tokio::test]
+    async fn policy_delete_root_resource_requires_root_power() {
+        // R6 symmetry (G-129): stripping a root-delegated lifecycle
+        // binding is itself an act of root power.
+        let (storage, _tmp) = role_gate_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let alice = jwt_caller("alice", &["admin"]);
+        let carol = jwt_caller("carol", &["root", "admin", "user"]);
+        let nothing = crate::policy::SourceResolver::Nothing;
+        let no_target = crate::policy::TargetResolver::Nothing;
+        tenant.role_create(&alice, "ops", 79).await.expect("role");
+        tenant
+            .policy_create(
+                &carol,
+                DOMAIN,
+                None,
+                "/api/v1/admin/tenant/list",
+                "ops",
+                &nothing,
+                &no_target,
+                false,
+                true,
+            )
+            .await
+            .expect("root delegates tenant/list");
+
+        let err = tenant
+            .policy_delete(&alice, DOMAIN, "/api/v1/admin/tenant/list", None, "ops")
+            .await
+            .expect_err("admin must not strip a root-powered binding");
+        assert!(is_forbidden(&err));
+        tenant
+            .policy_delete(&carol, DOMAIN, "/api/v1/admin/tenant/list", None, "ops")
+            .await
+            .expect("root removes its own delegation");
+    }
+
+    #[tokio::test]
     async fn role_create_is_bound_by_creator_level() {
         let (storage, _tmp) = role_gate_env().await;
         let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
@@ -2043,6 +2213,66 @@ mod tests {
         assert!(
             refresh(&mut tenant, &token).await.is_ok(),
             "reactivation restores the ability to refresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_reloads_roles_so_revocation_propagates() {
+        // G-128: refresh is the only extension point for internal sessions,
+        // so it must re-mint roles from the DB — not copy them from the
+        // presented token — or a demoted admin keeps rotating a stale role
+        // set forever while the policy engine (which reads roles from the
+        // token) keeps honoring it.
+        let (storage, _tmp) = role_gate_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        // alice holds "admin" at mint time (granted by role_gate_env).
+        let token = tenant
+            .authenticate_jwt(&HashSet::new(), TEST_ISSUER, DOMAIN, "alice", 15)
+            .await
+            .expect("token");
+        let minted = crate::utils::validate_token::<JwtData>(
+            &mut tenant,
+            TEST_ISSUER,
+            DOMAIN,
+            &token,
+            crate::utils::ValidateOpts::default(),
+        )
+        .await
+        .expect("decode minted token");
+        assert!(
+            minted.claims.data.roles.contains("admin"),
+            "the mint-time role set must contain the granted admin role"
+        );
+
+        let bootstrap = crate::role::Caller::Bootstrap;
+        tenant
+            .user_del_role(&bootstrap, "alice", "admin")
+            .await
+            .expect("revoke admin");
+        tenant
+            .user_add_role(&bootstrap, "alice", "guest")
+            .await
+            .expect("grant guest");
+
+        let refreshed = refresh(&mut tenant, &token)
+            .await
+            .expect("refresh succeeds for an active user");
+        let rotated = crate::utils::validate_token::<JwtData>(
+            &mut tenant,
+            TEST_ISSUER,
+            DOMAIN,
+            &refreshed,
+            crate::utils::ValidateOpts::default(),
+        )
+        .await
+        .expect("decode refreshed token");
+        assert!(
+            !rotated.claims.data.roles.contains("admin"),
+            "a revoked role must not survive rotation"
+        );
+        assert!(
+            rotated.claims.data.roles.contains("guest"),
+            "a freshly granted role must be picked up on rotation"
         );
     }
 
