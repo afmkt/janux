@@ -210,6 +210,12 @@ impl VHostConfig {
     }
 }
 
+/// Bound on the graceful-shutdown drain (M8). Unbounded, a single hung
+/// connection (slow client, stalled poll) pins the process forever;
+/// container runtimes SIGKILL anyway — 9s stays inside docker's default
+/// 10s stop-grace window so the process exits on its own terms.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(9);
+
 async fn listen_shutdown_signal(handle: ServerHandle) {
     // Wait Shutdown Signal
     let ctrl_c = async {
@@ -243,8 +249,9 @@ async fn listen_shutdown_signal(handle: ServerHandle) {
         _ = terminate => println!("terminate signal received"),
     };
 
-    // Graceful Shutdown Server
-    handle.stop_graceful(None);
+    // Graceful Shutdown Server, bounded (M8): in-flight requests get
+    // SHUTDOWN_GRACE to drain, then connections are force-closed.
+    handle.stop_graceful(Some(SHUTDOWN_GRACE));
 }
 
 enum Acceptors {

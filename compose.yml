@@ -57,6 +57,11 @@ services:
           memory: 2G
 
 volumes:
+  # EXTERNAL volume — create it once before the first `up` (M7):
+  #   docker volume create auth_data
+  # An empty volume inherits /app/data ownership (UID 10001) from the
+  # image on first mount; a volume written by the old root-running image
+  # needs the one-off chown documented in the README.
   auth_data:
     external: true
     name: auth_data

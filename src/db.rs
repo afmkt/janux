@@ -614,7 +614,12 @@ impl Storage {
     pub async fn new_tenant(&self, name: &str) -> Result<RefMut<'_, String, Tenant>> {
         let _guard = self.topology.lock().await;
         let path = self.tenant_path(name)?;
-        if self.router.contains_key(name) {
+        // Duplicate check against the TENANT map (M8). The old check looked
+        // at `router`, which is keyed by DOMAIN: it never caught a real
+        // tenant duplicate (that fell through to the misleading "directory
+        // exists but was not loaded" error below) and wrongly refused a new
+        // tenant whose name merely collided with a registered domain.
+        if self.tenants.contains_key(name) {
             return Err(anyhow::anyhow!("Tenant '{}' already exists", name));
         }
         if path.exists() {
@@ -2417,5 +2422,36 @@ mod tests {
             .expect("mark verified");
         let emails = tenant.all_emails(Some("alice")).await.expect("emails");
         assert!(emails[0].verified);
+    }
+    /// M8: `new_tenant`'s duplicate check must consult the TENANT map. A
+    /// tenant whose name collides with a registered domain is a new tenant
+    /// (`router` is domain-keyed — the old check wrongly refused it), and a
+    /// real duplicate is refused with the honest "already exists" error
+    /// instead of the misleading "directory exists but was not loaded".
+    #[tokio::test]
+    async fn new_tenant_duplicate_check_uses_the_tenant_map() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = crate::db::Storage::init(tmp.path())
+            .await
+            .expect("storage init");
+        storage.new_tenant("alpha").await.expect("alpha");
+        storage.add_domain("beta", "alpha").await.expect("domain");
+
+        // "beta" is a registered domain but not a tenant — must be creatable.
+        storage
+            .new_tenant("beta")
+            .await
+            .expect("a domain name is not a tenant name");
+
+        // A real duplicate is refused with the honest error. (`Tenant` is not
+        // `Debug`, so `expect_err` is unavailable — match instead.)
+        let err = match storage.new_tenant("alpha").await {
+            Ok(_) => panic!("a duplicate tenant must be refused"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("already exists"),
+            "duplicate tenant must report 'already exists', got: {err}"
+        );
     }
 }

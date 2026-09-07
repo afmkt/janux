@@ -35,6 +35,7 @@ With no providers configured in `.env`/`seed.toml`, the corresponding factors si
 ## Docker
 
 ```sh
+docker volume create auth_data      # required once — compose mounts it as an EXTERNAL volume
 docker compose up --build           # builds and tags janux:latest locally
 ```
 
@@ -52,6 +53,11 @@ Point a deployment at a published image via `JANUX_IMAGE` / `JANUX_PULL=always` 
 - Put the server behind a reverse proxy that sets `X-Forwarded-*` and keep `trust_forwarded_headers = true`; if it is directly reachable, set it to `false` (a gitignored `janux.toml` override works well).
 - Run **one instance** per data dir: ceremony state (magic links, OTP codes, challenges, rate limits) is process-local (G-87).
 - Persist the `data/` volume — it holds every tenant schema and the signing keys.
+- The container runs as non-root **UID/GID 10001** (`janux`). An empty `auth_data` volume inherits that ownership on first mount; bind-mounted config (`base.toml`/`seed.toml`) must be readable by UID 10001. Upgrading a volume written by the old root-running image needs a one-off chown:
+  ```sh
+  docker run --rm -v auth_data:/data debian:bookworm-slim chown -R 10001:10001 /data
+  ```
+- Base images are pinned by digest in the `Dockerfile`; bump them deliberately (the tag names sit next to each digest, and the Hub tag pages list the current index digest).
 
 ## Configuration
 
