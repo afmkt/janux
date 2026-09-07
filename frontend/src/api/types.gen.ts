@@ -113,6 +113,15 @@ export type OpenapiKeyKeyEntry = {
     domain: string;
     name: string;
     public: string;
+    /**
+     * G-97: retired keys still verify outstanding tokens and stay in the
+     * JWKS, but never sign new ones and cannot be deleted-while-active.
+     */
+    retired: boolean;
+};
+
+export type OpenapiKeyRetireKey = {
+    name: string;
 };
 
 export type OpenapiOidcExtClientMetaRequest = {
@@ -657,6 +666,35 @@ export type OpenapiKeyAllKeysResponses = {
 
 export type OpenapiKeyAllKeysResponse = OpenapiKeyAllKeysResponses[keyof OpenapiKeyAllKeysResponses];
 
+export type OpenapiKeyRetireKeyData = {
+    body: OpenapiKeyRetireKey;
+    path?: never;
+    query?: never;
+    url: '/api/v1/admin/key/retire';
+};
+
+export type OpenapiKeyRetireKeyErrors = {
+    /**
+     * Bad request, or the domain's last active key
+     */
+    400: OpenapiUtilsApiProblem;
+    /**
+     * Key belongs to another domain
+     */
+    403: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiKeyRetireKeyError = OpenapiKeyRetireKeyErrors[keyof OpenapiKeyRetireKeyErrors];
+
+export type OpenapiKeyRetireKeyResponses = {
+    /**
+     * Success
+     */
+    200: OpenapiUtilsApiResponse____;
+};
+
+export type OpenapiKeyRetireKeyResponse = OpenapiKeyRetireKeyResponses[keyof OpenapiKeyRetireKeyResponses];
+
 export type OpenapiOpsMetricsData = {
     body?: never;
     path?: never;
@@ -845,7 +883,7 @@ export type OpenapiPolicyAddPolicyErrors = {
      */
     400: OpenapiUtilsApiProblem;
     /**
-     * Level gate refused the role
+     * Level or resource-power gate refused
      */
     403: OpenapiUtilsApiProblem;
 };
@@ -874,7 +912,7 @@ export type OpenapiPolicyDeletePolicyErrors = {
      */
     400: OpenapiUtilsApiProblem;
     /**
-     * Level gate refused the role
+     * Level or resource-power gate refused
      */
     403: OpenapiUtilsApiProblem;
 };

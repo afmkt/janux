@@ -347,6 +347,11 @@ pub fn api() -> Router {
                         .hoop(crate::audit::audit)
                         .post(crate::key::delete_key),
                 )
+                .push(
+                    Router::with_path("key/retire")
+                        .hoop(crate::audit::audit)
+                        .post(crate::key::retire_key),
+                )
                 // totp
                 .push(Router::with_path("totp/list").post(crate::totp::list_totp))
                 .push(

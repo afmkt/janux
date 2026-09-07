@@ -963,6 +963,7 @@ mod tests {
             public: kp.public_key_pem().into_bytes(),
             private: kp.serialize_pem().into_bytes(),
             domain_id: "example.com".to_string(),
+            retired: false,
             domain: Default::default(),
         }
     }

@@ -433,6 +433,7 @@ fn seed_policy_rows(domain: &str) -> String {
         "/api/v1/admin/key/list",
         "/api/v1/admin/key/create",
         "/api/v1/admin/key/delete",
+        "/api/v1/admin/key/retire",
         "/api/v1/admin/totp/list",
         "/api/v1/admin/totp/remove",
         "/api/v1/admin/oauth2client/list",

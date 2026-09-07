@@ -27,6 +27,14 @@ pub struct Key {
     pub private: Vec<u8>,
     #[index]
     pub domain_id: String,
+    /// G-97: a retired key stops SIGNING (it is never seated as a domain's
+    /// current key) but keeps VERIFYING — the row stays resolvable by `kid`
+    /// and published in the JWKS so outstanding tokens drain naturally
+    /// instead of dying at deletion. Deletion requires retirement first,
+    /// which turns "invalidate every outstanding token" from an accident
+    /// into a deliberate post-drain act.
+    #[default(false)]
+    pub retired: bool,
     #[belongs_to(key = domain_id, references = id)]
     pub domain: Deferred<Domain>,
 }
@@ -51,19 +59,22 @@ impl Tenant {
     /// when issuing new JWTs.
     ///
     /// A domain may have multiple keys (e.g. during rotation), but signing only needs
-    /// one. Any key in the DB can sign tokens — the `kid` carried by each JWT header
-    /// uniquely routes verification to the correct key regardless of which one this
-    /// cache holds.
+    /// one. Any non-retired key in the DB can sign tokens — the `kid` carried by each
+    /// JWT header uniquely routes verification to the correct key regardless of which
+    /// one this cache holds (retired keys still verify, G-97).
     ///
     /// Since iteration order of `all_keys()` is nondeterministic, if a domain has
-    /// multiple keys the "active" key is chosen arbitrarily. This is intentional:
-    /// any key works for signing. To remove a key from consideration entirely,
-    /// delete it from the database.
+    /// multiple signable keys the "active" key is chosen arbitrarily. This is
+    /// intentional: any of them works for signing. To remove a key from signing
+    /// consideration, retire it; to remove it entirely (invalidating its outstanding
+    /// tokens), retire it, let the tokens drain, then delete it.
     pub async fn active_key_cache(&mut self) -> Result<DashMap<String, Key>> {
         let ret = DashMap::new();
         let ks = self.all_keys().await?;
         for k in ks {
-            ret.insert(k.domain_id.clone(), k);
+            if !k.retired {
+                ret.insert(k.domain_id.clone(), k);
+            }
         }
         Ok(ret)
     }
@@ -135,8 +146,66 @@ impl Tenant {
         Ok(Page::from_rows(rows, limit, offset))
     }
 
+    /// Retire a signing key (G-97): stops signing, keeps verifying.
+    ///
+    /// The row stays in the DB, so `jwt_decode`'s `kid` lookup and the JWKS
+    /// keep resolving it and outstanding tokens live out their natural
+    /// lifetime. Refuses to retire a domain's last signable key — that
+    /// would leave `current_key` empty and the domain unable to mint any
+    /// token; create the replacement first. Idempotent: retiring an
+    /// already-retired key is a no-op.
+    pub async fn key_retire(&mut self, name: &str) -> Result<()> {
+        let k = self.key(name).await?;
+        if k.retired {
+            return Ok(());
+        }
+        let signable_siblings = self
+            .all_keys()
+            .await?
+            .into_iter()
+            .filter(|key| key.domain_id == k.domain_id && !key.retired && key.id != k.id)
+            .count();
+        if signable_siblings == 0 {
+            return Err(anyhow::anyhow!(
+                "cannot retire the only active signing key of domain '{}' — create its replacement first",
+                k.domain_id
+            ));
+        }
+        Key::update_by_id(name)
+            .retired(true)
+            .exec(&mut self.database)
+            .await
+            .map_err(Into::<anyhow::Error>::into)?;
+        // Re-seat the in-memory signer if it was the retired key. The
+        // guard above guarantees a signable sibling exists. (Compute the
+        // flag before inserting: a DashMap `Ref` held across `insert` on
+        // the same shard would deadlock.)
+        let seated_is_target = self.keys.get(&k.domain_id).is_some_and(|r| r.id == k.id);
+        if seated_is_target
+            && let Ok(remaining) = self.all_keys().await
+            && let Some(new_key) = remaining
+                .into_iter()
+                .find(|key| key.domain_id == k.domain_id && !key.retired)
+        {
+            self.keys.insert(k.domain_id, new_key);
+        }
+        Ok(())
+    }
+
+    /// Delete a key row. G-97: refuses ACTIVE keys — deletion immediately
+    /// invalidates every outstanding token signed by the key (`jwt_decode`
+    /// resolves `kid` against the row), so it must be preceded by
+    /// retirement and the resulting drain. Deleting a retired key is the
+    /// deliberate end of the rotation lifecycle: create the replacement →
+    /// retire the old key → let outstanding tokens expire → delete.
     pub async fn key_delete(&mut self, name: &str) -> Result<()> {
         let k = self.key(name).await?;
+        if !k.retired {
+            return Err(anyhow::anyhow!(
+                "refusing to delete active signing key '{}' — retire it first so outstanding tokens can drain (deleting it invalidates every token it signed)",
+                name
+            ));
+        }
 
         // Remove from persistent storage
         if let Err(e) = Key::delete_by_id(&mut self.database, name).await {
@@ -146,17 +215,19 @@ impl Tenant {
                 e
             ));
         }
-        if let Some((s, k)) = self.keys.remove(&k.domain_id) {
-            assert!(s == k.domain_id);
-            // Re-seat the active-key cache from the remaining rows of this
-            // domain. Queried directly instead of via `domain.keys.get()`:
-            // the deferred relation panics ("deferred field not loaded")
-            // on a plain `Domain::get_by_id` row — deleting a domain's
-            // cached active key used to crash the request task.
+        // A retired key is never the seated signer (retire re-seats), but
+        // defend the invariant anyway: if the seat does point at the
+        // deleted row, drop it and re-seat from the remaining SIGNABLE
+        // rows of this domain. Queried directly instead of via
+        // `domain.keys.get()`: the deferred relation panics ("deferred
+        // field not loaded") on a plain `Domain::get_by_id` row.
+        let seated_is_target = self.keys.get(&k.domain_id).is_some_and(|r| r.id == k.id);
+        if seated_is_target {
+            self.keys.remove(&k.domain_id);
             if let Ok(remaining) = self.all_keys().await
                 && let Some(new_key) = remaining
                     .into_iter()
-                    .find(|key| key.domain_id == k.domain_id)
+                    .find(|key| key.domain_id == k.domain_id && !key.retired)
             {
                 self.keys.insert(k.domain_id, new_key);
             }
@@ -170,6 +241,9 @@ pub struct KeyEntry {
     pub name: String,
     pub public: String,
     pub domain: String,
+    /// G-97: retired keys still verify outstanding tokens and stay in the
+    /// JWKS, but never sign new ones and cannot be deleted-while-active.
+    pub retired: bool,
 }
 
 #[endpoint(
@@ -200,6 +274,7 @@ pub async fn all_keys(req: &mut Request, depot: &mut Depot, res: &mut Response) 
                 name: entry.id,
                 public,
                 domain: entry.domain_id,
+                retired: entry.retired,
             }
         });
         res.status_code(StatusCode::OK);
@@ -288,6 +363,58 @@ pub struct DeleteKey {
     pub name: String,
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct RetireKey {
+    pub name: String,
+}
+
+#[endpoint(
+    summary = "Retire a signing key (stops signing, keeps verifying until outstanding tokens drain)",
+    request_body = RetireKey,
+    responses(
+        (status_code = 200, description = "Success", body = ApiResponse<()>),
+        (status_code = 400, description = "Bad request, or the domain's last active key", body = ApiProblem),
+        (status_code = 403, description = "Key belongs to another domain", body = ApiProblem)
+    )
+)]
+pub async fn retire_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    if let Some(body) = crate::utils::extract::<RetireKey>(req, None).await {
+        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let domain = crate::utils::get_domain(req, state).unwrap_or("");
+        if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
+            // H9 (same class as delete): one domain's admin must not
+            // retire another domain's signing keys. Fully qualified call —
+            // `tenant.key` would resolve to the DashMap guard's method.
+            match Tenant::key(&mut tenant, &body.name).await {
+                Ok(key) if key.domain_id != domain => {
+                    res.status_code(StatusCode::FORBIDDEN);
+                    res.render(Json(ApiProblem::forbidden()));
+                    return;
+                }
+                Ok(_) => match tenant.key_retire(&body.name).await {
+                    Ok(_) => {
+                        res.status_code(StatusCode::OK);
+                        res.render(Json(ApiResponse::ok(())));
+                        return;
+                    }
+                    // The last-active-key refusal carries the actionable
+                    // message ("create its replacement first") — surface it
+                    // instead of the generic parse error.
+                    Err(e) => {
+                        res.status_code(StatusCode::BAD_REQUEST);
+                        res.render(Json(ApiProblem::validation_error(&e.to_string())));
+                        return;
+                    }
+                },
+                Err(_) => {}
+            }
+        }
+    };
+    let err = ApiProblem::validation_error("Failed to parse request body");
+    res.status_code(StatusCode::BAD_REQUEST);
+    res.render(Json(err))
+}
+
 #[endpoint(
     summary = "Remove a scope from tenant",
     request_body = DeleteKey,
@@ -311,14 +438,20 @@ pub async fn delete_key(req: &mut Request, depot: &mut Depot, res: &mut Response
                     res.render(Json(ApiProblem::forbidden()));
                     return;
                 }
-                Ok(_) => {
-                    if tenant.key_delete(&body.name).await.is_ok() {
-                        let resp = ApiResponse::ok(());
+                Ok(_) => match tenant.key_delete(&body.name).await {
+                    Ok(_) => {
                         res.status_code(StatusCode::OK);
-                        res.render(Json(resp));
+                        res.render(Json(ApiResponse::ok(())));
                         return;
                     }
-                }
+                    // G-97: the refuse-active-key message ("retire it
+                    // first") is the actionable part — surface it.
+                    Err(e) => {
+                        res.status_code(StatusCode::BAD_REQUEST);
+                        res.render(Json(ApiProblem::validation_error(&e.to_string())));
+                        return;
+                    }
+                },
                 Err(_) => {}
             }
         }
@@ -365,6 +498,9 @@ pub async fn jwks_endpoint(req: &mut Request, depot: &mut Depot, res: &mut Respo
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
         && let Ok(keys) = tenant.all_keys().await
     {
+        // Retired keys stay published (G-97): RPs need them to verify
+        // outstanding tokens during the drain window between retirement
+        // and deletion.
         for key_model in keys {
             // Convert stored PEM public key into a jsonwebtoken JWK
             if let Ok(public_pem) = key_model.public_pem()
@@ -484,6 +620,7 @@ mod tests {
             Router::new()
                 .hoop(salvo::affix_state::inject(state))
                 .push(Router::with_path("key/create").post(add_key))
+                .push(Router::with_path("key/retire").post(retire_key))
                 .push(Router::with_path("key/delete").post(delete_key)),
         )
     }
@@ -531,6 +668,7 @@ mod tests {
                 .hoop(salvo::affix_state::inject(state))
                 .hoop(injector)
                 .push(Router::with_path("key/create").post(add_key))
+                .push(Router::with_path("key/retire").post(retire_key))
                 .push(Router::with_path("key/delete").post(delete_key)),
         )
     }
@@ -669,20 +807,24 @@ mod tests {
     }
 
     /// regression H9 (delete side): one domain's admin surface must not
-    /// delete another domain's signing key.
+    /// delete another domain's signing key. G-97: deletion of an ACTIVE
+    /// key is refused everywhere — the own-domain happy path now runs
+    /// retire-then-delete.
     #[tokio::test]
     async fn key_delete_refuses_cross_domain_keys() {
         let (state, _tmp) = key_test_env().await;
         let service = key_service(state.clone());
 
-        let status = post_key(
-            &service,
-            DOMAIN_B,
-            "key/create",
-            &serde_json::json!({ "domain": "", "name": "key-b" }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
+        for name in ["key-b", "key-b2"] {
+            let status = post_key(
+                &service,
+                DOMAIN_B,
+                "key/create",
+                &serde_json::json!({ "domain": "", "name": name }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
 
         // Deleting B's key through A's authenticated domain: refused.
         let status = post_key(
@@ -694,7 +836,18 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
 
-        // The key survives; its own domain can delete it.
+        // Retiring B's key through A's authenticated domain: refused too.
+        let status = post_key(
+            &service,
+            DOMAIN_A,
+            "key/retire",
+            &serde_json::json!({ "name": "key-b2" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // The key survives; its own domain deletes it only after
+        // retirement (G-97: an active key refuses deletion).
         let mut tenant = state.storage.tenant_by_domain(DOMAIN_A).expect("tenant");
         assert!(Tenant::key(&mut tenant, "key-b").await.is_ok());
         drop(tenant);
@@ -705,6 +858,126 @@ mod tests {
             &serde_json::json!({ "name": "key-b" }),
         )
         .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "an active key must refuse deletion"
+        );
+        let status = post_key(
+            &service,
+            DOMAIN_B,
+            "key/retire",
+            &serde_json::json!({ "name": "key-b" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "B has a second signable key");
+        let status = post_key(
+            &service,
+            DOMAIN_B,
+            "key/delete",
+            &serde_json::json!({ "name": "key-b" }),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    /// G-97 lifecycle: retirement stops SIGNING but keeps VERIFYING — the
+    /// row stays resolvable by `kid` so outstanding tokens drain instead
+    /// of dying — and only a retired key deletes.
+    #[tokio::test]
+    async fn key_retire_drains_then_deletes() {
+        let (state, _tmp) = key_test_env().await;
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN_A).expect("tenant");
+        tenant.key_create(DOMAIN_A, "key-a1").await.expect("k1");
+        tenant.key_create(DOMAIN_A, "key-a2").await.expect("k2");
+
+        // An active key refuses deletion — the old accident that
+        // invalidated every outstanding token of the domain.
+        let err = tenant
+            .key_delete("key-a1")
+            .await
+            .expect_err("active keys must refuse deletion");
+        assert!(err.to_string().contains("retire"), "{err}");
+
+        // A token signed by key-a1 BEFORE retirement...
+        let k1 = Tenant::key(&mut tenant, "key-a1").await.expect("row");
+        let token = crate::jwt::jwt_authenticate(
+            "http://a.local",
+            "alice",
+            &crate::db::JwtData {
+                user: uuid::Uuid::nil().to_string(),
+                username: "alice".into(),
+                domain: DOMAIN_A.into(),
+                mfa: std::collections::HashSet::new(),
+                roles: std::collections::HashSet::new(),
+            },
+            &k1,
+            15,
+            crate::jwt::JwtOidcParams {
+                client_id: DOMAIN_A.into(),
+                nonce: None,
+                amr: None,
+                acr: None,
+                access_token: None,
+                auth_time: None,
+            },
+        )
+        .expect("sign with key-a1");
+
+        tenant.key_retire("key-a1").await.expect("retire");
+        let k1 = Tenant::key(&mut tenant, "key-a1").await.expect("row");
+        assert!(k1.retired, "the row is marked retired");
+        assert_eq!(
+            tenant.current_key(DOMAIN_A).expect("signer").id,
+            "key-a2",
+            "a retired key never signs again"
+        );
+
+        // ...still VERIFIES through the kid lookup while retired.
+        crate::jwt::jwt_decode::<crate::db::JwtData>(
+            &token,
+            crate::jwt::VERIFICATION_GRACE_MINUTES,
+            &mut tenant,
+        )
+        .await
+        .expect("retired keys keep verifying outstanding tokens");
+
+        // Retirement is idempotent; retired keys delete cleanly.
+        tenant.key_retire("key-a1").await.expect("retire again");
+        tenant.key_delete("key-a1").await.expect("delete retired");
+        assert!(Tenant::key(&mut tenant, "key-a1").await.is_err());
+    }
+
+    /// G-97 guard: a domain must never lose its last signable key —
+    /// retirement refuses, and retiring the SEATED key re-lands the seat
+    /// on a signable sibling.
+    #[tokio::test]
+    async fn key_retire_refuses_the_last_signable_key() {
+        let (state, _tmp) = key_test_env().await;
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN_B).expect("tenant");
+        tenant.key_create(DOMAIN_B, "key-b1").await.expect("k1");
+        let err = tenant
+            .key_retire("key-b1")
+            .await
+            .expect_err("the last signable key must refuse retirement");
+        assert!(err.to_string().contains("replacement"), "{err}");
+
+        tenant.key_create(DOMAIN_B, "key-b2").await.expect("k2");
+        // key_create seats the newest key; retiring the seated key must
+        // re-seat the remaining signable sibling.
+        assert_eq!(tenant.current_key(DOMAIN_B).expect("signer").id, "key-b2");
+        tenant
+            .key_retire("key-b2")
+            .await
+            .expect("retire the seated key");
+        assert_eq!(
+            tenant.current_key(DOMAIN_B).expect("signer").id,
+            "key-b1",
+            "the seat re-lands on the signable sibling"
+        );
+        assert!(
+            tenant.key_retire("key-b1").await.is_err(),
+            "b1 is now the last signable key"
+        );
     }
 }

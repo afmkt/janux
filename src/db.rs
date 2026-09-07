@@ -175,6 +175,14 @@ pub trait TokenPayload {
     fn bound_domain(&self) -> Option<&str>;
     fn typ(&self) -> Option<&str>;
     fn jwt_data(&self) -> Option<&JwtData>;
+    /// The `client:<id>` username convention machine principals
+    /// (`client_credentials`) carry from mint time. `validate_token` uses it
+    /// to scope the client-deletion revocation-marker check (G-123) to
+    /// machine tokens only, so user sessions never pay the extra store
+    /// lookup.
+    fn machine_username(&self) -> Option<&str> {
+        None
+    }
 }
 
 impl TokenPayload for JwtData {
@@ -187,6 +195,9 @@ impl TokenPayload for JwtData {
     fn jwt_data(&self) -> Option<&JwtData> {
         Some(self)
     }
+    fn machine_username(&self) -> Option<&str> {
+        self.username.strip_prefix("client:")
+    }
 }
 
 impl TokenPayload for serde_json::Value {
@@ -198,6 +209,11 @@ impl TokenPayload for serde_json::Value {
     }
     fn jwt_data(&self) -> Option<&JwtData> {
         None
+    }
+    fn machine_username(&self) -> Option<&str> {
+        self.get("username")
+            .and_then(|v| v.as_str())
+            .and_then(|u| u.strip_prefix("client:"))
     }
 }
 
@@ -506,10 +522,44 @@ async fn migrate_email_verified(path: &Path) {
     }
 }
 
+/// G-97 micro-migration: tenant DBs created before `Key.retired` lack the
+/// column, and toasty's `push_schema` only issues `CREATE TABLE` (never
+/// `ALTER`), so an old DB would fail every key query with "no such column".
+/// Same shape and tolerance rules as `migrate_email_verified`: fresh DBs
+/// get the column from `push_schema`, pre-G-97 DBs get it added with the
+/// honest default (every existing row keeps signing — nothing is retired
+/// retroactively), post-G-97 DBs tolerate the duplicate.
+async fn migrate_key_retired(path: &Path) {
+    async fn run(path: &Path) -> anyhow::Result<()> {
+        let path_str = path.display().to_string();
+        let db = turso::Builder::new_local(&path_str).build().await?;
+        let conn = db.connect()?;
+        conn.execute(
+            "ALTER TABLE keys ADD COLUMN retired BOOLEAN NOT NULL DEFAULT FALSE",
+            (),
+        )
+        .await?;
+        Ok(())
+    }
+    if let Err(e) = run(path).await {
+        let msg = e.to_string();
+        let tolerated = msg.contains("duplicate column")
+            || msg.contains("already exists")
+            || msg.contains("no such table");
+        if !tolerated {
+            tracing::warn!(
+                db = %path.display(),
+                "key `retired` column migration skipped: {msg}"
+            );
+        }
+    }
+}
+
 async fn connect_tenant(dir: &Path) -> toasty::Result<toasty::Db> {
     ensure_dir(dir).await?;
     let path = PathBuf::from(dir).join("janux.db");
     migrate_email_verified(&path).await;
+    migrate_key_retired(&path).await;
     let driver = toasty_driver_turso::Turso::file(path).concurrent_writes();
     info!("create tenant {}", dir.display());
     let db = toasty::Db::builder()
@@ -1201,6 +1251,7 @@ mod tests {
             public: kp.public_key_pem().into_bytes(),
             private: pem.clone().into_bytes(),
             domain_id: DOMAIN.to_string(),
+            retired: false,
             domain: Default::default(),
         };
         assert_eq!(
@@ -2675,6 +2726,72 @@ mod tests {
         let emails = tenant.all_emails(Some("alice")).await.expect("emails");
         assert!(emails[0].verified);
     }
+
+    /// G-97 micro-migration: a tenant DB created before `Key.retired`
+    /// gains the column on reload, the legacy row comes back NOT retired
+    /// (nothing is retired retroactively — it keeps signing), and the
+    /// key queries + signer seat work on the migrated schema.
+    #[tokio::test]
+    async fn legacy_tenant_db_gains_key_retired_column_on_reload() {
+        // Signing keys are encrypted at rest (H2); the process-wide
+        // encryption key is first-call-wins across test envs.
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // First boot on the current schema; create a signing key.
+        {
+            let storage = crate::db::Storage::init(tmp.path()).await.expect("init");
+            storage.new_tenant("legacy").await.expect("tenant");
+            storage
+                .add_domain("localhost", "legacy")
+                .await
+                .expect("domain");
+            let mut tenant = storage.tenant_by_id("legacy").expect("tenant");
+            tenant
+                .key_create("localhost", "key1")
+                .await
+                .expect("signing key");
+        }
+
+        // Simulate a pre-G-97 database: drop the column behind toasty's back.
+        let db_path = tmp
+            .path()
+            .join("tenants")
+            .join("legacy")
+            .join("janux.db")
+            .display()
+            .to_string();
+        {
+            let db = turso::Builder::new_local(&db_path)
+                .build()
+                .await
+                .expect("open legacy db");
+            let conn = db.connect().expect("connect");
+            conn.execute("ALTER TABLE keys DROP COLUMN retired", ())
+                .await
+                .expect("drop column");
+        }
+
+        // Reload: the micro-migration must restore the column and the
+        // legacy row must come back signable.
+        let storage = crate::db::Storage::init(tmp.path())
+            .await
+            .expect("reload storage");
+        let mut tenant = storage.tenant_by_id("legacy").expect("tenant");
+        // Fully qualified: `tenant.key` would resolve to the DashMap
+        // guard's 0-arg `key()`, not `Tenant::key` (same trap as the
+        // delete_key handler's H9 comment).
+        let key = Tenant::key(&mut tenant, "key1")
+            .await
+            .expect("key query works after migration");
+        assert!(!key.retired, "legacy rows keep signing");
+        assert_eq!(
+            tenant.current_key("localhost").expect("seated").id,
+            "key1",
+            "the migrated row is seated as the domain signer"
+        );
+    }
+
     /// M8: `new_tenant`'s duplicate check must consult the TENANT map. A
     /// tenant whose name collides with a registered domain is a new tenant
     /// (`router` is domain-keyed — the old check wrongly refused it), and a

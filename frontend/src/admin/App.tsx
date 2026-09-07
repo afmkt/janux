@@ -28,6 +28,7 @@ import {
   openapiKeyAddKey,
   openapiKeyAllKeys,
   openapiKeyDeleteKey,
+  openapiKeyRetireKey,
   openapiIdpDeleteOauth2Client,
   openapiIdpListOauth2Clients,
   openapiIdpNewOauth2Client,
@@ -76,6 +77,7 @@ interface KeyRow {
   domain: string
   name: string
   public: string
+  retired: boolean
 }
 
 interface ClientRow {
@@ -861,6 +863,16 @@ function KeysTab() {
     void load()
   }
 
+  const retire = async (keyName: string) => {
+    setBusy(true)
+    setError(null)
+    const { error: err, response } = await openapiKeyRetireKey({ body: { name: keyName } })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    void load()
+  }
+
   const remove = async (keyName: string) => {
     setBusy(true)
     setError(null)
@@ -896,6 +908,7 @@ function KeysTab() {
           <Table.Tr>
             <Table.Th>Name</Table.Th>
             <Table.Th>Domain</Table.Th>
+            <Table.Th>Status</Table.Th>
             <Table.Th>Actions</Table.Th>
           </Table.Tr>
         </Table.Thead>
@@ -904,10 +917,19 @@ function KeysTab() {
             <Table.Tr key={`${k.domain}-${k.name}`}>
               <Table.Td>{k.name}</Table.Td>
               <Table.Td>{k.domain}</Table.Td>
+              <Table.Td>{k.retired ? 'Retired' : 'Signing'}</Table.Td>
               <Table.Td>
-                <Button size="xs" color="red" variant="default" disabled={busy} onClick={() => remove(k.name)}>
-                  Delete
-                </Button>
+                {/* G-97 lifecycle: retire stops signing but keeps verifying
+                    outstanding tokens; only a retired key can be deleted. */}
+                {k.retired ? (
+                  <Button size="xs" color="red" variant="default" disabled={busy} onClick={() => remove(k.name)}>
+                    Delete
+                  </Button>
+                ) : (
+                  <Button size="xs" color="orange" variant="default" disabled={busy} onClick={() => retire(k.name)}>
+                    Retire
+                  </Button>
+                )}
               </Table.Td>
             </Table.Tr>
           ))}

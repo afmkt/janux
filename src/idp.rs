@@ -373,6 +373,15 @@ impl crate::db::Tenant {
     /// Domain-scoped: a client registered on another domain of the same
     /// tenant is "not found" here — one domain's admin surface must not
     /// deactivate another domain's relying parties.
+    ///
+    /// G-123: deactivation alone only stops ISSUANCE
+    /// (`authenticate_client` rejects inactive clients) — outstanding
+    /// machine tokens are stateless 90-day JWTs, so the delete also
+    /// poisons the `machine_client:{uuid}` revocation marker and
+    /// `validate_token` rejects every live principal of this client from
+    /// then on. Order matters: deactivate first, then poison — a poison
+    /// failure can never leave an ACTIVE client whose tokens are rejected,
+    /// and the error is surfaced so the admin can retry (idempotently).
     pub async fn oauth2client_delete(&mut self, domain: &str, id: &str) -> anyhow::Result<()> {
         let c = OAuth2Client::get_by_id(&mut self.database, id)
             .await
@@ -384,8 +393,16 @@ impl crate::db::Tenant {
             .active(false)
             .exec(&mut self.database)
             .await
-            .map(|_| ())
-            .map_err(Into::into)
+            .map_err(Into::<anyhow::Error>::into)?;
+        crate::utils::poison_client_machine_tokens(&c.uuid.to_string())
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "client '{}' deactivated, but machine-token revocation failed: {e}",
+                    id
+                )
+            })?;
+        Ok(())
     }
 
     /// Extended OIDC metadata for a client ([`ClientMeta`]), if any was

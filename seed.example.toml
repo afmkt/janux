@@ -106,6 +106,7 @@ policies = [
     { domain = "localhost", resource = "/api/v1/admin/key/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/key/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/key/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/key/retire", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
 
     # ── admin: TOTP administration ────────────────────────────────────
     { domain = "localhost", resource = "/api/v1/admin/totp/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },

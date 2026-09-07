@@ -90,6 +90,7 @@ pub const STANDARD_ADMIN_POLICIES: &[(&str, &str)] = &[
     ("/api/v1/admin/key/list", "admin"),
     ("/api/v1/admin/key/create", "admin"),
     ("/api/v1/admin/key/delete", "admin"),
+    ("/api/v1/admin/key/retire", "admin"),
     // admin: TOTP administration
     ("/api/v1/admin/totp/list", "admin"),
     ("/api/v1/admin/totp/remove", "admin"),

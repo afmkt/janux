@@ -395,7 +395,7 @@ async fn require_active_user(tenant: &mut crate::db::Tenant, user_id: &str) -> R
 /// Long lifetime for machine principals: IdPs paste one static
 /// bearer into their SCIM config and never refresh, so expiry is a
 /// backstop and `/revoke` is the off switch.
-const CLIENT_CREDENTIALS_TOKEN_LIFETIME_MINUTES: i32 = 90 * 24 * 60;
+pub(crate) const CLIENT_CREDENTIALS_TOKEN_LIFETIME_MINUTES: i32 = 90 * 24 * 60;
 
 /// The scope vocabulary of the `client_credentials` grant. `scim` is the
 /// machine-provisioning scope: it maps to the builtin `scim` role. It is
@@ -3257,6 +3257,28 @@ pub struct RevokeRequest {
     pub client_secret: Option<String>,
 }
 
+/// G-130: machine (`client_credentials`) tokens carry no `client_id` in
+/// their data payload — `JwtData` has no such field. Their client binding
+/// lives in `aud`, corroborated by the mint-time `client:<id>` username
+/// convention; both sit inside the signed envelope, so the presenter cannot
+/// forge them. `/revoke` and `/introspect` bind the calling client through
+/// `data.client_id` first and fall back to this shape, which is what makes
+/// the 90-day SCIM principals revocable and introspectable by their own
+/// client — the documented "off switch" (`CLIENT_CREDENTIALS_TOKEN_LIFETIME_
+/// MINUTES`) was a silent no-op without it.
+fn machine_token_belongs_to(data: &serde_json::Value, aud: &str, client_id: &str) -> bool {
+    data.get("client_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .is_empty()
+        && aud == client_id
+        && data
+            .get("username")
+            .and_then(|v| v.as_str())
+            .and_then(|u| u.strip_prefix("client:"))
+            == Some(client_id)
+}
+
 #[endpoint(
     summary = "Token revocation endpoint (RFC 7009)",
     request_body = RevokeRequest,
@@ -3374,9 +3396,11 @@ pub async fn revoke(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 
     // STEP 3: a token issued to another client (or another issuer) is treated
     // as not found — a client MUST NOT revoke another client's token, and the
-    // response must not leak that the token exists (RFC 7009 §2.1).
+    // response must not leak that the token exists (RFC 7009 §2.1). Machine
+    // tokens bind through `aud` + the username convention (G-130).
     let token_client_id = data.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
-    if tkn.claims.iss != issuer || token_client_id != client.id.as_str() {
+    let machine_for_caller = machine_token_belongs_to(data, &tkn.claims.aud, &client.id);
+    if tkn.claims.iss != issuer || (token_client_id != client.id.as_str() && !machine_for_caller) {
         revoke_ok(res);
         return;
     }
@@ -3646,9 +3670,11 @@ pub async fn introspect(req: &mut Request, depot: &mut Depot, res: &mut Response
     // STEP 3: a token issued to another client is reported as inactive —
     // the caller must be the token's audience (RFC 7662 §2.1), and the
     // response must not leak that someone else's token exists. (The issuer
-    // was already matched by the validation primitive.)
+    // was already matched by the validation primitive.) Machine tokens bind
+    // through `aud` + the username convention (G-130).
     let token_client_id = data.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
-    if token_client_id != client.id.as_str() {
+    let machine_for_caller = machine_token_belongs_to(data, &decision.claims.aud, &client.id);
+    if token_client_id != client.id.as_str() && !machine_for_caller {
         introspect_ok(res, IntrospectResponse::default());
         return;
     }
@@ -3677,12 +3703,18 @@ pub async fn introspect(req: &mut Request, depot: &mut Depot, res: &mut Response
         }
     }
 
-    // STEP 5: RFC 7662 §2.2 — active=true with the token's metadata.
+    // STEP 5: RFC 7662 §2.2 — active=true with the token's metadata. For a
+    // machine token the reported client_id is the caller's (the data payload
+    // carries none; `aud` holds it — G-130).
     introspect_ok(
         res,
         IntrospectResponse {
             active: true,
-            client_id: Some(token_client_id.to_string()),
+            client_id: Some(if machine_for_caller {
+                client.id.clone()
+            } else {
+                token_client_id.to_string()
+            }),
             scope: data
                 .get("scope")
                 .and_then(|v| v.as_str())
@@ -4779,6 +4811,207 @@ mod tests {
             "RFC 7009 §2.2: invalid tokens get 200"
         );
         assert!(body.is_empty());
+    }
+
+    // ── machine tokens on /revoke + /introspect (G-130) and client
+    //    deletion (G-123) ─────────────────────────────────────────────────
+
+    /// Create the machine client and mint a real token for it through the
+    /// /token endpoint (the exact shape production mints: `sub` = service
+    /// uuid, `aud` = client id, `username` = `client:<id>`, no
+    /// `data.client_id`). Returns `(token, client_uuid)`.
+    async fn mint_scim_machine_token(state: &crate::server::ServerState) -> (String, String) {
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant
+                .oauth2client_create(
+                    "localhost",
+                    "scim-client",
+                    "scim-secret",
+                    &[],
+                    "client_credentials",
+                    "",
+                    "client_secret_post",
+                    "scim",
+                )
+                .await
+                .expect("client");
+        }
+        let service = token_service(state.clone());
+        let (status, body) = post_token(
+            &service,
+            "grant_type=client_credentials&client_id=scim-client&client_secret=scim-secret&scope=scim",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "machine token must mint: {body}");
+        // NB: not `token` — the `#[endpoint]` macro generates a unit struct
+        // with the handler's name, and `let token = …` would parse as a
+        // unit-struct pattern, not a binding.
+        let machine = body["access_token"]
+            .as_str()
+            .expect("access_token")
+            .to_string();
+        let uuid = {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant
+                .oauth2client_get("scim-client")
+                .await
+                .expect("client")
+                .uuid
+                .to_string()
+        };
+        (machine, uuid)
+    }
+
+    /// regression G-130: machine tokens carry no `data.client_id`, so the
+    /// old binding check made /revoke a SILENT NO-OP for exactly the
+    /// 90-day principals whose documented off switch it is. The owning
+    /// client's revocation must be recorded and enforced.
+    #[tokio::test]
+    async fn revoke_machine_token_by_its_own_client_kills_it() {
+        let (state, _tmp) = revoke_test_env().await;
+        let (machine, _uuid) = mint_scim_machine_token(&state).await;
+        let service = revoke_service(state.clone());
+
+        let (status, body) = post_revoke(
+            &service,
+            &format!("token={machine}&client_id=scim-client&client_secret=scim-secret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.is_empty());
+        assert!(
+            crate::jwt::InvalidJwt::global().is_valid(&machine).await,
+            "the machine token must be recorded in the InvalidJwt store"
+        );
+
+        let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+        let err = match crate::utils::validate_token::<crate::db::JwtData>(
+            &mut tenant,
+            TEST_ISSUER,
+            "localhost",
+            &machine,
+            crate::utils::ValidateOpts::default(),
+        )
+        .await
+        {
+            Err(e) => e,
+            Ok(_) => panic!("a revoked machine token must not validate"),
+        };
+        assert!(matches!(err, crate::utils::TokenReject::Revoked));
+    }
+
+    /// G-130 boundary: the aud+username fallback binds ONLY the owning
+    /// client — a different client's revocation attempt stays a no-op.
+    #[tokio::test]
+    async fn revoke_machine_token_by_foreign_client_is_a_noop() {
+        let (state, _tmp) = revoke_test_env().await;
+        let (machine, _uuid) = mint_scim_machine_token(&state).await;
+        let service = revoke_service(state.clone());
+
+        let (status, _) = post_revoke(
+            &service,
+            &format!("token={machine}&client_id=client-b&client_secret=secret-b"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "RFC 7009 §2.1: never leak");
+        assert!(
+            !crate::jwt::InvalidJwt::global().is_valid(&machine).await,
+            "a foreign client must not revoke another client's machine token"
+        );
+    }
+
+    /// regression G-130 (introspection side): the owning client sees its
+    /// machine token active with the right client_id; a foreign client
+    /// sees nothing (RFC 7662 §2.1 audience rule).
+    #[tokio::test]
+    async fn introspect_machine_token_binds_to_its_client() {
+        let (state, _tmp) = revoke_test_env().await;
+        let (machine, uuid) = mint_scim_machine_token(&state).await;
+        let service = introspect_service(state.clone());
+
+        let (status, body) = post_introspect(
+            &service,
+            &format!("token={machine}&client_id=scim-client&client_secret=scim-secret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["active"], true, "a live machine token must be active");
+        assert_eq!(body["client_id"], "scim-client");
+        assert_eq!(body["sub"], uuid.as_str());
+
+        let (status, body) = post_introspect(
+            &service,
+            &format!("token={machine}&client_id=client-b&client_secret=secret-b"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["active"], false,
+            "a foreign client must not see the token"
+        );
+    }
+
+    /// regression G-123: deleting an OAuth2 client must kill its
+    /// outstanding machine tokens — deactivation alone stopped issuance
+    /// but left 90-day SCIM principals alive with no off switch.
+    #[tokio::test]
+    async fn client_delete_poisons_its_machine_tokens() {
+        let (state, _tmp) = revoke_test_env().await;
+        let (machine, uuid) = mint_scim_machine_token(&state).await;
+
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            crate::utils::validate_token::<crate::db::JwtData>(
+                &mut tenant,
+                TEST_ISSUER,
+                "localhost",
+                &machine,
+                crate::utils::ValidateOpts::default(),
+            )
+            .await
+            .expect("machine token validates before the delete");
+        }
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant
+                .oauth2client_delete("localhost", "scim-client")
+                .await
+                .expect("delete");
+        }
+
+        assert!(
+            crate::jwt::InvalidJwt::global()
+                .is_valid(&crate::utils::client_machine_marker(&uuid))
+                .await,
+            "the delete must poison the client's machine-token marker"
+        );
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            let err = match crate::utils::validate_token::<crate::db::JwtData>(
+                &mut tenant,
+                TEST_ISSUER,
+                "localhost",
+                &machine,
+                crate::utils::ValidateOpts::default(),
+            )
+            .await
+            {
+                Err(e) => e,
+                Ok(_) => panic!("outstanding machine tokens of a deleted client must die"),
+            };
+            assert!(matches!(err, crate::utils::TokenReject::Revoked));
+        }
+
+        // Issuance is closed too: the deactivated client cannot mint a
+        // replacement principal.
+        let service = token_service(state.clone());
+        let (status, _) = post_token(
+            &service,
+            "grant_type=client_credentials&client_id=scim-client&client_secret=scim-secret&scope=scim",
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK, "a deleted client must not mint");
     }
 
     // ── introspect endpoint (RFC 7662) integration tests ────────────────────

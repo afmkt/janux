@@ -304,12 +304,28 @@
           },
           "public": {
             "type": "string"
+          },
+          "retired": {
+            "description": "G-97: retired keys still verify outstanding tokens and stay in the\nJWKS, but never sign new ones and cannot be deleted-while-active.",
+            "type": "boolean"
           }
         },
         "required": [
           "name",
           "public",
-          "domain"
+          "domain",
+          "retired"
+        ],
+        "type": "object"
+      },
+      "openapi.key.RetireKey": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -1670,6 +1686,54 @@
         "summary": "List all keys in a tenant"
       }
     },
+    "/api/v1/admin/key/retire": {
+      "post": {
+        "operationId": "openapi.key.retire_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.key.RetireKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request, or the domain's last active key"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Key belongs to another domain"
+          }
+        },
+        "summary": "Retire a signing key (stops signing, keeps verifying until outstanding tokens drain)"
+      }
+    },
     "/api/v1/admin/metrics": {
       "get": {
         "operationId": "openapi.ops.metrics",
@@ -1959,7 +2023,7 @@
                 }
               }
             },
-            "description": "Level gate refused the role"
+            "description": "Level or resource-power gate refused"
           }
         },
         "summary": "Add policy to tenant"
@@ -2008,7 +2072,7 @@
                 }
               }
             },
-            "description": "Level gate refused the role"
+            "description": "Level or resource-power gate refused"
           }
         },
         "summary": "Remove a policy from tenant"

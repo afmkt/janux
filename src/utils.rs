@@ -559,6 +559,19 @@ where
     if all_data.claims.iss != issuer {
         return Err(TokenReject::IssuerMismatch);
     }
+    // G-123: a deleted OAuth2 client poisons a marker keyed by its service
+    // identity (`sub` = `OAuth2Client.uuid`). Machine tokens are stateless
+    // 90-day JWTs with no other kill switch, so every live principal of the
+    // deleted client fails here from then on. Only machine-shaped tokens
+    // (the mint-time `client:<id>` username) pay the extra store lookup;
+    // user sessions never carry a client uuid as `sub`.
+    if all_data.claims.data.machine_username().is_some()
+        && crate::jwt::InvalidJwt::global()
+            .is_valid(&client_machine_marker(&all_data.claims.sub))
+            .await
+    {
+        return Err(TokenReject::Revoked);
+    }
     if let Some(rejected) = opts.reject_typ
         && all_data.claims.data.typ() == Some(rejected)
     {
@@ -689,6 +702,36 @@ pub async fn session_family_poisoned(sub: &str, auth_time: usize) -> bool {
     crate::jwt::InvalidJwt::global()
         .is_valid(&session_family_marker(sub, auth_time))
         .await
+}
+
+/// Marker covering every machine token of one OAuth2 client (G-123).
+/// `client_credentials` tokens are stateless 90-day JWTs keyed by the
+/// client's service identity (`sub` = `OAuth2Client.uuid`), so deleting a
+/// client poisons this marker instead of enumerating tokens —
+/// `validate_token` rejects every live principal of the deleted client
+/// from then on. Mirrors the `session_family:*` / `oidc_refresh_family:*`
+/// marker precedent.
+pub fn client_machine_marker(client_uuid: &str) -> String {
+    format!("machine_client:{client_uuid}")
+}
+
+/// Poison a deleted client's machine-token marker. The marker must outlive
+/// the longest token that could have been minted before the deletion
+/// (machine tokens live `CLIENT_CREDENTIALS_TOKEN_LIFETIME_MINUTES`);
+/// expired markers are gc'd by the revocation store. The write result is
+/// returned, not swallowed: a deletion whose kill switch failed to persist
+/// would leave 90-day SCIM principals alive, and the caller must be able to
+/// surface (and retry) that.
+pub async fn poison_client_machine_tokens(client_uuid: &str) -> anyhow::Result<()> {
+    let exp = jiff::Timestamp::from_second(
+        jiff::Timestamp::now().as_second()
+            + i64::from(crate::oidc::CLIENT_CREDENTIALS_TOKEN_LIFETIME_MINUTES) * 60,
+    )
+    .unwrap_or_else(|_| jiff::Timestamp::now());
+    crate::jwt::InvalidJwt::global()
+        .invalid_raw(&client_machine_marker(client_uuid), exp)
+        .await?;
+    Ok(())
 }
 
 /// Outbound HTTP client with bounded timeouts (H6). Every server-initiated

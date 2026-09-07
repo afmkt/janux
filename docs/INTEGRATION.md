@@ -129,7 +129,7 @@ Open `/admin` **in the same tab** you signed in on — the session lives in per-
 | Policies | See the seeded allow-list; create a policy granting your custom role an endpoint; delete it |
 | Domains | See `localhost`; add a domain, then delete it |
 | OAuth2 clients | **Create your `sample-rp` client here** (client id, secret, redirect URIs, grant/response types, auth method, scopes) instead of the curl from Phase 3 |
-| Signing keys | List/create. Do **not** delete the only key — it invalidates all outstanding tokens (G-97) |
+| Signing keys | List/create/retire/delete. Rotation lifecycle (G-97, fixed): create the replacement → **retire** the old key (stops signing; keeps verifying outstanding tokens and stays in the JWKS while they drain) → delete it after the drain. Guardrails: an active key refuses deletion, and a domain's last signable key refuses retirement |
 | Tenants | Root-only: list/create/delete tenants |
 
 ## 4. RBAC negative checks (worth doing)
