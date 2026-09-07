@@ -434,9 +434,51 @@ impl Tenant {
     }
 }
 
+/// M3 micro-migration: tenant DBs created before `Email.verified` lack the
+/// column, and toasty's `push_schema` only issues `CREATE TABLE` (never
+/// `ALTER`), so an old DB would fail every email query with "no such
+/// column". Add the column idempotently before the schema push:
+/// - fresh DB: no `emails` table yet → tolerated; `push_schema` creates the
+///   table with the column;
+/// - pre-M3 DB: column added; legacy rows default to NOT verified — the
+///   honest state, since their provenance is unrecorded. They converge to
+///   verified on the next ownership proof (magic-link signin, email-add
+///   ceremony, or a social login whose upstream IdP asserts
+///   `email_verified`);
+/// - post-M3 DB: duplicate column → tolerated.
+///
+/// A genuine failure (I/O error) is logged and left to surface through the
+/// toasty connection that opens the same file immediately after.
+async fn migrate_email_verified(path: &Path) {
+    async fn run(path: &Path) -> anyhow::Result<()> {
+        let path_str = path.display().to_string();
+        let db = turso::Builder::new_local(&path_str).build().await?;
+        let conn = db.connect()?;
+        conn.execute(
+            "ALTER TABLE emails ADD COLUMN verified BOOLEAN NOT NULL DEFAULT FALSE",
+            (),
+        )
+        .await?;
+        Ok(())
+    }
+    if let Err(e) = run(path).await {
+        let msg = e.to_string();
+        let tolerated = msg.contains("duplicate column")
+            || msg.contains("already exists")
+            || msg.contains("no such table");
+        if !tolerated {
+            tracing::warn!(
+                db = %path.display(),
+                "email `verified` column migration skipped: {msg}"
+            );
+        }
+    }
+}
+
 async fn connect_tenant(dir: &Path) -> toasty::Result<toasty::Db> {
     ensure_dir(dir).await?;
     let path = PathBuf::from(dir).join("janux.db");
+    migrate_email_verified(&path).await;
     let driver = toasty_driver_turso::Turso::file(path).concurrent_writes();
     info!("create tenant {}", dir.display());
     let db = toasty::Db::builder()
@@ -2311,5 +2353,69 @@ mod tests {
             refresh(&mut tenant, &token).await.is_err(),
             "a deleted user must not refresh back into a session"
         );
+    }
+    /// M3 deploy safety: a tenant DB written before `Email.verified` gains
+    /// the column on the next load (toasty's `push_schema` only CREATEs,
+    /// never ALTERs), legacy rows come back unverified — the honest default
+    /// — and email queries work again.
+    #[tokio::test]
+    async fn legacy_tenant_db_gains_email_verified_column_on_reload() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // First boot on the current schema; attach a proven email.
+        {
+            let storage = crate::db::Storage::init(tmp.path()).await.expect("init");
+            storage.new_tenant("legacy").await.expect("tenant");
+            let mut tenant = storage.tenant_by_id("legacy").expect("tenant");
+            tenant.user_create("alice").await.expect("user");
+            tenant
+                .email_create_verified("alice", "alice@example.com")
+                .await
+                .expect("email");
+        }
+
+        // Simulate a pre-M3 database: drop the column behind toasty's back.
+        let db_path = tmp
+            .path()
+            .join("tenants")
+            .join("legacy")
+            .join("janux.db")
+            .display()
+            .to_string();
+        {
+            let db = turso::Builder::new_local(&db_path)
+                .build()
+                .await
+                .expect("open legacy db");
+            let conn = db.connect().expect("connect");
+            conn.execute("ALTER TABLE emails DROP COLUMN verified", ())
+                .await
+                .expect("drop column");
+        }
+
+        // Reload: the micro-migration must restore the column, the legacy
+        // row comes back unverified, and queries work.
+        let storage = crate::db::Storage::init(tmp.path())
+            .await
+            .expect("reload storage");
+        let mut tenant = storage.tenant_by_id("legacy").expect("tenant");
+        let emails = tenant
+            .all_emails(Some("alice"))
+            .await
+            .expect("email query works after migration");
+        assert_eq!(emails.len(), 1, "the legacy row survives");
+        assert_eq!(emails[0].id, "alice@example.com");
+        assert!(
+            !emails[0].verified,
+            "legacy rows default to unverified until re-proven"
+        );
+
+        // And the convergence path works on the migrated schema.
+        tenant
+            .email_mark_verified("alice@example.com")
+            .await
+            .expect("mark verified");
+        let emails = tenant.all_emails(Some("alice")).await.expect("emails");
+        assert!(emails[0].verified);
     }
 }

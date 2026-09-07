@@ -483,6 +483,11 @@ async fn apply_attrs(
     }
     for email in &body.emails {
         if !email.value.is_empty() {
+            // Deliberately `email_create` (unverified): SCIM-provisioned
+            // addresses are admin-asserted, never proven by a ceremony here,
+            // so `/userinfo` must report `email_verified: false` for them
+            // (M3). Ownership converges to verified on the user's next
+            // magic-link signin or email-add ceremony.
             tenant.email_create(&user.name, &email.value).await.ok();
         }
     }
@@ -1045,6 +1050,7 @@ mod tests {
     #[tokio::test]
     async fn scim_user_lifecycle_end_to_end() {
         let (state, _tmp) = scim_test_env().await;
+        let probe = state.clone();
         let service = scim_service(state);
         let token = machine_token(&service).await;
         let bearer = Some(token.as_str());
@@ -1071,6 +1077,19 @@ mod tests {
         assert_eq!(created["userName"], "jdoe");
         assert_eq!(created["externalId"], "ext-1");
         assert_eq!(created["emails"][0]["value"], "jdoe@example.com");
+
+        // M3: a SCIM-provisioned email is admin-asserted, never proven by a
+        // ceremony — the row must stay unverified so `/userinfo` reports
+        // `email_verified: false` until the user completes one.
+        {
+            let mut tenant = probe.storage.tenant_by_domain(DOMAIN).expect("tenant");
+            let emails = tenant.all_emails(Some("jdoe")).await.expect("emails");
+            assert_eq!(emails.len(), 1);
+            assert!(
+                !emails[0].verified,
+                "SCIM-provisioned emails must not assert verification"
+            );
+        }
 
         // Duplicate userName -> 409 uniqueness.
         let mut res = service

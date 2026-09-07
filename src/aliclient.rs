@@ -1,7 +1,6 @@
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use chrono::DateTime;
 use core::str;
 use hmac::{Hmac, Mac};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
@@ -156,9 +155,11 @@ pub async fn call_api(
     // x-acs-date
     let now_time =
         current_timestamp().map_err(|e| format!("Get current timestamp failed: {}", e))?;
-    let datetime = DateTime::from_timestamp(now_time as i64, 0)
-        .ok_or_else(|| format!("Get datetime from timestamp failed: {}", now_time))?;
-    let datetime_str = datetime.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    // jiff instead of a second date crate (M6): `Timestamp` is UTC, so the
+    // strftime render matches the ACS `x-acs-date` format exactly.
+    let datetime = jiff::Timestamp::from_second(now_time as i64)
+        .map_err(|e| format!("Get datetime from timestamp failed: {}", e))?;
+    let datetime_str = datetime.strftime("%Y-%m-%dT%H:%M:%SZ").to_string();
     // x-acs-signature-nonce
     let signature_nonce = generate_nonce();
     // println!("Signature Nonce: {}", signature_nonce);
@@ -398,5 +399,27 @@ pub async fn send_otp(
             }
         }
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// M6: the chrono→jiff migration must not change the `x-acs-date`
+    /// wire format — ACS expects UTC `YYYY-MM-DDTHH:MM:SSZ` exactly.
+    #[test]
+    fn acs_date_format_matches_chrono_rendering() {
+        let ts = jiff::Timestamp::from_second(1_700_000_000).expect("valid second");
+        assert_eq!(
+            ts.strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "2023-11-14T22:13:20Z"
+        );
+        let epoch = jiff::Timestamp::from_second(0).expect("epoch");
+        assert_eq!(
+            epoch.strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "1970-01-01T00:00:00Z"
+        );
+        // Out-of-range seconds must error, not panic (the handler maps the
+        // error to the same failure string the chrono path produced).
+        assert!(jiff::Timestamp::from_second(i64::MIN).is_err());
     }
 }

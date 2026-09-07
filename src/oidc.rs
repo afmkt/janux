@@ -3187,8 +3187,11 @@ pub async fn userinfo(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     }
 
     // STEP 3: claims. No profile store exists yet, so sub is served with the
-    // user's verified emails (only added through the magic-link verify flow,
-    // hence email_verified=true); the earliest-registered email is primary.
+    // user's emails; the earliest-registered email is primary.
+    // `email_verified` is the row's actual verification state (M3): true only
+    // when ownership was proven — a magic-link ceremony here or an upstream
+    // IdP assertion via social provisioning. SCIM/admin-provisioned addresses
+    // report false until the user completes a ceremony.
     let sub = decision.claims.sub.clone();
     // sub is the user's surrogate key (UUID); resolve it for name-based
     // claims and the email lookup.
@@ -3207,7 +3210,7 @@ pub async fn userinfo(req: &mut Request, depot: &mut Depot, res: &mut Response) 
             Ok(mut emails) => {
                 emails.sort_by_key(|e| e.created_at);
                 match emails.first() {
-                    Some(e) => (Some(e.id.clone()), Some(true)),
+                    Some(e) => (Some(e.id.clone()), Some(e.verified)),
                     None => (None, None),
                 }
             }
@@ -4564,6 +4567,86 @@ mod tests {
         }
     }
 
+    /// M3: `/userinfo` must report the row's actual verification state —
+    /// an admin/SCIM-provisioned address reports `email_verified: false`
+    /// until a ceremony proves ownership, and a proven address reports
+    /// `true`. RPs doing email-based account linking rely on this claim.
+    #[tokio::test]
+    async fn userinfo_email_verified_reflects_row_state() {
+        use salvo::test::ResponseExt;
+        let (state, _tmp) = revoke_test_env().await;
+        let service = userinfo_service(state.clone());
+
+        fn mint_email_token(key: &crate::key::Key, sub: &str) -> String {
+            let data = OidcAccessTokenData {
+                scope: "openid email".into(),
+                jti: uuid::Uuid::new_v4().to_string(),
+                client_id: "client-a".into(),
+            };
+            jwt_authenticate(
+                TEST_ISSUER,
+                sub,
+                &data,
+                key,
+                60,
+                JwtOidcParams {
+                    client_id: "client-a".into(),
+                    nonce: None,
+                    amr: None,
+                    acr: None,
+                    access_token: None,
+                    auth_time: None,
+                },
+            )
+            .expect("sign access token")
+        }
+
+        async fn call_userinfo(service: &Service, bearer: &str) -> serde_json::Value {
+            let mut res = salvo::test::TestClient::get("http://localhost/userinfo")
+                .add_header("Host", "localhost", true)
+                .add_header("Authorization", format!("Bearer {bearer}"), true)
+                .send(service)
+                .await;
+            assert_eq!(res.status_code.expect("status code"), StatusCode::OK);
+            serde_json::from_str(&res.take_string().await.unwrap_or_default()).expect("json body")
+        }
+
+        let access = {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant.user_create("erin").await.expect("user");
+            // Admin/SCIM-style attach: no ownership proof.
+            tenant
+                .email_create("erin", "erin@example.com")
+                .await
+                .expect("email");
+            let sub = tenant.user("erin").await.expect("user").id.to_string();
+            let key = tenant.current_key("localhost").expect("key");
+            mint_email_token(&key, &sub)
+        };
+
+        let body = call_userinfo(&service, &access).await;
+        assert_eq!(body["email"], "erin@example.com");
+        assert_eq!(
+            body["email_verified"], false,
+            "an unproven address must not assert verification (M3)"
+        );
+
+        // A ceremony proves ownership (here the verified re-attach that the
+        // magic-link flows perform); the same token now reports true.
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant
+                .email_create_verified("erin", "erin@example.com")
+                .await
+                .expect("upgrade");
+        }
+        let body = call_userinfo(&service, &access).await;
+        assert_eq!(
+            body["email_verified"], true,
+            "a proven address must report verified"
+        );
+    }
+
     async fn post_revoke(service: &Service, form: &str) -> (StatusCode, String) {
         let mut res = salvo::test::TestClient::post("http://localhost/revoke")
             .add_header("Host", "localhost", true)
@@ -5448,12 +5531,20 @@ mod tests {
             assert_ne!(c.domain_id, tenant.name);
 
             // Listing is domain-scoped.
-            let here = tenant.oauth2client_page("localhost", crate::utils::MAX_PAGE_LIMIT, 0).await.expect("list").items;
+            let here = tenant
+                .oauth2client_page("localhost", crate::utils::MAX_PAGE_LIMIT, 0)
+                .await
+                .expect("list")
+                .items;
             assert!(
                 here.iter().all(|c| c.id != "other-client"),
                 "a sibling domain's client must not appear in this domain's list"
             );
-            let there = tenant.oauth2client_page("other.local", crate::utils::MAX_PAGE_LIMIT, 0).await.expect("list").items;
+            let there = tenant
+                .oauth2client_page("other.local", crate::utils::MAX_PAGE_LIMIT, 0)
+                .await
+                .expect("list")
+                .items;
             assert_eq!(there.len(), 1);
 
             // Cross-domain delete is refused; the owner domain succeeds

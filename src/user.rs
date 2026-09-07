@@ -1909,11 +1909,17 @@ mod tests {
             assert_eq!(p1.items.len(), 2);
             assert_eq!(p1.next_offset, Some(2));
 
-            let p2 = tenant.users_page(2, p1.next_offset.unwrap()).await.expect("p2");
+            let p2 = tenant
+                .users_page(2, p1.next_offset.unwrap())
+                .await
+                .expect("p2");
             assert_eq!(p2.items.len(), 2);
             assert_eq!(p2.next_offset, Some(4));
 
-            let p3 = tenant.users_page(2, p2.next_offset.unwrap()).await.expect("p3");
+            let p3 = tenant
+                .users_page(2, p2.next_offset.unwrap())
+                .await
+                .expect("p3");
             assert_eq!(p3.items.len(), 1, "last page is short");
             assert_eq!(p3.next_offset, None, "last page advertises no successor");
 

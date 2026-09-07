@@ -30,6 +30,14 @@ pub struct Email {
     #[index]
     pub user_id: uuid::Uuid,
 
+    /// Whether ownership of the address was ever proven to this IdP: a
+    /// magic-link ceremony completed here, or an upstream IdP asserted
+    /// `email_verified` during social provisioning. SCIM/admin-provisioned
+    /// addresses start `false`. `/userinfo` reports this value verbatim as
+    /// the `email_verified` claim (M3) — RPs doing email-based account
+    /// linking must not see `true` for an address nobody proved control of.
+    pub verified: bool,
+
     #[auto]
     pub created_at: jiff::Timestamp,
     #[auto]
@@ -52,7 +60,8 @@ impl Tenant {
     /// is rolled back so the username is not burned by an orphan row.
     pub async fn signup_user_email(&mut self, user_name: &str, email: &str) -> Result<()> {
         self.user_create(user_name).await?;
-        if let Err(e) = self.email_create(user_name, email).await {
+        // The completed magic-link ceremony proved ownership of the address.
+        if let Err(e) = self.email_create_verified(user_name, email).await {
             // System-initiated rollback — 's gate does not apply.
             self.user_delete(&crate::role::Caller::Bootstrap, user_name)
                 .await
@@ -63,12 +72,15 @@ impl Tenant {
     }
 
     /// Strict signin: the email must already belong to `user_name`.
-    /// Nothing is attached.
+    /// Nothing is attached. The completed magic-link ceremony is a fresh
+    /// proof of ownership, so an unverified row (SCIM-provisioned or a
+    /// pre-M3 legacy row) converges to verified here.
     pub async fn signin_user_email(&mut self, user_name: &str, email: &str) -> Result<()> {
         let user = self.user_by_email(email).await?;
         if user.name != user_name {
             return Err(anyhow::anyhow!("Email does not belong to this user"));
         }
+        self.email_mark_verified(email).await?;
         Ok(())
     }
     pub async fn all_emails(&mut self, username: Option<&str>) -> Result<Vec<Email>> {
@@ -86,24 +98,91 @@ impl Tenant {
         }
     }
 
+    /// Attach an email WITHOUT an ownership proof (SCIM/admin provisioning).
+    /// The row starts unverified, so `/userinfo` reports
+    /// `email_verified: false` for it (M3). Re-attaching an address the same
+    /// user already owns is an idempotent no-op — it never downgrades a
+    /// verified row.
     pub async fn email_create(&mut self, user_name: &str, email: &str) -> Result<()> {
+        self.email_create_inner(user_name, email, false).await
+    }
+
+    /// Attach an email AFTER ownership was proven — a completed magic-link
+    /// ceremony here, or an upstream IdP that asserted `email_verified`
+    /// during social provisioning. Re-attaching an address the same user
+    /// already owns UPGRADES it to verified: the self-service convergence
+    /// path for SCIM-provisioned and pre-M3 legacy rows.
+    pub async fn email_create_verified(&mut self, user_name: &str, email: &str) -> Result<()> {
+        self.email_create_inner(user_name, email, true).await
+    }
+
+    async fn email_create_inner(
+        &mut self,
+        user_name: &str,
+        email: &str,
+        verified: bool,
+    ) -> Result<()> {
         let user = self.user(user_name).await?;
         match Email::get_by_id(&mut self.database, email).await {
             Ok(e) => {
                 if e.user_id != user.id {
                     Err(anyhow::anyhow!("Email already exist"))
                 } else {
+                    if verified && !e.verified {
+                        self.email_mark_verified(email).await?;
+                    }
                     Ok(())
                 }
             }
             Err(_) => toasty::create!(Email {
                 id: email,
                 user_id: user.id,
+                verified,
             })
             .exec(&mut self.database)
             .await
             .map(|_| ())
             .map_err(Into::into),
+        }
+    }
+
+    /// Flip an existing row to verified. Update-only: a missing row is a
+    /// no-op, so this can never attach an address nobody owns. Called when a
+    /// magic-link signin proves ownership of an already-attached address —
+    /// legacy and SCIM-provisioned rows converge to verified on the next
+    /// successful ceremony (M3).
+    pub async fn email_mark_verified(&mut self, email: &str) -> Result<()> {
+        match Email::get_by_id(&mut self.database, email).await {
+            Ok(e) if !e.verified => Email::update_by_id(email)
+                .verified(true)
+                .exec(&mut self.database)
+                .await
+                .map(|_| ())
+                .map_err(Into::into),
+            Ok(_) => Ok(()),
+            Err(_) => Ok(()),
+        }
+    }
+
+    /// Owner-scoped variant of [`email_mark_verified`]: flips the row only
+    /// when `user_id` owns it. Used where a third-party assertion (an
+    /// upstream IdP's `email_verified` on a repeat social login) re-attests
+    /// an address — the attestation applies to the account that logged in,
+    /// never to another user's row holding the same address (M3).
+    pub async fn email_mark_verified_for(
+        &mut self,
+        user_id: uuid::Uuid,
+        email: &str,
+    ) -> Result<()> {
+        match Email::get_by_id(&mut self.database, email).await {
+            Ok(e) if e.user_id == user_id && !e.verified => Email::update_by_id(email)
+                .verified(true)
+                .exec(&mut self.database)
+                .await
+                .map(|_| ())
+                .map_err(Into::into),
+            Ok(_) => Ok(()),
+            Err(_) => Ok(()),
         }
     }
     pub async fn email_delete(&mut self, user_name: &str, email: &str) -> Result<()> {
@@ -893,11 +972,12 @@ pub async fn add_verify(req: &mut Request, depot: &mut Depot, res: &mut Response
                     .await
                 && data.email == verify_request.email
             {
-                // Attach to the session's own user; `email_create`
+                // Attach to the session's own user; `email_create_verified`
                 // refuses an address owned by anyone else, so a raced
-                // claim fails closed.
+                // claim fails closed. The magic link to this address proved
+                // possession, so the row is recorded verified (M3).
                 if tenant
-                    .email_create(&user, &verify_request.email)
+                    .email_create_verified(&user, &verify_request.email)
                     .await
                     .is_ok()
                 {
@@ -1863,5 +1943,112 @@ mod tests {
             .is_err(),
             "a template referencing a missing variable must error, not panic"
         );
+    }
+    // ── M3: email verification provenance ──────────────────────────────────
+
+    /// M3: provenance is recorded per row — the bare `email_create`
+    /// (SCIM/admin path) stays unverified; `email_create_verified`
+    /// (post-ceremony path) records the proof; a proven re-attach upgrades
+    /// an unverified row, and an unproven re-attach never downgrades one.
+    #[tokio::test]
+    async fn email_verified_tracks_provenance() {
+        let (state, _tmp) = email_test_env().await;
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        tenant.user_create("carol").await.expect("carol");
+
+        tenant
+            .email_create("carol", "carol@example.com")
+            .await
+            .expect("attach");
+        let emails = tenant.all_emails(Some("carol")).await.expect("emails");
+        assert!(
+            !emails[0].verified,
+            "an admin/SCIM-path attach must start unverified"
+        );
+
+        tenant
+            .email_create_verified("carol", "carol@example.com")
+            .await
+            .expect("proven re-attach");
+        let emails = tenant.all_emails(Some("carol")).await.expect("emails");
+        assert!(emails[0].verified, "an ownership proof upgrades the row");
+
+        tenant
+            .email_create("carol", "carol@example.com")
+            .await
+            .expect("idempotent re-attach");
+        let emails = tenant.all_emails(Some("carol")).await.expect("emails");
+        assert!(
+            emails[0].verified,
+            "an unproven re-attach must never downgrade a verified row"
+        );
+    }
+
+    /// M3: the magic-link signin ceremony is a fresh proof of ownership —
+    /// an unverified (SCIM-provisioned or pre-M3 legacy) row converges to
+    /// verified when the user completes the ceremony end to end.
+    #[tokio::test]
+    async fn signin_ceremony_converges_unverified_row() {
+        let (state, _tmp) = email_test_env().await;
+        {
+            let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+            tenant.user_create("carol").await.expect("carol");
+            tenant
+                .email_create("carol", "carol@example.com")
+                .await
+                .expect("unverified attach");
+        }
+        let service = email_service(state.clone());
+        let token = issue_ceremony_for(&state, "carol", "carol@example.com", false).await;
+
+        let (status, _body) = post_verify(
+            &service,
+            &serde_json::json!({
+                "token": token,
+                "name": "carol",
+                "email": "carol@example.com",
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "signin ceremony succeeds");
+
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let emails = tenant.all_emails(Some("carol")).await.expect("emails");
+        assert!(
+            emails[0].verified,
+            "the completed ceremony must converge the row to verified"
+        );
+    }
+
+    /// M3: the owner-scoped mark (repeat social login re-attestation) never
+    /// upgrades a row belonging to a different user.
+    #[tokio::test]
+    async fn verified_mark_is_owner_scoped() {
+        let (state, _tmp) = email_test_env().await;
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        tenant.user_create("carol").await.expect("carol");
+        tenant
+            .email_create("carol", "carol@example.com")
+            .await
+            .expect("attach");
+        let carol = tenant.user("carol").await.expect("carol").id;
+        let alice = tenant.user("alice").await.expect("alice").id;
+
+        tenant
+            .email_mark_verified_for(alice, "carol@example.com")
+            .await
+            .expect("foreign mark is a no-op");
+        let emails = tenant.all_emails(Some("carol")).await.expect("emails");
+        assert!(
+            !emails[0].verified,
+            "another user's attestation must not upgrade the row"
+        );
+
+        tenant
+            .email_mark_verified_for(carol, "carol@example.com")
+            .await
+            .expect("owner mark");
+        let emails = tenant.all_emails(Some("carol")).await.expect("emails");
+        assert!(emails[0].verified, "the owner's attestation upgrades");
     }
 }

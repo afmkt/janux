@@ -1831,7 +1831,10 @@ mod tests {
 
         // limit is clamped into [1, MAX_PAGE_LIMIT]
         assert_eq!(page_params(&req_with_query("limit=0")).0, 1);
-        assert_eq!(page_params(&req_with_query("limit=100000")).0, MAX_PAGE_LIMIT);
+        assert_eq!(
+            page_params(&req_with_query("limit=100000")).0,
+            MAX_PAGE_LIMIT
+        );
 
         // malformed values fall back to defaults
         assert_eq!(

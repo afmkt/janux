@@ -190,11 +190,7 @@ impl Tenant {
     /// One DB-level page of providers, ordered by id so pages are stable and
     /// disjoint. The `limit + 1` probe row (see [`crate::utils::Page`]) is
     /// fetched and folded into `next_offset` internally.
-    pub async fn providers_page(
-        &mut self,
-        limit: usize,
-        offset: usize,
-    ) -> Page<SocialProvider> {
+    pub async fn providers_page(&mut self, limit: usize, offset: usize) -> Page<SocialProvider> {
         let (fetch, offset) = crate::utils::page_bounds(limit, offset);
         let rows = SocialProvider::all()
             .order_by(SocialProvider::fields().id().asc())
@@ -387,6 +383,14 @@ pub async fn ensure_user_from_social(
 ) -> Result<String> {
     if let Ok(binding) = tenant.oauth2_by_subject(provider_id, subject).await {
         let user = tenant.user_by_id(binding.user_id).await?;
+        // `email` is only Some when the upstream IdP asserted
+        // `email_verified=true` on THIS login — a fresh attestation for an
+        // address this user already owns converges the row to verified
+        // (legacy/SCIM rows self-heal). Owner-scoped and update-only: an
+        // address owned by another user is never touched (M3).
+        if let Some(email) = email {
+            tenant.email_mark_verified_for(user.id, email).await.ok();
+        }
         return Ok(user.name);
     }
     let uid = uuid::Uuid::new_v4().to_string();
@@ -397,7 +401,9 @@ pub async fn ensure_user_from_social(
     if let Some(email) = email {
         // Fails (and is skipped) when another user already owns the
         // email — provisioning never merges into an existing account.
-        let _ = tenant.email_create(&uid, email).await;
+        // `email` is only Some when the upstream IdP asserted
+        // `email_verified=true`, so the row is recorded verified (M3).
+        let _ = tenant.email_create_verified(&uid, email).await;
     }
     if let Err(e) = tenant
         .oauth2_create(&uid, provider_id.to_string(), subject.to_string())
@@ -442,7 +448,9 @@ pub async fn link_user_from_social(
     if let Some(email) = email {
         // Fails (and is skipped) when another user already owns the
         // email — linking never merges into an existing account.
-        let _ = tenant.email_create(link_user, email).await;
+        // `email` is only Some when the upstream IdP asserted
+        // `email_verified=true`, so the row is recorded verified (M3).
+        let _ = tenant.email_create_verified(link_user, email).await;
     }
     Ok(())
 }

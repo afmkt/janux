@@ -14,7 +14,6 @@ tracing = { version = "*" }
 tracing-subscriber = { version = "*" }
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
-gix = { version = "*" }
 rust-embed = "*"
 mime_guess = "*"
 webauthn-rs = "*"
@@ -36,9 +35,7 @@ urlencoding = "*"
 rand = "0.10.1"
 tera = "2.0.0"
 url = "2.5.8"
-toml = "*"
 base64 = "*"
-chrono = "0.4"
 percent-encoding = "2.1"
 dashmap = "6.2.1"
 totp-rs = { version = "5.7.2", features = ["qr", "gen_secret", "otpauth"] }
@@ -70,7 +67,6 @@ dashmap = "6.2.1"
 toasty = { version = "*", features = ["turso"] }
 toasty-driver-turso = "*"
 serde = { version = "*", features = ["derive"] }
-globset = "*"
 tempfile = "*"
 # Soft WebAuthn authenticator for the passkey ceremony tests: openssl is
 # already linked on every platform (salvo/webauthn-attestation-ca) and
