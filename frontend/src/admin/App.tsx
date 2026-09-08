@@ -25,6 +25,7 @@ import {
   openapiAdminDeleteDomain,
   openapiAdminNewTenant,
   openapiAdminRemoveTenant,
+  openapiEmailAdd,
   openapiKeyAddKey,
   openapiKeyAllKeys,
   openapiKeyDeleteKey,
@@ -32,6 +33,13 @@ import {
   openapiIdpDeleteOauth2Client,
   openapiIdpListOauth2Clients,
   openapiIdpNewOauth2Client,
+  openapiOtpAdd,
+  openapiOtpAddVerify,
+  openapiOtpRemove,
+  openapiEmailRemove,
+  openapiPasskeyDeactivate,
+  openapiPasskeyRequest,
+  openapiPasskeyVerify,
   openapiPolicyAddPolicy,
   openapiPolicyAllPolicies,
   openapiPolicyDeletePolicy,
@@ -41,17 +49,35 @@ import {
   openapiSocialAddProvider,
   openapiSocialAllProviders,
   openapiSocialRemoveProvider,
+  openapiTotpEnroll,
+  openapiTotpListTotp,
+  openapiTotpRemoveTotp,
+  openapiTotpVerify,
   openapiUserActivateUser,
   openapiUserAddRole,
   openapiUserAddUser,
   openapiUserAllUsers,
   openapiUserDeleteUser,
   openapiUserRemoveRole,
+  openapiUserUserRoles,
+  openapiVerifySessionInfo,
   type OpenapiDbHttpMethod,
   type OpenapiPolicySourceResolver,
   type OpenapiPolicyTargetResolver,
 } from '../api'
-import { fetchAllPages, isUnauthorized, problemText, sessionExpired, setupAuth } from './api'
+import { SESSION_COOKIE } from '../shared/session'
+import { base64urlToBytes, bytesToBase64url } from '../login/webauthn'
+import {
+  envelope,
+  fetchAllPages,
+  isUnauthorized,
+  pageItems,
+  problemText,
+  sessionExpired,
+  setSignalHandler,
+  setupAuth,
+  type AuthSignal,
+} from './api'
 
 const authed = setupAuth()
 
@@ -110,6 +136,8 @@ function UsersTab() {
   const [newUser, setNewUser] = useState('')
   const [roleUser, setRoleUser] = useState('')
   const [roleName, setRoleName] = useState('')
+  // G-163: a user's effective roles used to be invisible in the console.
+  const [rolesView, setRolesView] = useState<{ user: string; roles: string[] } | null>(null)
 
   const load = useCallback(async () => {
     const r = await fetchAllPages<string>((query) => openapiUserAllUsers({ query }))
@@ -144,6 +172,7 @@ function UsersTab() {
   }
 
   const remove = async (user: string) => {
+    if (!window.confirm(`Delete user "${user}"? The account and its role grants are removed.`)) return
     setBusy(true)
     setError(null)
     const { error: err, response } = await openapiUserDeleteUser({ body: { user } })
@@ -161,6 +190,56 @@ function UsersTab() {
     const { error: err, response } = add
       ? await openapiUserAddRole({ body })
       : await openapiUserRemoveRole({ body })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) setError(problemText(err, response?.status))
+  }
+
+  const showRoles = async (user: string) => {
+    setBusy(true)
+    setError(null)
+    const { data, error: err, response } = await openapiUserUserRoles({ query: { user } })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    setRolesView({ user, roles: envelope<string[]>(data).data ?? [] })
+  }
+
+  // G-163/G-101: per-user credential removal — the recovery levers for a
+  // locked-out or compromised account (each is H3-gated server-side).
+  const removePasskeys = async (user: string) => {
+    if (!window.confirm(`Deactivate ALL passkeys of "${user}"? They must re-register afterwards.`)) return
+    setBusy(true)
+    setError(null)
+    const { error: err, response } = await openapiPasskeyDeactivate({ body: { name: user } })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) setError(problemText(err, response?.status))
+  }
+
+  const removeEmail = async (user: string) => {
+    const email = window.prompt(`Email address to remove from "${user}":`)
+    if (!email?.trim()) return
+    if (!window.confirm(`Remove ${email.trim()} from "${user}"?`)) return
+    setBusy(true)
+    setError(null)
+    const { error: err, response } = await openapiEmailRemove({
+      query: { name: user, email: email.trim() },
+    })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) setError(problemText(err, response?.status))
+  }
+
+  const removeMobile = async (user: string) => {
+    const mobile = window.prompt(`Mobile number to remove from "${user}":`)
+    if (!mobile?.trim()) return
+    if (!window.confirm(`Remove ${mobile.trim()} from "${user}"?`)) return
+    setBusy(true)
+    setError(null)
+    const { error: err, response } = await openapiOtpRemove({
+      query: { name: user, mobile: mobile.trim() },
+    })
     setBusy(false)
     if (isUnauthorized(response?.status)) return sessionExpired()
     if (!response?.ok) setError(problemText(err, response?.status))
@@ -185,6 +264,7 @@ function UsersTab() {
         <Table.Thead>
           <Table.Tr>
             <Table.Th>User</Table.Th>
+            <Table.Th>Roles</Table.Th>
             <Table.Th>Actions</Table.Th>
           </Table.Tr>
         </Table.Thead>
@@ -193,12 +273,37 @@ function UsersTab() {
             <Table.Tr key={u}>
               <Table.Td>{u}</Table.Td>
               <Table.Td>
+                {rolesView?.user === u ? (
+                  <Group gap="xs">
+                    {rolesView.roles.length === 0 && <Text size="xs" c="dimmed">(none)</Text>}
+                    {rolesView.roles.map((r) => (
+                      <Badge key={r} variant="light">
+                        {r}
+                      </Badge>
+                    ))}
+                  </Group>
+                ) : (
+                  <Button size="xs" variant="subtle" disabled={busy} onClick={() => showRoles(u)}>
+                    Show
+                  </Button>
+                )}
+              </Table.Td>
+              <Table.Td>
                 <Group gap="xs">
                   <Button size="xs" variant="default" disabled={busy} onClick={() => activate(u, true)}>
                     Activate
                   </Button>
                   <Button size="xs" variant="default" disabled={busy} onClick={() => activate(u, false)}>
                     Deactivate
+                  </Button>
+                  <Button size="xs" variant="default" disabled={busy} onClick={() => removePasskeys(u)}>
+                    Drop passkeys
+                  </Button>
+                  <Button size="xs" variant="default" disabled={busy} onClick={() => removeEmail(u)}>
+                    Remove email
+                  </Button>
+                  <Button size="xs" variant="default" disabled={busy} onClick={() => removeMobile(u)}>
+                    Remove mobile
                   </Button>
                   <Button size="xs" color="red" variant="default" disabled={busy} onClick={() => remove(u)}>
                     Delete
@@ -271,6 +376,7 @@ function RolesTab() {
   }
 
   const remove = async (role: string) => {
+    if (!window.confirm(`Delete role "${role}"? Its policies and memberships are removed too.`)) return
     setBusy(true)
     setError(null)
     const { error: err, response } = await openapiRoleDeleteRole({ body: { name: role } })
@@ -347,6 +453,9 @@ function PoliciesTab() {
   const [source, setSource] = useState<OpenapiPolicySourceResolver>('Nothing')
   const [target, setTarget] = useState('"Nothing"')
   const [mfa, setMfa] = useState(false)
+  // G-163: deny policies are first-class server-side (a deny outranks
+  // every allow) — the UI could neither create nor see them before.
+  const [allowed, setAllowed] = useState(true)
 
   const load = useCallback(async () => {
     const [pol, rol] = await Promise.all([
@@ -385,7 +494,7 @@ function PoliciesTab() {
         source,
         target: parsedTarget,
         mfa,
-        allowed: true,
+        allowed,
       },
     })
     setBusy(false)
@@ -396,6 +505,8 @@ function PoliciesTab() {
   }
 
   const remove = async (p: PolicyRow) => {
+    // G-156: destructive admin actions confirm first.
+    if (!window.confirm(`Delete policy ${p.resource} → ${p.role}?`)) return
     setBusy(true)
     setError(null)
     const { error: err, response } = await openapiPolicyDeletePolicy({
@@ -450,6 +561,17 @@ function PoliciesTab() {
           disabled={busy}
         />
         <Checkbox label="MFA" checked={mfa} onChange={(e) => setMfa(e.currentTarget.checked)} disabled={busy} />
+        <Select
+          label="Effect"
+          data={[
+            { value: 'allow', label: 'Allow' },
+            { value: 'deny', label: 'Deny' },
+          ]}
+          value={allowed ? 'allow' : 'deny'}
+          onChange={(v) => setAllowed(v !== 'deny')}
+          disabled={busy}
+          allowDeselect={false}
+        />
         <Button onClick={create} loading={busy}>
           Create
         </Button>
@@ -462,6 +584,7 @@ function PoliciesTab() {
             <Table.Th>Method</Table.Th>
             <Table.Th>Source</Table.Th>
             <Table.Th>MFA</Table.Th>
+            <Table.Th>Effect</Table.Th>
             <Table.Th>Actions</Table.Th>
           </Table.Tr>
         </Table.Thead>
@@ -473,6 +596,11 @@ function PoliciesTab() {
               <Table.Td>{p.action ?? 'all'}</Table.Td>
               <Table.Td>{p.source}</Table.Td>
               <Table.Td>{p.mfa ? 'yes' : ''}</Table.Td>
+              <Table.Td>
+                <Badge color={p.allowed ? 'green' : 'red'} variant="light">
+                  {p.allowed ? 'Allow' : 'Deny'}
+                </Badge>
+              </Table.Td>
               <Table.Td>
                 <Button size="xs" color="red" variant="default" disabled={busy} onClick={() => remove(p)}>
                   Delete
@@ -519,6 +647,7 @@ function DomainsTab() {
   }
 
   const remove = async (d: string) => {
+    if (!window.confirm(`Remove domain "${d}" from this tenant?`)) return
     if (!tenant.trim()) {
       setError('Enter the tenant name to delete a domain')
       return
@@ -627,6 +756,7 @@ function ClientsTab() {
   }
 
   const remove = async (id: string) => {
+    if (!window.confirm(`Delete OAuth2 client "${id}"? Its outstanding machine tokens are revoked.`)) return
     setBusy(true)
     setError(null)
     const { error: err, response } = await openapiIdpDeleteOauth2Client({ body: { client_id: id } })
@@ -762,6 +892,7 @@ function ProvidersTab() {
   }
 
   const remove = async (n: string) => {
+    if (!window.confirm(`Remove social provider "${n}"?`)) return
     setBusy(true)
     setError(null)
     const { error: err, response } = await openapiSocialRemoveProvider({ body: { name: n } })
@@ -874,6 +1005,7 @@ function KeysTab() {
   }
 
   const remove = async (keyName: string) => {
+    if (!window.confirm(`Delete retired key "${keyName}"? Any token still signed by it stops verifying.`)) return
     setBusy(true)
     setError(null)
     const { error: err, response } = await openapiKeyDeleteKey({ body: { name: keyName } })
@@ -979,6 +1111,8 @@ function TenantsTab() {
   }
 
   const remove = async (tenantName: string) => {
+    // G-156: the most destructive action in the console confirms first.
+    if (!window.confirm(`DELETE TENANT "${tenantName}"? Every user, key and policy of that tenant is destroyed.`)) return
     setBusy(true)
     setError(null)
     const { error: err, response } = await openapiAdminRemoveTenant({ body: { name: tenantName } })
@@ -1039,9 +1173,539 @@ function TenantsTab() {
   )
 }
 
+// ─── Session identity, 403 signals, TOTP + credential self-service ──────────
+// G-138: TOTP enrollment/step-up UI — without it an `mfa: true` policy was
+// a dead end (no page could enroll or satisfy it).
+// G-155: the server's machine-readable 403s (X-MFA-Required /
+// X-Reauth-Required) are surfaced and actionable instead of rendering as a
+// contentless "Request failed (403)".
+// G-162: self-service credential management (email, mobile, passkey).
+
+interface SessionMe {
+  username: string
+  roles: string[]
+  mfa: string[]
+}
+
+async function whoami(): Promise<SessionMe | null> {
+  const { data, response } = await openapiVerifySessionInfo()
+  if (!response?.ok) return null
+  const info = envelope<SessionMe>(data).data
+  return info?.username ? info : null
+}
+
+function SignalPanel({ kind, onDone }: { kind: AuthSignal; onDone: () => void }) {
+  const [me, setMe] = useState<SessionMe | null>(null)
+  const [stage, setStage] = useState<'code1' | 'code2'>('code1')
+  const [credName, setCredName] = useState('default')
+  const [code, setCode] = useState('')
+  const [stepToken, setStepToken] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    void whoami().then(setMe)
+  }, [])
+
+  if (kind === 'reauth') {
+    return (
+      <Alert color="orange" title="Re-authentication required" withCloseButton onClose={onDone}>
+        <Text size="sm">
+          Credential changes require a recent sign-in (this session is older than the sudo
+          window). Sign in again, then retry the action.
+        </Text>
+        <Button
+          mt="sm"
+          size="xs"
+          variant="default"
+          onClick={() => {
+            window.location.href = '/login?redirect_uri=%2Fadmin'
+          }}
+        >
+          Go to sign-in
+        </Button>
+      </Alert>
+    )
+  }
+
+  const submit = async () => {
+    if (!me || !code.trim()) return
+    setBusy(true)
+    setError(null)
+    if (stage === 'code1') {
+      // Step 1: the CURRENT code exchanges for a one-time step-up token
+      // (the server consumes the code and re-exposes nothing).
+      const { data, error: err, response } = await openapiTotpEnroll({
+        body: { name: credName.trim() || 'default', code: code.trim() },
+      })
+      setBusy(false)
+      if (!response?.ok) return setError(problemText(err, response?.status))
+      const token = envelope<{ token?: string }>(data).data?.token
+      if (!token) return setError('Step-up token missing from the enroll response')
+      setStepToken(token)
+      setStage('code2')
+      setCode('')
+      return
+    }
+    // Step 2: the NEXT code completes the step-up; the re-minted session
+    // lands in the HttpOnly cookie (G-139) carrying the totp factor.
+    const { error: err, response } = await openapiTotpVerify({
+      body: {
+        user: me.username,
+        name: credName.trim() || 'default',
+        code: code.trim(),
+        token: stepToken,
+        cookie: SESSION_COOKIE,
+      },
+    })
+    setBusy(false)
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    onDone()
+  }
+
+  return (
+    <Alert color="blue" title="Two-factor step-up required" withCloseButton onClose={onDone}>
+      <ErrorAlert error={error} />
+      <Text size="sm">
+        {stage === 'code1'
+          ? 'A policy on this action requires TOTP. Enter your current authenticator code.'
+          : 'Enter the NEXT authenticator code to complete the step-up, then retry the action.'}
+      </Text>
+      <Group mt="sm">
+        <TextInput
+          label="Credential name"
+          placeholder="default"
+          value={credName}
+          onChange={(e) => setCredName(e.currentTarget.value)}
+          disabled={busy || stage === 'code2'}
+          size="xs"
+        />
+        <TextInput
+          label="Code"
+          placeholder="123456"
+          value={code}
+          onChange={(e) => setCode(e.currentTarget.value)}
+          disabled={busy || !me}
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          size="xs"
+        />
+        <Button size="xs" onClick={submit} loading={busy} disabled={!me || !code.trim()}>
+          {stage === 'code1' ? 'Continue' : 'Complete step-up'}
+        </Button>
+      </Group>
+      {!me && (
+        <Text size="xs" c="dimmed" mt="xs">
+          Loading session identity… (if this persists, sign in again)
+        </Text>
+      )}
+    </Alert>
+  )
+}
+
+interface TotpRecord {
+  name: string
+  active: boolean
+}
+
+function MfaTab() {
+  const [me, setMe] = useState<SessionMe | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [credName, setCredName] = useState('default')
+  const [pending, setPending] = useState<{ token: string; uri: string; qr: string } | null>(null)
+  const [code, setCode] = useState('')
+  const [targetUser, setTargetUser] = useState('')
+  const [records, setRecords] = useState<TotpRecord[]>([])
+
+  useEffect(() => {
+    void whoami().then(setMe)
+  }, [])
+
+  const startEnroll = async () => {
+    if (!credName.trim()) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    const { data, error: err, response } = await openapiTotpEnroll({
+      body: { name: credName.trim() },
+    })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    const d = envelope<{ token?: string; uri?: string; qr?: string }>(data).data
+    if (!d?.token) return setError('Unexpected enroll response')
+    setPending({ token: d.token, uri: d.uri ?? '', qr: d.qr ?? '' })
+  }
+
+  const confirmEnroll = async () => {
+    if (!me || !pending || !code.trim()) return
+    setBusy(true)
+    setError(null)
+    const { error: err, response } = await openapiTotpVerify({
+      body: {
+        user: me.username,
+        name: credName.trim(),
+        code: code.trim(),
+        token: pending.token,
+        cookie: SESSION_COOKIE,
+      },
+    })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    setPending(null)
+    setCode('')
+    setNotice('TOTP enrolled — your session was re-minted with the second factor.')
+    void whoami().then(setMe)
+  }
+
+  const listRecords = async () => {
+    if (!targetUser.trim()) return
+    setBusy(true)
+    setError(null)
+    const { data, error: err, response } = await openapiTotpListTotp({
+      body: { name: targetUser.trim() },
+    })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    setRecords(pageItems<TotpRecord>(data))
+  }
+
+  const removeRecord = async (rec: TotpRecord) => {
+    if (!window.confirm(`Remove TOTP credential "${rec.name}" from ${targetUser}?`)) return
+    setBusy(true)
+    setError(null)
+    const { error: err, response } = await openapiTotpRemoveTotp({
+      body: { name: targetUser.trim(), totp: rec.name },
+    })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    void listRecords()
+  }
+
+  const qrSrc = pending?.qr
+    ? pending.qr.startsWith('data:')
+      ? pending.qr
+      : `data:image/png;base64,${pending.qr}`
+    : null
+
+  return (
+    <Stack gap="md">
+      <ErrorAlert error={error} />
+      {notice && <Alert color="green" withCloseButton onClose={() => setNotice(null)}>{notice}</Alert>}
+
+      <Title order={4}>Your second factor</Title>
+      {me && (
+        <Text size="sm" c="dimmed">
+          Signed in as <b>{me.username}</b> — factors proven this session:{' '}
+          {me.mfa.length > 0 ? me.mfa.join(', ') : '(single factor)'}
+        </Text>
+      )}
+      {!pending ? (
+        <Group align="flex-end">
+          <TextInput
+            label="Credential name"
+            placeholder="default"
+            value={credName}
+            onChange={(e) => setCredName(e.currentTarget.value)}
+            disabled={busy}
+          />
+          <Button onClick={startEnroll} loading={busy}>
+            Enroll TOTP
+          </Button>
+        </Group>
+      ) : (
+        <Stack gap="sm">
+          <Text size="sm">
+            Scan the QR code (or enter the URI manually) in your authenticator app, then confirm
+            with a code:
+          </Text>
+          {qrSrc && <img src={qrSrc} alt="TOTP enrollment QR code" width={180} height={180} />}
+          <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
+            {pending.uri}
+          </Text>
+          <Group align="flex-end">
+            <TextInput
+              label="Code"
+              placeholder="123456"
+              value={code}
+              onChange={(e) => setCode(e.currentTarget.value)}
+              disabled={busy}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+            />
+            <Button onClick={confirmEnroll} loading={busy} disabled={!code.trim()}>
+              Confirm enrollment
+            </Button>
+            <Button variant="subtle" color="gray" onClick={() => setPending(null)} disabled={busy}>
+              Cancel
+            </Button>
+          </Group>
+        </Stack>
+      )}
+
+      <Title order={4}>Manage a user's TOTP credentials</Title>
+      <Group align="flex-end">
+        <TextInput
+          label="Username"
+          placeholder="alice"
+          value={targetUser}
+          onChange={(e) => setTargetUser(e.currentTarget.value)}
+          disabled={busy}
+        />
+        <Button variant="default" onClick={listRecords} loading={busy} disabled={!targetUser.trim()}>
+          List
+        </Button>
+      </Group>
+      <Table>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>Name</Table.Th>
+            <Table.Th>Active</Table.Th>
+            <Table.Th>Actions</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {records.map((rec) => (
+            <Table.Tr key={rec.name}>
+              <Table.Td>{rec.name}</Table.Td>
+              <Table.Td>{rec.active ? 'yes' : 'no'}</Table.Td>
+              <Table.Td>
+                <Button size="xs" color="red" variant="default" disabled={busy} onClick={() => removeRecord(rec)}>
+                  Remove
+                </Button>
+              </Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Stack>
+  )
+}
+
+function AccountTab() {
+  const [me, setMe] = useState<SessionMe | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [email, setEmail] = useState('')
+  const [mobile, setMobile] = useState('')
+  const [otpToken, setOtpToken] = useState<string | null>(null)
+  const [otpCode, setOtpCode] = useState('')
+
+  useEffect(() => {
+    void whoami().then(setMe)
+  }, [])
+
+  const addEmail = async () => {
+    if (!email.trim()) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    const { error: err, response } = await openapiEmailAdd({ body: { email: email.trim() } })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    setEmail('')
+    setNotice(
+      'Confirmation link sent — open it in this browser while signed in to finish adding the address.',
+    )
+  }
+
+  const addMobile = async () => {
+    if (!mobile.trim()) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    const { data, error: err, response } = await openapiOtpAdd({ body: { mobile: mobile.trim() } })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    // MobileResponse carries the add-ceremony token in `jwt`.
+    const token = (data as { jwt?: string } | null)?.jwt
+    if (!token) return setError('No ceremony token in the response')
+    setOtpToken(token)
+  }
+
+  const confirmMobile = async () => {
+    if (!otpToken || !otpCode.trim()) return
+    setBusy(true)
+    setError(null)
+    const { error: err, response } = await openapiOtpAddVerify({
+      body: { token: otpToken, code: otpCode.trim() },
+    })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    setOtpToken(null)
+    setOtpCode('')
+    setMobile('')
+    setNotice('Mobile number added — SMS sign-in is now available.')
+  }
+
+  const addPasskey = async () => {
+    if (!me) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const { data, error: err, response } = await openapiPasskeyRequest({ body: me.username })
+      if (!response?.ok) {
+        setError(problemText(err, response?.status))
+        return
+      }
+      const challenge = data as { publicKey?: PublicKeyCredentialCreationOptionsJSON; token?: string }
+      const opts = challenge.publicKey
+      const token = challenge.token
+      if (!opts || !token) {
+        setError('Unexpected passkey challenge response')
+        return
+      }
+      // The server sends the WebAuthn JSON wire shape; convert the
+      // base64url fields to buffers and hand the DOM API its own type
+      // (the JSON↔DOM field types differ only in string-vs-union
+      // strictness, so one localized cast does the conversion).
+      const publicKey = {
+        ...opts,
+        challenge: base64urlToBytes(opts.challenge),
+        user: {
+          ...opts.user,
+          id: base64urlToBytes(opts.user.id),
+        },
+        excludeCredentials: (opts.excludeCredentials ?? []).map((c) => ({
+          id: base64urlToBytes(c.id),
+          type: 'public-key',
+          transports: c.transports,
+        })),
+      } as unknown as PublicKeyCredentialCreationOptions
+      const credential = (await navigator.credentials.create({
+        publicKey,
+      })) as PublicKeyCredential | null
+      if (!credential) {
+        setError('Passkey creation was cancelled')
+        return
+      }
+      const att = credential.response as AuthenticatorAttestationResponse
+      const { error: verr, response: vres } = await openapiPasskeyVerify({
+        body: {
+          username: me.username,
+          credential: {
+            id: credential.id,
+            rawId: bytesToBase64url(credential.rawId),
+            type: credential.type,
+            response: {
+              clientDataJSON: bytesToBase64url(att.clientDataJSON),
+              attestationObject: bytesToBase64url(att.attestationObject),
+            },
+          },
+          token,
+          cookie: SESSION_COOKIE,
+        },
+      })
+      if (!vres?.ok) {
+        setError(problemText(verr, vres?.status))
+        return
+      }
+      setNotice('Passkey registered — you can now sign in with it.')
+      void whoami().then(setMe)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Passkey registration failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Stack gap="md">
+      <ErrorAlert error={error} />
+      {notice && <Alert color="green" withCloseButton onClose={() => setNotice(null)}>{notice}</Alert>}
+
+      {me && (
+        <Text size="sm" c="dimmed">
+          Signed in as <b>{me.username}</b> — roles: {me.roles.join(', ') || '(none)'} — factors
+          proven this session: {me.mfa.length > 0 ? me.mfa.join(', ') : '(single factor)'}
+        </Text>
+      )}
+
+      <Title order={4}>Add an email address</Title>
+      <Group align="flex-end">
+        <TextInput
+          label="Email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => setEmail(e.currentTarget.value)}
+          disabled={busy}
+        />
+        <Button onClick={addEmail} loading={busy} disabled={!email.trim()}>
+          Send confirmation
+        </Button>
+      </Group>
+
+      <Title order={4}>Add a mobile number</Title>
+      {!otpToken ? (
+        <Group align="flex-end">
+          <TextInput
+            label="Mobile"
+            placeholder="13800000000"
+            value={mobile}
+            onChange={(e) => setMobile(e.currentTarget.value)}
+            disabled={busy}
+          />
+          <Button onClick={addMobile} loading={busy} disabled={!mobile.trim()}>
+            Send SMS code
+          </Button>
+        </Group>
+      ) : (
+        <Group align="flex-end">
+          <TextInput
+            label="SMS code"
+            placeholder="123456"
+            value={otpCode}
+            onChange={(e) => setOtpCode(e.currentTarget.value)}
+            disabled={busy}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+          />
+          <Button onClick={confirmMobile} loading={busy} disabled={!otpCode.trim()}>
+            Confirm
+          </Button>
+          <Button variant="subtle" color="gray" onClick={() => setOtpToken(null)} disabled={busy}>
+            Cancel
+          </Button>
+        </Group>
+      )}
+
+      <Title order={4}>Passkeys</Title>
+      <Group>
+        <Button onClick={addPasskey} loading={busy} disabled={!me}>
+          Register a passkey
+        </Button>
+      </Group>
+      <Text size="xs" c="dimmed">
+        Adding credentials requires a recently authenticated session (sudo mode) — if you get a
+        403, sign in again first.
+      </Text>
+    </Stack>
+  )
+}
+
 function App() {
+  // G-155: the api client interceptor funnels X-MFA-Required /
+  // X-Reauth-Required 403s into this state; the panel below makes them
+  // actionable instead of a contentless error string.
+  const [signal, setSignal] = useState<AuthSignal | null>(null)
+
   useEffect(() => {
     if (!authed) window.location.href = '/login?redirect_uri=%2Fadmin'
+  }, [])
+
+  useEffect(() => {
+    setSignalHandler(setSignal)
+    return () => setSignalHandler(null)
   }, [])
 
   if (!authed) {
@@ -1059,6 +1723,7 @@ function App() {
       <Container py="xl">
         <Stack gap="md">
           <Title order={2}>Admin console</Title>
+          {signal && <SignalPanel kind={signal} onDone={() => setSignal(null)} />}
           <Tabs defaultValue="users">
             <Tabs.List>
               <Tabs.Tab value="users">Users</Tabs.Tab>
@@ -1069,6 +1734,8 @@ function App() {
               <Tabs.Tab value="providers">Social providers</Tabs.Tab>
               <Tabs.Tab value="keys">Signing keys</Tabs.Tab>
               <Tabs.Tab value="tenants">Tenants</Tabs.Tab>
+              <Tabs.Tab value="mfa">MFA</Tabs.Tab>
+              <Tabs.Tab value="account">Account</Tabs.Tab>
             </Tabs.List>
             <Tabs.Panel value="users" pt="md">
               <UsersTab />
@@ -1093,6 +1760,12 @@ function App() {
             </Tabs.Panel>
             <Tabs.Panel value="tenants" pt="md">
               <TenantsTab />
+            </Tabs.Panel>
+            <Tabs.Panel value="mfa" pt="md">
+              <MfaTab />
+            </Tabs.Panel>
+            <Tabs.Panel value="account" pt="md">
+              <AccountTab />
             </Tabs.Panel>
           </Tabs>
         </Stack>

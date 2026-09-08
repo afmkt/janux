@@ -134,6 +134,7 @@ pub fn api(disable_rate_limits: bool) -> Router {
             Router::with_path("auth")
                 .hoop(limiter)
                 .hoop(crate::verify::session)
+                .push(Router::with_path("session").get(crate::verify::session_info))
                 .push(Router::with_path("email/request").post(crate::email::request))
                 .push(
                     Router::with_path("email/verify")
@@ -312,6 +313,11 @@ pub fn api(disable_rate_limits: bool) -> Router {
                         .post(crate::otp::remove),
                 )
                 .push(
+                    Router::with_path("user/remove_passkey")
+                        .hoop(crate::audit::audit)
+                        .post(crate::passkey::deactivate),
+                )
+                .push(
                     Router::with_path("user/remove_social")
                         .hoop(crate::audit::audit)
                         .post(crate::social::remove),
@@ -472,10 +478,15 @@ pub fn public_routes(disable_rate_limits: bool) -> Router {
                         .post(crate::oidc::device_authorization),
                 )
                 .push(
-                    // ── Dynamic Client Registration (RFC 7591 / RFC 7592 §4) ─
+                    // ── Dynamic Client Registration (RFC 7591 / RFC 7592) ─
                     Router::with_path("register")
                         .post(crate::oidc_ext::register)
-                        .push(Router::with_path("{client_id}").get(crate::oidc_ext::register_read)),
+                        .push(
+                            Router::with_path("{client_id}")
+                                .get(crate::oidc_ext::register_read)
+                                .put(crate::oidc_ext::register_update)
+                                .delete(crate::oidc_ext::register_delete),
+                        ),
                 )
                 .push(
                     // ── RP-Initiated Logout 1.0 ──────────────────────────────

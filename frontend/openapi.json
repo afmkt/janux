@@ -493,6 +493,17 @@
         ],
         "type": "object"
       },
+      "openapi.passkey.RemovePasskeyRequest": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "openapi.passkey.VerifyRequest": {
         "properties": {
           "cookie": {
@@ -1023,17 +1034,6 @@
         ],
         "type": "object"
       },
-      "openapi.user.UserRoleRequest": {
-        "properties": {
-          "user": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "user"
-        ],
-        "type": "object"
-      },
       "openapi.utils.ApiProblem": {
         "properties": {
           "detail": {
@@ -1214,6 +1214,21 @@
         "properties": {
           "data": {
             "$ref": "#/components/schemas/openapi.utils.Page<openapi.totp.TotpEntry>"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<openapi.verify.SessionInfo>": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/openapi.verify.SessionInfo"
           },
           "ok": {
             "type": "boolean"
@@ -1446,6 +1461,48 @@
           "items",
           "limit",
           "offset"
+        ],
+        "type": "object"
+      },
+      "openapi.verify.SessionInfo": {
+        "description": "The current session's identity, for first-party frontends that no\nlonger hold a readable JWT (G-139 moved it into an HttpOnly cookie):\nthe admin console's MFA/Account tabs and the step-up flows need to\nknow WHO the session belongs to (G-138/G-162).",
+        "properties": {
+          "auth_time": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "domain": {
+            "type": "string"
+          },
+          "mfa": {
+            "description": "Factors proven at `auth_time` (feeds amr/acr and the policy\nengine's MFA gate).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "user": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "user",
+          "domain",
+          "roles",
+          "mfa"
         ],
         "type": "object"
       }
@@ -3089,9 +3146,9 @@
             }
           },
           {
-            "description": "User mobile",
+            "description": "Email address to remove",
             "in": "query",
-            "name": "mobile",
+            "name": "email",
             "required": true,
             "schema": {
               "type": "string"
@@ -3211,6 +3268,65 @@
         "summary": "Remove OTP"
       }
     },
+    "/api/v1/admin/user/remove_passkey": {
+      "post": {
+        "description": "G-101: a user who lost every authenticator was unrecoverable — passkey deactivation was self-session-only, so there was no admin path back into a passkey-only account. This is the recovery lever: an admin (outranking the target, H3) deactivates the user's passkeys on this domain; the user then signs in with a remaining factor, or an admin vouches an email credential (`user/attach_email`, G-131) and the user re-registers passkeys after the magic-link signin.",
+        "operationId": "openapi.passkey.deactivate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.passkey.RemovePasskeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<()>"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Unknown user or bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No verified session"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Level gate refused the target user"
+          }
+        },
+        "summary": "Deactivate all passkeys of a user (admin recovery path)"
+      }
+    },
     "/api/v1/admin/user/remove_role": {
       "post": {
         "operationId": "openapi.user.remove_role",
@@ -3296,16 +3412,17 @@
     "/api/v1/admin/user/roles": {
       "get": {
         "operationId": "openapi.user.user_roles",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/openapi.user.UserRoleRequest"
-              }
+        "parameters": [
+          {
+            "description": "User name",
+            "in": "query",
+            "name": "user",
+            "required": true,
+            "schema": {
+              "type": "string"
             }
-          },
-          "required": true
-        },
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3872,6 +3989,34 @@
           }
         },
         "summary": "Refresh JWT"
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "operationId": "openapi.verify.session_info",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.verify.SessionInfo>"
+                }
+              }
+            },
+            "description": "Session info"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No valid session"
+          }
+        },
+        "summary": "Describe the current session (whoami)"
       }
     },
     "/api/v1/auth/social/redeem": {

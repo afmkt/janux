@@ -28,9 +28,11 @@ use crate::db::Tenant;
 use crate::idp::ClientMeta;
 use crate::utils::{ApiProblem, ApiResponse};
 use base64::Engine;
+use jiff::ToSpan;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 /// Back-Channel Logout 1.0 §2.4 — the `events` claim value marking a JWT
 /// as a logout token.
@@ -40,8 +42,9 @@ const BACKCHANNEL_EVENT: &str = "http://schemas.openid.net/event/backchannel-log
 /// enough that a leaked token cannot be replayed later.
 const LOGOUT_TOKEN_SECONDS: i64 = 120;
 
-/// Delivery attempts per back-channel target (initial + retries).
-const BACKCHANNEL_ATTEMPTS: u32 = 3;
+/// Give-up bound for durable back-channel delivery (G-126): with the
+/// exponential backoff below this covers ~5 hours of RP outage.
+const BACKCHANNEL_MAX_ATTEMPTS: i32 = 10;
 
 // ── Validation primitives (shared by DCR and the admin meta endpoint) ────────
 
@@ -168,11 +171,186 @@ pub struct RegisterResponse {
     pub backchannel_logout_uri: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub post_logout_redirect_uris: Vec<String>,
+    /// RFC 7592 §3 (G-125): the management credential for GET/PUT/DELETE
+    /// on `registration_client_uri`. Rotated on every update.
+    pub registration_access_token: String,
+    pub registration_client_uri: String,
 }
 
 /// RFC 7591 §3.2.2 error response shape (OAuth 2.0-style JSON).
 fn registration_error(res: &mut Response, error: &str, description: &str) {
     crate::oidc::token_error(res, StatusCode::BAD_REQUEST, error, description);
+}
+
+/// The validated, normalized form of a registration body — shared by the
+/// initial registration (RFC 7591) and the update path (RFC 7592 §4,
+/// G-125) so both enforce identical metadata rules.
+struct ValidatedRegistration {
+    auth_method: String,
+    grant_types: Vec<String>,
+    response_types: Vec<String>,
+    scope: String,
+    post_logout_uris: Vec<String>,
+}
+
+fn validate_registration(
+    body: &RegisterRequest,
+) -> Result<ValidatedRegistration, (&'static str, String)> {
+    // ── redirect_uris (RFC 7591 §2: REQUIRED, no fragments) ────────────
+    if body.redirect_uris.is_empty() {
+        return Err(("invalid_redirect_uri", "redirect_uris is required".into()));
+    }
+    for uri in &body.redirect_uris {
+        if let Err(e) = validate_client_uri(uri) {
+            return Err(("invalid_redirect_uri", e));
+        }
+    }
+
+    // ── token_endpoint_auth_method ─────────────────────────────────────
+    let auth_method = body
+        .token_endpoint_auth_method
+        .clone()
+        .unwrap_or_else(|| "client_secret_basic".to_string());
+    if !matches!(
+        auth_method.as_str(),
+        "client_secret_basic" | "client_secret_post" | "none"
+    ) {
+        return Err((
+            "invalid_client_metadata",
+            format!("unsupported token_endpoint_auth_method: '{auth_method}'"),
+        ));
+    }
+
+    // ── grant_types / response_types / scope ───────────────────────────
+    let grant_types = validate_dcr_grant_types(body.grant_types.as_deref().unwrap_or(&[]))
+        .map_err(|e| ("invalid_client_metadata", e))?;
+    let response_types = validate_dcr_response_types(body.response_types.as_deref().unwrap_or(&[]))
+        .map_err(|e| ("invalid_client_metadata", e))?;
+    let scope =
+        validate_dcr_scope(body.scope.as_deref()).map_err(|e| ("invalid_client_metadata", e))?;
+
+    // ── optional metadata ──────────────────────────────────────────────
+    if let Some(name) = &body.client_name
+        && name.chars().count() > 200
+    {
+        return Err(("invalid_client_metadata", "client_name too long".into()));
+    }
+    if let Some(uri) = &body.backchannel_logout_uri {
+        if let Err(e) = validate_client_uri(uri) {
+            return Err(("invalid_client_metadata", e));
+        }
+        if !uri.starts_with("https://") {
+            return Err((
+                "invalid_client_metadata",
+                "backchannel_logout_uri must be https".into(),
+            ));
+        }
+    }
+    let mut post_logout_uris = Vec::new();
+    if let Some(uris) = &body.post_logout_redirect_uris {
+        for uri in uris {
+            if let Err(e) = validate_client_uri(uri) {
+                return Err(("invalid_client_metadata", e));
+            }
+            post_logout_uris.push(uri.clone());
+        }
+    }
+
+    Ok(ValidatedRegistration {
+        auth_method,
+        grant_types,
+        response_types,
+        scope,
+        post_logout_uris,
+    })
+}
+
+/// RFC 7592 §3 registration access token lifetime. Janux clients do not
+/// expire, and the RFC wants the RAT to live at least as long as the
+/// client, so it gets a ten-year horizon; the effective kill switch is
+/// the client row itself — every management call re-resolves the client,
+/// so a deleted client's RAT dies immediately (and the delete also
+/// poisons its machine tokens, G-123).
+const REGISTRATION_TOKEN_LIFETIME_MINUTES: i32 = 10 * 365 * 24 * 60;
+
+fn mint_registration_token(
+    tenant: &mut crate::db::Tenant,
+    issuer: &str,
+    domain: &str,
+    client_id: &str,
+) -> anyhow::Result<String> {
+    let key = tenant.current_key(domain)?;
+    crate::jwt::jwt_authenticate(
+        issuer,
+        client_id,
+        // jti makes every mint unique — the PUT rotation must be
+        // observable even within the same whole-second iat.
+        &serde_json::json!({
+            "typ": "client_registration",
+            "jti": uuid::Uuid::now_v7().to_string(),
+        }),
+        &key,
+        REGISTRATION_TOKEN_LIFETIME_MINUTES,
+        crate::jwt::JwtOidcParams {
+            client_id: client_id.to_string(),
+            nonce: None,
+            amr: None,
+            acr: None,
+            access_token: None,
+            auth_time: None,
+        },
+    )
+}
+
+async fn verify_registration_token(
+    tenant: &mut crate::db::Tenant,
+    issuer: &str,
+    client_id: &str,
+    token: &str,
+) -> bool {
+    let Ok(decoded) = crate::jwt::jwt_decode::<serde_json::Value>(
+        token,
+        crate::jwt::VERIFICATION_GRACE_MINUTES,
+        tenant,
+    )
+    .await
+    else {
+        return false;
+    };
+    decoded.claims.iss == issuer
+        && decoded.claims.sub == client_id
+        && decoded.claims.aud == client_id
+        && decoded.claims.data.get("typ").and_then(|v| v.as_str()) == Some("client_registration")
+}
+
+/// RFC 7592 §2.1: management requests authenticate with the registration
+/// access token (Bearer). The client's own secret (Basic/post) is also
+/// accepted — the pre-7592 behavior of the read endpoint, kept so
+/// admin-created clients remain manageable. Public clients (`none`) can
+/// only use the RAT.
+async fn authenticate_management(
+    req: &mut Request,
+    tenant: &mut crate::db::Tenant,
+    client: &crate::idp::OAuth2Client,
+    issuer: &str,
+) -> bool {
+    if let Some(header) = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        && let Some(token) = header
+            .strip_prefix("Bearer ")
+            .or_else(|| header.strip_prefix("bearer "))
+        && verify_registration_token(tenant, issuer, &client.id, token.trim()).await
+    {
+        return true;
+    }
+    let secret = presented_client_secret(req).await;
+    match (client.token_endpoint_auth_method.as_str(), secret) {
+        ("none", _) => false,
+        (_, None) => false,
+        (_, Some(attempt)) => client.verify_password(&attempt).unwrap_or(false),
+    }
 }
 
 #[endpoint(
@@ -190,6 +368,9 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     // needs it mutably while `domain` stays live until the client row is
     // written.
     let domain = crate::utils::get_domain(req, state)
+        .unwrap_or_default()
+        .to_string();
+    let issuer = crate::utils::get_issuer(req, state)
         .unwrap_or_default()
         .to_string();
     let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_str()) else {
@@ -216,77 +397,15 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         }
     };
 
-    // ── redirect_uris (RFC 7591 §2: REQUIRED, no fragments) ────────────
-    if body.redirect_uris.is_empty() {
-        registration_error(res, "invalid_redirect_uri", "redirect_uris is required");
-        return;
-    }
-    for uri in &body.redirect_uris {
-        if let Err(e) = validate_client_uri(uri) {
-            registration_error(res, "invalid_redirect_uri", &e);
+    // Shared with the RFC 7592 update path (G-125) so both enforce
+    // identical metadata rules.
+    let validated = match validate_registration(&body) {
+        Ok(v) => v,
+        Err((error, desc)) => {
+            registration_error(res, error, &desc);
             return;
         }
-    }
-
-    // ── token_endpoint_auth_method ─────────────────────────────────────
-    let auth_method = body
-        .token_endpoint_auth_method
-        .clone()
-        .unwrap_or_else(|| "client_secret_basic".to_string());
-    if !matches!(
-        auth_method.as_str(),
-        "client_secret_basic" | "client_secret_post" | "none"
-    ) {
-        registration_error(
-            res,
-            "invalid_client_metadata",
-            &format!("unsupported token_endpoint_auth_method: '{auth_method}'"),
-        );
-        return;
-    }
-
-    // ── grant_types / response_types / scope ───────────────────────────
-    let grant_types = match validate_dcr_grant_types(body.grant_types.as_deref().unwrap_or(&[])) {
-        Ok(g) => g,
-        Err(e) => return registration_error(res, "invalid_client_metadata", &e),
     };
-    let response_types =
-        match validate_dcr_response_types(body.response_types.as_deref().unwrap_or(&[])) {
-            Ok(r) => r,
-            Err(e) => return registration_error(res, "invalid_client_metadata", &e),
-        };
-    let scope = match validate_dcr_scope(body.scope.as_deref()) {
-        Ok(s) => s,
-        Err(e) => return registration_error(res, "invalid_client_metadata", &e),
-    };
-
-    // ── optional metadata ──────────────────────────────────────────────
-    if let Some(name) = &body.client_name
-        && name.chars().count() > 200
-    {
-        return registration_error(res, "invalid_client_metadata", "client_name too long");
-    }
-    if let Some(uri) = &body.backchannel_logout_uri {
-        if let Err(e) = validate_client_uri(uri) {
-            return registration_error(res, "invalid_client_metadata", &e);
-        }
-        if !uri.starts_with("https://") {
-            return registration_error(
-                res,
-                "invalid_client_metadata",
-                "backchannel_logout_uri must be https",
-            );
-        }
-    }
-    let mut post_logout_uris = Vec::new();
-    if let Some(uris) = &body.post_logout_redirect_uris {
-        for uri in uris {
-            if let Err(e) = validate_client_uri(uri) {
-                return registration_error(res, "invalid_client_metadata", &e);
-            }
-            post_logout_uris.push(uri.clone());
-        }
-    }
 
     // ── create ─────────────────────────────────────────────────────────
     let client_id = uuid::Uuid::now_v7().to_string();
@@ -300,10 +419,10 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
             &client_id,
             &secret,
             &redirect_refs,
-            &grant_types.join(" "),
-            &response_types.join(" "),
-            &auth_method,
-            &scope,
+            &validated.grant_types.join(" "),
+            &validated.response_types.join(" "),
+            &validated.auth_method,
+            &validated.scope,
         )
         .await
     {
@@ -313,7 +432,7 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     let meta = ClientMeta {
         client_name: body.client_name.clone(),
         backchannel_logout_uri: body.backchannel_logout_uri.clone(),
-        post_logout_redirect_uris: post_logout_uris.clone(),
+        post_logout_redirect_uris: validated.post_logout_uris.clone(),
         dynamic: true,
     };
     if let Err(e) = tenant.client_meta_save(&client_id, &meta).await {
@@ -325,11 +444,29 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         return;
     }
 
+    // G-125 (RFC 7592 §3): issue the initial management credential. A
+    // tenant without a signing key cannot mint it — roll the registration
+    // back rather than leaving an unmanageable client behind.
+    let registration_access_token =
+        match mint_registration_token(&mut tenant, &issuer, &domain, &client_id) {
+            Ok(token) => token,
+            Err(_) => {
+                let _ = tenant.oauth2client_delete(&domain, &client_id).await;
+                registration_error(
+                    res,
+                    "invalid_client_metadata",
+                    "failed to issue the registration access token",
+                );
+                return;
+            }
+        };
+    let registration_client_uri = format!("{issuer}/register/{client_id}");
+
     let issued_at = jiff::Timestamp::now().as_second();
     res.status_code(StatusCode::CREATED);
     res.render(Json(RegisterResponse {
         client_id,
-        client_secret: if auth_method == "none" {
+        client_secret: if validated.auth_method == "none" {
             None
         } else {
             Some(secret)
@@ -337,13 +474,15 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         client_id_issued_at: issued_at,
         client_secret_expires_at: 0,
         redirect_uris: body.redirect_uris,
-        token_endpoint_auth_method: auth_method,
-        grant_types,
-        response_types,
-        scope,
+        token_endpoint_auth_method: validated.auth_method,
+        grant_types: validated.grant_types,
+        response_types: validated.response_types,
+        scope: validated.scope,
         client_name: body.client_name,
         backchannel_logout_uri: body.backchannel_logout_uri,
-        post_logout_redirect_uris: post_logout_uris,
+        post_logout_redirect_uris: validated.post_logout_uris,
+        registration_access_token,
+        registration_client_uri,
     }));
 }
 
@@ -387,6 +526,9 @@ pub async fn register_read(req: &mut Request, depot: &mut Depot, res: &mut Respo
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or_default();
+    let issuer = crate::utils::get_issuer(req, state)
+        .unwrap_or_default()
+        .to_string();
     let client_id = match req.param::<String>("client_id") {
         Some(id) if !id.is_empty() => id,
         _ => {
@@ -423,16 +565,11 @@ pub async fn register_read(req: &mut Request, depot: &mut Depot, res: &mut Respo
             return;
         }
     };
-    // Public clients cannot authenticate a read request; RFC 7592 would
-    // hand them a registration_access_token, which this server does not
-    // issue — reject rather than expose metadata unauthenticated.
-    let secret = presented_client_secret(req).await;
-    let authenticated = match (client.token_endpoint_auth_method.as_str(), secret) {
-        ("none", _) => false,
-        (_, None) => false,
-        (_, Some(attempt)) => client.verify_password(&attempt).unwrap_or(false),
-    };
-    if !authenticated {
+    // G-125 (RFC 7592 §2.1): the registration access token is the
+    // standard management credential; the client's own secret is still
+    // accepted (the pre-7592 behavior) so admin-created clients remain
+    // readable. Public clients can only use the RAT.
+    if !authenticate_management(req, &mut tenant, &client, &issuer).await {
         crate::oidc::token_error(
             res,
             StatusCode::UNAUTHORIZED,
@@ -465,6 +602,216 @@ pub async fn register_read(req: &mut Request, depot: &mut Depot, res: &mut Respo
     })));
 }
 
+#[endpoint(
+    summary = "Update registered client metadata (RFC 7592 §4)",
+    request_body = RegisterRequest,
+    responses(
+        (status_code = 200, description = "Updated metadata with a rotated registration_access_token", body = RegisterResponse),
+        (status_code = 400, description = "Invalid metadata", body = serde_json::Value),
+        (status_code = 401, description = "Client authentication failed", body = serde_json::Value),
+    )
+)]
+pub async fn register_update(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let state = depot
+        .obtain_mut::<crate::server::ServerState>()
+        .expect("ServerState not found");
+    let domain = crate::utils::get_domain(req, state)
+        .unwrap_or_default()
+        .to_string();
+    let issuer = crate::utils::get_issuer(req, state)
+        .unwrap_or_default()
+        .to_string();
+    let client_id = match req.param::<String>("client_id") {
+        Some(id) if !id.is_empty() => id,
+        _ => {
+            crate::oidc::token_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "missing client_id",
+            );
+            return;
+        }
+    };
+    let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_str()) else {
+        crate::oidc::token_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "unknown tenant domain",
+        );
+        return;
+    };
+    let client = match tenant.oauth2client_get(&client_id).await {
+        Ok(c) if c.domain_id == domain => c,
+        _ => {
+            crate::oidc::token_error(
+                res,
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "unknown client",
+            );
+            return;
+        }
+    };
+    if !authenticate_management(req, &mut tenant, &client, &issuer).await {
+        crate::oidc::token_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "client authentication failed",
+        );
+        return;
+    }
+    let body = match req.parse_json::<RegisterRequest>().await {
+        Ok(b) => b,
+        Err(_) => {
+            registration_error(res, "invalid_client_metadata", "request body must be JSON");
+            return;
+        }
+    };
+    let validated = match validate_registration(&body) {
+        Ok(v) => v,
+        Err((error, desc)) => {
+            registration_error(res, error, &desc);
+            return;
+        }
+    };
+    crate::audit::record_target_detail(res, "client", &client_id, "dcr-update");
+    if let Err(e) = tenant
+        .oauth2client_update(
+            &domain,
+            &client_id,
+            &validated.grant_types.join(" "),
+            &validated.response_types.join(" "),
+            &validated.auth_method,
+            &validated.scope,
+            &body.redirect_uris,
+        )
+        .await
+    {
+        registration_error(res, "invalid_client_metadata", &e.to_string());
+        return;
+    }
+    let meta = ClientMeta {
+        client_name: body.client_name.clone(),
+        backchannel_logout_uri: body.backchannel_logout_uri.clone(),
+        post_logout_redirect_uris: validated.post_logout_uris.clone(),
+        dynamic: true,
+    };
+    if let Err(e) = tenant.client_meta_save(&client_id, &meta).await {
+        registration_error(res, "invalid_client_metadata", &e.to_string());
+        return;
+    }
+    // RFC 7592 §4: the response carries the current credential — rotate
+    // it on every update so a leaked token's usable window is bounded by
+    // the client's own update cadence.
+    let registration_access_token =
+        match mint_registration_token(&mut tenant, &issuer, &domain, &client_id) {
+            Ok(token) => token,
+            Err(e) => {
+                registration_error(
+                    res,
+                    "invalid_client_metadata",
+                    &format!(
+                        "metadata updated, but rotating the registration access token failed: {e}"
+                    ),
+                );
+                return;
+            }
+        };
+    res.status_code(StatusCode::OK);
+    res.render(Json(RegisterResponse {
+        client_id: client_id.clone(),
+        // The secret is never re-exposed; rotation stays an admin surface.
+        client_secret: None,
+        client_id_issued_at: client.created_at.as_second(),
+        client_secret_expires_at: 0,
+        redirect_uris: body.redirect_uris,
+        token_endpoint_auth_method: validated.auth_method,
+        grant_types: validated.grant_types,
+        response_types: validated.response_types,
+        scope: validated.scope,
+        client_name: body.client_name,
+        backchannel_logout_uri: body.backchannel_logout_uri,
+        post_logout_redirect_uris: validated.post_logout_uris,
+        registration_access_token,
+        registration_client_uri: format!("{issuer}/register/{client_id}"),
+    }));
+}
+
+#[endpoint(
+    summary = "Delete a registered client (RFC 7592 §5)",
+    responses(
+        (status_code = 204, description = "Client deleted (its machine tokens are revoked, G-123)"),
+        (status_code = 400, description = "Bad request", body = serde_json::Value),
+        (status_code = 401, description = "Client authentication failed", body = serde_json::Value),
+    )
+)]
+pub async fn register_delete(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let state = depot
+        .obtain_mut::<crate::server::ServerState>()
+        .expect("ServerState not found");
+    let domain = crate::utils::get_domain(req, state)
+        .unwrap_or_default()
+        .to_string();
+    let issuer = crate::utils::get_issuer(req, state)
+        .unwrap_or_default()
+        .to_string();
+    let client_id = match req.param::<String>("client_id") {
+        Some(id) if !id.is_empty() => id,
+        _ => {
+            crate::oidc::token_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "missing client_id",
+            );
+            return;
+        }
+    };
+    let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_str()) else {
+        crate::oidc::token_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "unknown tenant domain",
+        );
+        return;
+    };
+    let client = match tenant.oauth2client_get(&client_id).await {
+        Ok(c) if c.domain_id == domain => c,
+        _ => {
+            crate::oidc::token_error(
+                res,
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "unknown client",
+            );
+            return;
+        }
+    };
+    if !authenticate_management(req, &mut tenant, &client, &issuer).await {
+        crate::oidc::token_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "client authentication failed",
+        );
+        return;
+    }
+    crate::audit::record_target_detail(res, "client", &client_id, "dcr-delete");
+    // The soft delete also poisons the client's machine tokens (G-123),
+    // and future management calls fail at the client lookup above — the
+    // registration access token dies with the client row.
+    match tenant.oauth2client_delete(&domain, &client_id).await {
+        Ok(_) => {
+            res.status_code(StatusCode::NO_CONTENT);
+        }
+        Err(e) => registration_error(res, "invalid_client_metadata", &e.to_string()),
+    }
+}
+
 // ── Back-Channel Logout 1.0 ─────────────────────────────────────────────────
 
 /// Flattened payload of a logout token: the `jti` and the `events` claim
@@ -476,18 +823,18 @@ pub struct LogoutTokenData {
     pub events: serde_json::Value,
 }
 
-/// Mint one logout token per RP of `user_id` that registered a
-/// `backchannel_logout_uri`. Returns `(uri, logout_token)` pairs; the
-/// caller hands them to [`spawn_backchannel_delivery`].
+/// The RPs a logout must fan out to: `(backchannel_logout_uri, client_id)`
+/// per distinct client with a non-revoked consent grant and a configured
+/// URI. The caller hands them to [`queue_backchannel_deliveries`] (G-126),
+/// which persists durable tasks — the worker re-mints a fresh logout token
+/// for every delivery attempt.
 ///
 /// The RP set is the user's non-revoked consent grants — the only durable
 /// record of where the user holds an active OIDC authorization. Failures
-/// (missing client, no signing key) skip that RP: logout must never fail
-/// because one RP is misconfigured.
+/// (missing client, no URI) skip that RP: logout must never fail because
+/// one RP is misconfigured.
 pub async fn backchannel_logout_targets(
     tenant: &mut Tenant,
-    issuer: &str,
-    domain: &str,
     user_id: &str,
 ) -> Vec<(String, String)> {
     let mut targets: Vec<(String, String)> = Vec::new();
@@ -508,69 +855,194 @@ pub async fn backchannel_logout_targets(
         let Some(uri) = meta.backchannel_logout_uri.filter(|u| !u.is_empty()) else {
             continue;
         };
-        let Ok(key) = tenant.current_key(domain) else {
-            continue;
-        };
-        let data = LogoutTokenData {
-            jti: uuid::Uuid::new_v4().to_string(),
-            events: serde_json::json!({ BACKCHANNEL_EVENT: {} }),
-        };
-        let Ok(token) = crate::jwt::jwt_logout(
-            issuer,
-            user_id,
-            &client.id,
-            &key,
-            LOGOUT_TOKEN_SECONDS,
-            &data,
-        ) else {
-            continue;
-        };
-        targets.push((uri, token));
+        targets.push((uri, client.id));
     }
     targets
 }
 
-/// Fire-and-forget delivery of logout tokens: `POST logout_token=…`
-/// (form-encoded, Back-Channel Logout 1.0 §2.5) with a short timeout and
-/// bounded retries. Runs detached — the logout response never waits on
-/// RP reachability.
-pub fn spawn_backchannel_delivery(targets: Vec<(String, String)>) {
-    if targets.is_empty() {
+/// A pending back-channel logout delivery (G-126). The old path was a
+/// detached task with 3 in-memory attempts across ~16 seconds — a restart
+/// or an RP outage longer than a few seconds dropped the notification
+/// permanently, and the pre-minted logout token expired after 120 s
+/// anyway. Task rows live in the tenant database and survive both: the
+/// worker RE-MINTS a fresh logout token for every attempt (the 120 s
+/// expiry bounds each try, not the retry window) and backs off
+/// exponentially until `BACKCHANNEL_MAX_ATTEMPTS`.
+#[derive(Debug, toasty::Model, Clone)]
+pub struct BackchannelTask {
+    #[key]
+    pub id: String,
+    /// Where to POST the logout token.
+    pub uri: String,
+    /// Issuer for the re-minted logout token.
+    pub issuer: String,
+    /// Domain whose signing key mints the token.
+    pub domain_id: String,
+    /// The logging-out user (logout token `sub`).
+    pub sub: String,
+    /// The RP (logout token `aud`).
+    pub client_id: String,
+    #[default(0)]
+    pub attempts: i32,
+    pub next_attempt_at: jiff::Timestamp,
+    #[auto]
+    pub created_at: jiff::Timestamp,
+}
+
+/// Wakeup for the back-channel worker: queued deliveries are attempted
+/// immediately instead of waiting for the next sweep tick.
+pub static BACKCHANNEL_NOTIFY: LazyLock<tokio::sync::Notify> =
+    LazyLock::new(tokio::sync::Notify::new);
+
+/// Queue durable back-channel deliveries for one logout event and wake
+/// the worker. Insert failures are logged, not fatal — the logout itself
+/// already succeeded.
+pub async fn queue_backchannel_deliveries(
+    tenant: &mut Tenant,
+    issuer: &str,
+    domain: &str,
+    user_id: &str,
+    targets: Vec<(String, String)>,
+) {
+    let now = jiff::Timestamp::now();
+    for (uri, client_id) in targets {
+        if let Err(e) = toasty::create!(BackchannelTask {
+            id: uuid::Uuid::now_v7().to_string(),
+            uri,
+            issuer: issuer.to_string(),
+            domain_id: domain.to_string(),
+            sub: user_id.to_string(),
+            client_id,
+            attempts: 0,
+            next_attempt_at: now,
+        })
+        .exec(&mut tenant.database)
+        .await
+        {
+            tracing::warn!(target: "auth::oidc", "failed to queue back-channel delivery: {e:#}");
+        }
+    }
+    BACKCHANNEL_NOTIFY.notify_one();
+}
+
+/// The back-channel worker loop: sweep every 60 s, plus an immediate
+/// sweep whenever deliveries are queued. Started once from `main`.
+pub async fn run_backchannel_worker(state: crate::server::ServerState) {
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {}
+            _ = BACKCHANNEL_NOTIFY.notified() => {}
+        }
+        backchannel_pass(&state.storage).await;
+    }
+}
+
+/// One durable-delivery sweep across every loaded tenant. Tasks run
+/// under the tenant write guard like any other mutation, so deliveries
+/// serialize against requests for the same tenant.
+pub async fn backchannel_pass(storage: &crate::db::Storage) {
+    let now = jiff::Timestamp::now();
+    for id in storage.tenant_ids() {
+        let Some(mut tenant) = storage.tenant_by_id(&id) else {
+            continue;
+        };
+        // Task volume is tiny (one row per RP per logout, deleted on
+        // success) — a full scan beats a timestamp-filter dependency.
+        let Ok(tasks) = BackchannelTask::all().exec(&mut tenant.database).await else {
+            continue;
+        };
+        for task in tasks {
+            if task.next_attempt_at > now {
+                continue;
+            }
+            deliver_backchannel_task(&mut tenant, &task, now).await;
+        }
+    }
+}
+
+async fn deliver_backchannel_task(
+    tenant: &mut Tenant,
+    task: &BackchannelTask,
+    now: jiff::Timestamp,
+) {
+    // Re-mint per attempt: the 120 s logout-token expiry bounds a single
+    // try, never the retry window.
+    let Ok(key) = tenant.current_key(&task.domain_id) else {
+        return; // no signing key right now — the next sweep retries
+    };
+    let data = LogoutTokenData {
+        jti: uuid::Uuid::new_v4().to_string(),
+        events: serde_json::json!({ BACKCHANNEL_EVENT: {} }),
+    };
+    let Ok(token) = crate::jwt::jwt_logout(
+        &task.issuer,
+        &task.sub,
+        &task.client_id,
+        &key,
+        LOGOUT_TOKEN_SECONDS,
+        &data,
+    ) else {
+        return;
+    };
+    let delivered = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(client) => client
+            .post(&task.uri)
+            .form(&[("logout_token", token.as_str())])
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    if delivered {
+        BackchannelTask::delete_by_id(&mut tenant.database, task.id.as_str())
+            .await
+            .ok();
+        tracing::info!(
+            target: "auth::oidc",
+            uri = %task.uri,
+            client_id = %task.client_id,
+            attempts = task.attempts + 1,
+            "back-channel logout delivered"
+        );
         return;
     }
-    tokio::spawn(async move {
-        let Ok(client) = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-        else {
-            return;
-        };
-        for (uri, token) in targets {
-            let mut delivered = false;
-            for attempt in 0..BACKCHANNEL_ATTEMPTS {
-                if attempt > 0 {
-                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                }
-                let ok = client
-                    .post(&uri)
-                    .form(&[("logout_token", token.as_str())])
-                    .send()
-                    .await
-                    .map(|r| r.status().is_success())
-                    .unwrap_or(false);
-                if ok {
-                    delivered = true;
-                    break;
-                }
-            }
-            tracing::debug!(
-                target: "auth::oidc",
-                uri = %uri,
-                delivered,
-                "back-channel logout delivery"
-            );
-        }
-    });
+    let attempts = task.attempts + 1;
+    if attempts >= BACKCHANNEL_MAX_ATTEMPTS {
+        BackchannelTask::delete_by_id(&mut tenant.database, task.id.as_str())
+            .await
+            .ok();
+        tracing::warn!(
+            target: "auth::oidc",
+            uri = %task.uri,
+            client_id = %task.client_id,
+            attempts,
+            "back-channel logout GAVE UP — the RP never acknowledged; \
+             its local session may outlive the SLO"
+        );
+        return;
+    }
+    // Exponential backoff: 2, 4, 8, 16, 32, 64, 64, 64, 64 minutes —
+    // ~5 hours of coverage for an RP outage, bounded per attempt.
+    let backoff_secs = (1i64 << attempts.min(6)) * 60;
+    let next = now.checked_add(backoff_secs.seconds()).unwrap_or(now);
+    BackchannelTask::update_by_id(task.id.as_str())
+        .attempts(attempts)
+        .next_attempt_at(next)
+        .exec(&mut tenant.database)
+        .await
+        .ok();
+    tracing::debug!(
+        target: "auth::oidc",
+        uri = %task.uri,
+        client_id = %task.client_id,
+        attempts,
+        "back-channel logout delivery failed; scheduled retry"
+    );
 }
 
 // ── RP-Initiated Logout 1.0 ─────────────────────────────────────────────────
@@ -712,8 +1184,8 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
 
     // ── Back-channel fan-out to the user's RPs ─────────────────────────
     if let Some(uid) = &user_id {
-        let targets = backchannel_logout_targets(&mut tenant, &issuer, &domain, uid).await;
-        spawn_backchannel_delivery(targets);
+        let targets = backchannel_logout_targets(&mut tenant, uid).await;
+        queue_backchannel_deliveries(&mut tenant, &issuer, &domain, uid, targets).await;
     }
 
     // G-139: the canonical session cookie is HttpOnly — only the server
@@ -1049,12 +1521,11 @@ mod tests {
 
     /// Fan-out selects exactly the clients that (a) hold a non-revoked
     /// grant for the user and (b) registered a backchannel_logout_uri.
-    /// The minted token must be verifiable against the tenant JWKS and
-    /// carry the user/client identities.
+    /// Token minting moved into the durable worker (G-126) and is pinned
+    /// by `backchannel_worker_delivers_form_encoded_and_deletes_the_task`.
     #[tokio::test]
     async fn backchannel_fanout_selects_registered_clients() {
         let (storage, _tmp, tenant_name, domain) = fanout_env().await;
-        let issuer = format!("http://{domain}");
         let user_id = "user-uuid-1";
 
         {
@@ -1142,63 +1613,77 @@ mod tests {
         }
 
         let mut tenant = storage.tenant_by_id(tenant_name).expect("tenant");
-        let targets = backchannel_logout_targets(&mut tenant, &issuer, domain, user_id).await;
+        let targets = backchannel_logout_targets(&mut tenant, user_id).await;
         assert_eq!(
             targets.len(),
             1,
             "only the client with a grant AND a backchannel_logout_uri is notified"
         );
-        let (uri, token) = &targets[0];
+        let (uri, client_id) = &targets[0];
         assert_eq!(uri, "https://a.example/backchannel");
-
-        // The token verifies against the tenant key and carries the spec
-        // claims (aud = client, sub = user, events marker present).
-        let decoded = crate::jwt::jwt_decode::<LogoutTokenData>(token, 0, &mut tenant)
-            .await
-            .expect("logout token must verify against the tenant JWKS");
-        assert_eq!(decoded.claims.iss, issuer);
-        assert_eq!(decoded.claims.sub, user_id);
-        assert_eq!(decoded.claims.aud, "client-with-uri");
         assert_eq!(
-            decoded.claims.data.events[BACKCHANNEL_EVENT],
-            serde_json::json!({})
+            client_id, "client-with-uri",
+            "G-126: targets carry the client id — the worker re-mints the token per attempt"
         );
 
         // A user with no grants gets no notifications.
-        let none = backchannel_logout_targets(&mut tenant, &issuer, domain, "stranger").await;
+        let none = backchannel_logout_targets(&mut tenant, "stranger").await;
         assert!(none.is_empty());
     }
 
-    /// Delivery posts a form-encoded `logout_token` (Back-Channel Logout
-    /// 1.0 §2.5) and treats a 2xx as success.
+    /// G-126: delivery is a DURABLE task — the worker re-mints a fresh
+    /// spec-shaped logout token per attempt, POSTs it form-encoded
+    /// (Back-Channel Logout 1.0 §2.5), treats a 2xx as success and deletes
+    /// the task.
     #[tokio::test]
-    async fn backchannel_delivery_posts_form_encoded_logout_token() {
+    async fn backchannel_worker_delivers_form_encoded_and_deletes_the_task() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+        let (storage, _tmp, tenant_name, domain) = fanout_env().await;
+        let issuer = format!("http://{domain}");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
         let addr = listener.local_addr().expect("addr");
         let uri = format!("http://{addr}/backchannel");
 
-        spawn_backchannel_delivery(vec![(uri, "the-logout-token".to_string())]);
-
-        let (mut sock, _) = listener.accept().await.expect("delivery connects");
-        let mut buf = vec![0u8; 4096];
-        let mut data = Vec::new();
-        // read until the end of the (small) request body
-        loop {
-            let n = sock.read(&mut buf).await.expect("read");
-            if n == 0 {
-                break;
-            }
-            data.extend_from_slice(&buf[..n]);
-            let text = String::from_utf8_lossy(&data);
-            if text.contains("the-logout-token") {
-                break;
-            }
+        {
+            let mut tenant = storage.tenant_by_id(tenant_name).expect("tenant");
+            queue_backchannel_deliveries(
+                &mut tenant,
+                &issuer,
+                domain,
+                "user-uuid-1",
+                vec![(uri, "client-a".to_string())],
+            )
+            .await;
         }
-        let text = String::from_utf8_lossy(&data).to_string();
+
+        // The responder must run CONCURRENTLY with the sweep: the worker
+        // waits for the HTTP response while the responder waits for the
+        // request body.
+        let responder = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.expect("delivery connects");
+            let mut buf = vec![0u8; 8192];
+            let mut data = Vec::new();
+            loop {
+                let n = sock.read(&mut buf).await.expect("read");
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+                if String::from_utf8_lossy(&data).contains("logout_token=") {
+                    break;
+                }
+            }
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .expect("ack");
+            String::from_utf8_lossy(&data).to_string()
+        });
+        backchannel_pass(&storage).await;
+        let text = responder.await.expect("responder");
+
         assert!(
             text.starts_with("POST /backchannel"),
             "delivery must be a POST to the registered URI: {text}"
@@ -1207,10 +1692,112 @@ mod tests {
             text.contains("application/x-www-form-urlencoded"),
             "logout_token is form-encoded: {text}"
         );
-        assert!(text.contains("logout_token=the-logout-token"));
-        sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+        let token = text
+            .split("logout_token=")
+            .nth(1)
+            .expect("logout_token param")
+            .split(['&', '\r'])
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        // The worker-minted token verifies against the tenant key and
+        // carries the spec claims (aud = client, sub = user, events marker).
+        let mut tenant = storage.tenant_by_id(tenant_name).expect("tenant");
+        let decoded = crate::jwt::jwt_decode::<LogoutTokenData>(&token, 0, &mut tenant)
             .await
-            .expect("ack");
+            .expect("worker-minted logout token must verify against the tenant JWKS");
+        assert_eq!(decoded.claims.iss, issuer);
+        assert_eq!(decoded.claims.sub, "user-uuid-1");
+        assert_eq!(decoded.claims.aud, "client-a");
+        assert_eq!(
+            decoded.claims.data.events[BACKCHANNEL_EVENT],
+            serde_json::json!({})
+        );
+
+        let tasks = BackchannelTask::all()
+            .exec(&mut tenant.database)
+            .await
+            .expect("tasks");
+        assert!(tasks.is_empty(), "a delivered task is deleted");
+    }
+
+    /// G-126: a failing RP is retried with backoff — the task is a DB row,
+    /// so it survives restarts — a not-yet-due task is skipped, and the
+    /// attempt bound eventually gives up and purges the task.
+    #[tokio::test]
+    async fn backchannel_worker_retries_with_backoff_and_gives_up() {
+        let (storage, _tmp, tenant_name, domain) = fanout_env().await;
+        let issuer = format!("http://{domain}");
+        {
+            let mut tenant = storage.tenant_by_id(tenant_name).expect("tenant");
+            // Port 1: connection refused, immediately.
+            queue_backchannel_deliveries(
+                &mut tenant,
+                &issuer,
+                domain,
+                "user-uuid-1",
+                vec![(
+                    "http://127.0.0.1:1/backchannel".to_string(),
+                    "client-a".to_string(),
+                )],
+            )
+            .await;
+        }
+
+        backchannel_pass(&storage).await;
+        let task_id = {
+            let mut tenant = storage.tenant_by_id(tenant_name).expect("tenant");
+            let tasks = BackchannelTask::all()
+                .exec(&mut tenant.database)
+                .await
+                .expect("tasks");
+            assert_eq!(tasks.len(), 1, "a failed delivery keeps its task");
+            assert_eq!(tasks[0].attempts, 1);
+            assert!(
+                tasks[0].next_attempt_at > jiff::Timestamp::now(),
+                "the retry is scheduled into the future (backoff)"
+            );
+            tasks[0].id.clone()
+        };
+
+        // Not due yet: the next sweep is a no-op.
+        backchannel_pass(&storage).await;
+        {
+            let mut tenant = storage.tenant_by_id(tenant_name).expect("tenant");
+            let tasks = BackchannelTask::all()
+                .exec(&mut tenant.database)
+                .await
+                .expect("tasks");
+            assert_eq!(tasks[0].attempts, 1, "a not-yet-due task is untouched");
+        }
+
+        // Force the task to its last allowed attempt, due now.
+        {
+            let mut tenant = storage.tenant_by_id(tenant_name).expect("tenant");
+            let past = jiff::Timestamp::now()
+                .checked_sub(1.minutes())
+                .expect("past");
+            BackchannelTask::update_by_id(task_id.as_str())
+                .attempts(BACKCHANNEL_MAX_ATTEMPTS - 1)
+                .next_attempt_at(past)
+                .exec(&mut tenant.database)
+                .await
+                .expect("force due");
+        }
+        backchannel_pass(&storage).await;
+        {
+            let mut tenant = storage.tenant_by_id(tenant_name).expect("tenant");
+            let tasks = BackchannelTask::all()
+                .exec(&mut tenant.database)
+                .await
+                .expect("tasks");
+            assert!(
+                tasks.is_empty(),
+                "the attempt bound purges the task (the give-up is logged)"
+            );
+        }
     }
 
     // ── HTTP-level endpoint tests (Salvo TestClient) ──────────────────────
@@ -1271,15 +1858,153 @@ mod tests {
         Router::new()
             .hoop(salvo::affix_state::inject(state))
             .push(
-                Router::with_path("register")
-                    .post(register)
-                    .push(Router::with_path("{client_id}").get(register_read)),
+                Router::with_path("register").post(register).push(
+                    Router::with_path("{client_id}")
+                        .get(register_read)
+                        .put(register_update)
+                        .delete(register_delete),
+                ),
             )
             .push(
                 Router::with_path("end_session")
                     .get(end_session)
                     .post(end_session),
             )
+    }
+
+    /// G-125 (RFC 7592): registration issues the management credential
+    /// (`registration_access_token` + `registration_client_uri`); GET/PUT/
+    /// DELETE accept it as a Bearer token; PUT replaces the metadata and
+    /// ROTATES the credential; DELETE removes the client.
+    #[tokio::test]
+    async fn registration_management_round_trip_rfc7592() {
+        use salvo::test::ResponseExt;
+        let (state, _tmp) = http_env().await;
+        {
+            let mut tenant = state.storage.tenant_by_id("ext-tenant").expect("tenant");
+            tenant.dcr_set_enabled(true).await.expect("enable DCR");
+        }
+        let service = salvo::Service::new(ext_service(state));
+
+        // ── Register: the 201 carries the RFC 7592 §3 credentials.
+        let mut res = salvo::test::TestClient::post("http://oidcext.local/register")
+            .add_header("Host", HTTP_DOMAIN, true)
+            .json(&serde_json::json!({
+                "redirect_uris": ["https://rp.example.com/cb"],
+                "client_name": "example rp",
+            }))
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::CREATED);
+        let body: serde_json::Value =
+            serde_json::from_str(&res.take_string().await.unwrap_or_default()).expect("json");
+        let client_id = body["client_id"].as_str().expect("client_id").to_string();
+        let rat = body["registration_access_token"]
+            .as_str()
+            .expect("registration_access_token must be issued")
+            .to_string();
+        let config_uri = body["registration_client_uri"]
+            .as_str()
+            .expect("registration_client_uri")
+            .to_string();
+        assert!(
+            config_uri.ends_with(&format!("/register/{client_id}")),
+            "{config_uri}"
+        );
+
+        // ── GET with the RAT as Bearer.
+        let res =
+            salvo::test::TestClient::get(format!("http://oidcext.local/register/{client_id}"))
+                .add_header("Host", HTTP_DOMAIN, true)
+                .add_header("Authorization", format!("Bearer {rat}"), true)
+                .send(&service)
+                .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::OK);
+
+        // ── PUT replaces the metadata and rotates the credential.
+        let mut res =
+            salvo::test::TestClient::put(format!("http://oidcext.local/register/{client_id}"))
+                .add_header("Host", HTTP_DOMAIN, true)
+                .add_header("Authorization", format!("Bearer {rat}"), true)
+                .json(&serde_json::json!({
+                    "redirect_uris": ["https://rp.example.com/cb2"],
+                    "client_name": "updated rp",
+                }))
+                .send(&service)
+                .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_str(&res.take_string().await.unwrap_or_default()).expect("json");
+        assert_eq!(
+            body["redirect_uris"],
+            serde_json::json!(["https://rp.example.com/cb2"])
+        );
+        assert_eq!(body["client_name"], "updated rp");
+        assert!(
+            body["client_secret"].is_null(),
+            "the secret is never re-exposed on update"
+        );
+        let rat2 = body["registration_access_token"]
+            .as_str()
+            .expect("rotated RAT")
+            .to_string();
+        assert_ne!(rat2, rat, "the credential rotates on update");
+
+        // The read reflects the update (with the rotated RAT).
+        let mut res =
+            salvo::test::TestClient::get(format!("http://oidcext.local/register/{client_id}"))
+                .add_header("Host", HTTP_DOMAIN, true)
+                .add_header("Authorization", format!("Bearer {rat2}"), true)
+                .send(&service)
+                .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_str(&res.take_string().await.unwrap_or_default()).expect("json");
+        assert_eq!(
+            body["redirect_uris"],
+            serde_json::json!(["https://rp.example.com/cb2"])
+        );
+
+        // ── PUT with invalid metadata → 400 (plain-http redirect).
+        let res =
+            salvo::test::TestClient::put(format!("http://oidcext.local/register/{client_id}"))
+                .add_header("Host", HTTP_DOMAIN, true)
+                .add_header("Authorization", format!("Bearer {rat2}"), true)
+                .json(&serde_json::json!({ "redirect_uris": ["http://insecure.example/cb"] }))
+                .send(&service)
+                .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::BAD_REQUEST);
+
+        // ── A garbage Bearer is not the credential.
+        let res =
+            salvo::test::TestClient::put(format!("http://oidcext.local/register/{client_id}"))
+                .add_header("Host", HTTP_DOMAIN, true)
+                .add_header("Authorization", "Bearer not-a-jwt", true)
+                .json(&serde_json::json!({ "redirect_uris": ["https://rp.example.com/cb3"] }))
+                .send(&service)
+                .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::UNAUTHORIZED);
+
+        // ── DELETE with the RAT → 204, and the client is gone.
+        let res =
+            salvo::test::TestClient::delete(format!("http://oidcext.local/register/{client_id}"))
+                .add_header("Host", HTTP_DOMAIN, true)
+                .add_header("Authorization", format!("Bearer {rat2}"), true)
+                .send(&service)
+                .await;
+        assert_eq!(res.status_code.expect("status"), StatusCode::NO_CONTENT);
+
+        let res =
+            salvo::test::TestClient::get(format!("http://oidcext.local/register/{client_id}"))
+                .add_header("Host", HTTP_DOMAIN, true)
+                .add_header("Authorization", format!("Bearer {rat2}"), true)
+                .send(&service)
+                .await;
+        assert_eq!(
+            res.status_code.expect("status"),
+            StatusCode::UNAUTHORIZED,
+            "the RAT dies with the client row"
+        );
     }
 
     /// RFC 7591 round-trip: registration answers 201 with credentials,

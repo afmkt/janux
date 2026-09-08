@@ -825,6 +825,7 @@ pub async fn well_known(req: &mut Request, depot: &mut Depot, res: &mut Response
             "client_credentials",
             "urn:ietf:params:oauth:grant-type:device_code"
         ],
+        "prompt_values_supported": ["none", "login", "consent", "select_account"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
         "code_challenge_methods_supported": ["S256"],
@@ -867,6 +868,14 @@ pub struct AuthorizeRequest {
     pub code_challenge: Option<String>,
     #[serde(rename = "code_challenge_method")]
     pub code_challenge_method: Option<String>,
+    /// OIDC Core §3.1.2.1: space-delimited `none` / `login` / `consent` /
+    /// `select_account` (G-93).
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// OIDC Core §3.1.2.1: maximum acceptable authentication age in
+    /// seconds; an older session must re-authenticate (G-93).
+    #[serde(default)]
+    pub max_age: Option<i64>,
 }
 
 #[endpoint(
@@ -1127,7 +1136,34 @@ async fn authorize_flow(
     // `data.domain` to equal the request domain, so a sibling-domain
     // session can no longer drive this domain's authorize flow (and no
     // verdict is computed to be ignored).
-    let session = crate::utils::validate_session(req, depot).await;
+    //
+    // G-93: OIDC Core §3.1.2.1 — honor `prompt` and `max_age`. `login`
+    // (and `select_account`, which has no dedicated UI — forcing a fresh
+    // authentication is how the user picks an account) discards a valid
+    // session; `max_age=N` discards one authenticated longer ago than N
+    // seconds (a missing `auth_time` counts as stale); `none` and
+    // `consent` are handled at the park/consent decision points below.
+    // Unknown prompt values are ignored, per spec.
+    let prompts: Vec<&str> = params
+        .prompt
+        .as_deref()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+    let prompt_none = prompts.contains(&"none");
+    let force_login = prompts.contains(&"login") || prompts.contains(&"select_account");
+    let force_consent = prompts.contains(&"consent");
+    let max_age = params.max_age.filter(|n| *n >= 0);
+    let session = crate::utils::validate_session(req, depot)
+        .await
+        .filter(|v| {
+            !force_login
+                && max_age.is_none_or(|n| {
+                    let now = Timestamp::now().as_second();
+                    v.auth_time
+                        .is_some_and(|at| now.saturating_sub(at as i64) <= n)
+                })
+        });
 
     let state_h = depot
         .obtain_mut::<crate::server::ServerState>()
@@ -1148,6 +1184,20 @@ async fn authorize_flow(
 
     let (user_id, approved_scope, mfa, auth_time) = match session {
         None => {
+            // G-93: `prompt=none` forbids ANY interaction — report that
+            // silent SSO is impossible instead of parking the flow. The
+            // callback URI is already client-validated at this point, so
+            // the error redirect is safe (RFC 6749 §4.1.2.1).
+            if prompt_none {
+                oauth2_error(
+                    res,
+                    &callback_uri,
+                    "login_required",
+                    "prompt=none requested but no usable session exists",
+                    state.as_deref(),
+                );
+                return;
+            }
             // the pending key is ALWAYS server-random — never the
             // RP-supplied state, which travels through the user's browser
             // (URLs, Referer, history) and may be observable or guessable
@@ -1198,10 +1248,26 @@ async fn authorize_flow(
                 .unwrap_or_else(|| Timestamp::now().as_second() as usize);
 
             match tenant.auth_grant_find(&user_id, client_id).await {
-                Ok(Some(grant)) if scopes_cover(&grant.scope, &requested_scope) => {
+                // G-93: `prompt=consent` forces the consent screen even
+                // when a prior grant covers the scopes.
+                Ok(Some(grant))
+                    if !force_consent && scopes_cover(&grant.scope, &requested_scope) =>
+                {
                     (user_id, requested_scope, mfa, auth_time)
                 }
                 Ok(_) => {
+                    // G-93: consent is an interaction — `prompt=none`
+                    // must fail with consent_required instead.
+                    if prompt_none {
+                        oauth2_error(
+                            res,
+                            &callback_uri,
+                            "consent_required",
+                            "prompt=none requested but consent is required",
+                            state.as_deref(),
+                        );
+                        return;
+                    }
                     // server-random key (never the RP state) and the
                     // entry is bound to THIS session's user — consent is a
                     // decision of the identity that was present at /authorize.
@@ -7098,6 +7164,205 @@ mod tests {
             res.status_code,
             Some(StatusCode::UNAUTHORIZED),
             "a sibling-domain token must not drive this domain's flow"
+        );
+    }
+
+    // ── G-93: prompt / max_age at /authorize ─────────────────────────────
+
+    /// An authorize test bed: provisioned tenant, one confidential RP
+    /// client with a registered callback, and the authorize route.
+    async fn authorize_env() -> (crate::server::ServerState, tempfile::TempDir, Service) {
+        let (state, tmp) = revoke_test_env().await;
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant.user_create("alice").await.expect("user");
+            tenant
+                .oauth2client_create(
+                    "localhost",
+                    "rp-g93",
+                    "rp-secret",
+                    &["https://rp.example/cb"],
+                    "authorization_code",
+                    "code",
+                    "client_secret_basic",
+                    "openid",
+                )
+                .await
+                .expect("rp client");
+        }
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .push(Router::with_path("authorize").get(authorize)),
+        );
+        (state, tmp, service)
+    }
+
+    fn authorize_url(extra: &str) -> String {
+        format!(
+            "http://localhost/authorize?response_type=code&client_id=rp-g93&redirect_uri=https%3A%2F%2Frp.example%2Fcb&scope=openid&state=st1{extra}"
+        )
+    }
+
+    /// A session for alice; `auth_time` None mints a fresh one, Some(at)
+    /// an artificially aged one (the shape a long refresh chain presents).
+    async fn alice_session(state: &crate::server::ServerState, auth_time: Option<usize>) -> String {
+        let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+        match auth_time {
+            None => tenant
+                .authenticate_jwt(
+                    &std::collections::HashSet::new(),
+                    TEST_ISSUER,
+                    "localhost",
+                    "alice",
+                    15,
+                )
+                .await
+                .expect("session"),
+            Some(at) => {
+                let key = tenant.current_key("localhost").expect("key");
+                let alice_id = tenant.user("alice").await.expect("alice").id.to_string();
+                crate::jwt::jwt_authenticate(
+                    TEST_ISSUER,
+                    &alice_id,
+                    &crate::db::JwtData {
+                        user: alice_id.clone(),
+                        username: "alice".into(),
+                        domain: "localhost".into(),
+                        mfa: std::collections::HashSet::new(),
+                        roles: std::collections::HashSet::new(),
+                    },
+                    &key,
+                    15,
+                    crate::jwt::JwtOidcParams {
+                        client_id: "localhost".into(),
+                        nonce: None,
+                        amr: None,
+                        acr: None,
+                        access_token: None,
+                        auth_time: Some(at),
+                    },
+                )
+                .expect("aged session")
+            }
+        }
+    }
+
+    /// G-93: `prompt=none` forbids interaction — without a usable session
+    /// the RP gets `login_required` on its (validated) callback, never a
+    /// login page redirect.
+    #[tokio::test]
+    async fn authorize_prompt_none_without_session_reports_login_required() {
+        let (_state, _tmp, service) = authorize_env().await;
+        let res = salvo::test::TestClient::get(authorize_url("&prompt=none"))
+            .add_header("Host", "localhost", true)
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::FOUND));
+        let loc = res
+            .headers()
+            .get(salvo::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            loc.starts_with("https://rp.example/cb"),
+            "the error goes to the validated callback: {loc}"
+        );
+        assert!(loc.contains("error=login_required"), "{loc}");
+        assert!(loc.contains("state=st1"), "RP state rides along: {loc}");
+    }
+
+    /// G-93: `prompt=login` discards a valid session and forces a fresh
+    /// authentication (park + hosted login).
+    #[tokio::test]
+    async fn authorize_prompt_login_discards_a_valid_session() {
+        let (state, _tmp, service) = authorize_env().await;
+        let session = alice_session(&state, None).await;
+        let res = salvo::test::TestClient::get(authorize_url("&prompt=login"))
+            .add_header("Host", "localhost", true)
+            .add_header("Authorization", format!("Bearer {session}"), true)
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::FOUND));
+        let loc = res
+            .headers()
+            .get(salvo::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            loc.starts_with("/login"),
+            "prompt=login must force re-authentication: {loc}"
+        );
+    }
+
+    /// G-93: `max_age` gates on `auth_time` — an older session must
+    /// re-authenticate; a fresh-enough one proceeds (to consent, there
+    /// being no prior grant).
+    #[tokio::test]
+    async fn authorize_max_age_gates_on_auth_time() {
+        let (state, _tmp, service) = authorize_env().await;
+        let now = jiff::Timestamp::now().as_second().max(0) as usize;
+
+        let aged = alice_session(&state, Some(now - 3600)).await;
+        let res = salvo::test::TestClient::get(authorize_url("&max_age=60"))
+            .add_header("Host", "localhost", true)
+            .add_header("Authorization", format!("Bearer {aged}"), true)
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::FOUND));
+        let loc = res
+            .headers()
+            .get(salvo::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            loc.starts_with("/login"),
+            "a session older than max_age must re-authenticate: {loc}"
+        );
+
+        let fresh = alice_session(&state, None).await;
+        let res = salvo::test::TestClient::get(authorize_url("&max_age=3600"))
+            .add_header("Host", "localhost", true)
+            .add_header("Authorization", format!("Bearer {fresh}"), true)
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::FOUND));
+        let loc = res
+            .headers()
+            .get(salvo::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            loc.starts_with("/consent"),
+            "a fresh-enough session proceeds to consent: {loc}"
+        );
+    }
+
+    /// G-93: `prompt=none` with a session that still needs consent
+    /// reports `consent_required` — consent is an interaction.
+    #[tokio::test]
+    async fn authorize_prompt_none_with_consent_required_reports_consent_required() {
+        let (state, _tmp, service) = authorize_env().await;
+        let fresh = alice_session(&state, None).await;
+        let res = salvo::test::TestClient::get(authorize_url("&prompt=none"))
+            .add_header("Host", "localhost", true)
+            .add_header("Authorization", format!("Bearer {fresh}"), true)
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::FOUND));
+        let loc = res
+            .headers()
+            .get(salvo::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            loc.starts_with("https://rp.example/cb") && loc.contains("error=consent_required"),
+            "{loc}"
         );
     }
 

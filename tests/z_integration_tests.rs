@@ -82,7 +82,11 @@ async fn admin_create_tenant() {
 async fn admin_delete_domain_validates_host() {
     let env = TestEnv::new_with_auth().await;
 
-    // Missing host header should fail gracefully
+    // No explicit Host header: the request resolves against
+    // 127.0.0.1:<port>, which is not a provisioned domain — the session
+    // cannot validate against an unknown tenant/issuer, so protect fails
+    // closed with 401 and never a 5xx. (G-28: this test used to assert
+    // only that the transport didn't error.)
     let resp = Client::new()
         .post(format!("{}/api/v1/admin/domain/delete", env.base_url()))
         .header(
@@ -90,9 +94,13 @@ async fn admin_delete_domain_validates_host() {
             format!("Bearer {}", env.admin_token.clone().unwrap()),
         )
         .send()
-        .await;
-
-    assert!(resp.is_ok());
+        .await
+        .expect("request must reach the server");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "an unresolvable domain fails closed at the auth hoop"
+    );
 }
 
 // ─── User lifecycle tests ────────────────────────────────────────────────────
@@ -110,9 +118,13 @@ async fn admin_create_user_success() {
         )
         .json(&json!({ "name": "test-integration-user" }))
         .send()
-        .await;
+        .await
+        .expect("request must reach the server");
 
-    assert!(resp.is_ok(), "User create should not error");
+    // G-28: a real status+body assertion — `is_ok()` passed on 401/500.
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body = resp.json::<serde_json::Value>().await.expect("json");
+    assert_eq!(body["ok"], true, "user create body: {body}");
 }
 
 #[tokio::test]
@@ -146,66 +158,60 @@ async fn admin_list_users_returns_json_array() {
 #[tokio::test]
 async fn admin_delete_user_by_name() {
     let env = TestEnv::new_with_auth().await;
+    let client = Client::new();
+    let auth = format!("Bearer {}", env.admin_token.clone().unwrap());
 
-    let resp = Client::new()
+    // Create the user first — each env is a fresh server, so the old test
+    // was deleting a nonexistent user and passing on the transport-level
+    // `is_ok()` alone (G-28).
+    let resp = client
+        .post(format!("{}/api/v1/admin/user/create", env.base_url()))
+        .header("Host", "localhost")
+        .header("Authorization", &auth)
+        .json(&json!({ "name": "delete-me" }))
+        .send()
+        .await
+        .expect("create request");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+    let resp = client
         .post(format!("{}/api/v1/admin/user/delete", env.base_url()))
         .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({ "user": "test-integration-user" }))
+        .header("Authorization", &auth)
+        .json(&json!({ "user": "delete-me" }))
         .send()
-        .await;
-
-    assert!(resp.is_ok());
+        .await
+        .expect("delete request");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body = resp.json::<serde_json::Value>().await.expect("json");
+    assert_eq!(body["ok"], true, "user delete body: {body}");
 }
 
 #[tokio::test]
 async fn admin_activate_deactivate_user() {
     let env = TestEnv::new_with_auth().await;
+    let client = Client::new();
+    let auth = format!("Bearer {}", env.admin_token.clone().unwrap());
 
-    // Activate user
-    let resp = Client::new()
-        .post(format!("{}/api/v1/admin/user/activate", env.base_url()))
-        .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({ "user": "admin@test.local", "active": true }))
-        .send()
-        .await;
-
-    assert!(resp.is_ok());
-
-    // Deactivate user
-    let resp2 = Client::new()
-        .post(format!("{}/api/v1/admin/user/activate", env.base_url()))
-        .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({ "user": "admin@test.local", "active": false }))
-        .send()
-        .await;
-
-    assert!(resp2.is_ok());
-
-    // Re-activate user
-    let resp3 = Client::new()
-        .post(format!("{}/api/v1/admin/user/activate", env.base_url()))
-        .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({ "user": "admin@test.local", "active": true }))
-        .send()
-        .await;
-
-    assert!(resp3.is_ok());
+    for (active, label) in [
+        (true, "activate"),
+        (false, "deactivate"),
+        (true, "re-activate"),
+    ] {
+        let resp = client
+            .post(format!("{}/api/v1/admin/user/activate", env.base_url()))
+            .header("Host", "localhost")
+            .header("Authorization", &auth)
+            .json(&json!({ "user": "admin@test.local", "active": active }))
+            .send()
+            .await
+            .expect("activate request");
+        // G-28: root outranks admin (H3), so every transition must be a
+        // real 200 — `is_ok()` used to pass on the 403/500 paths too.
+        assert_eq!(resp.status(), reqwest::StatusCode::OK, "{label}");
+        let body = resp.json::<serde_json::Value>().await.expect("json");
+        assert_eq!(body["ok"], true, "{label} body: {body}");
+    }
 }
 
 // ─── Role management tests ──────────────────────────────────────────────────
@@ -213,38 +219,36 @@ async fn admin_activate_deactivate_user() {
 #[tokio::test]
 async fn admin_create_role_and_delete() {
     let env = TestEnv::new_with_auth().await;
+    let client = Client::new();
+    let auth = format!("Bearer {}", env.admin_token.clone().unwrap());
 
-    // Create role
-    let resp = Client::new()
+    // Create role (level is REQUIRED — the old body omitted it and the
+    // test passed on the transport-level `is_ok()` despite the 400).
+    let resp = client
         .post(format!("{}/api/v1/admin/role/create", env.base_url()))
         .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
-        .json(&json!({ "name": "test-role-xyz" }))
+        .header("Authorization", &auth)
+        .json(&json!({ "name": "test-role-xyz", "level": 50 }))
         .send()
-        .await;
+        .await
+        .expect("role create request");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
 
-    assert!(resp.is_ok());
-
-    // Delete role
-    let resp2 = Client::new()
+    // Delete role — G-154: the delete cascades policies/memberships and
+    // must be a real 200.
+    let resp2 = client
         .post(format!("{}/api/v1/admin/role/delete", env.base_url()))
         .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
+        .header("Authorization", &auth)
         .json(&json!({ "name": "test-role-xyz" }))
         .send()
-        .await;
-
-    assert!(resp2.is_ok());
+        .await
+        .expect("role delete request");
+    assert_eq!(resp2.status(), reqwest::StatusCode::OK);
 }
 
 #[tokio::test]
-async fn admin_list_roles_empty_by_default() {
+async fn admin_list_roles_returns_builtin_catalog() {
     let env = TestEnv::new_with_auth().await;
 
     let resp = Client::new()
@@ -255,9 +259,23 @@ async fn admin_list_roles_empty_by_default() {
             format!("Bearer {}", env.admin_token.clone().unwrap()),
         )
         .send()
-        .await;
+        .await
+        .expect("role list request");
 
-    assert!(resp.is_ok());
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body = resp.json::<serde_json::Value>().await.expect("json");
+    let names: Vec<&str> = body["data"]["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("role list shape: {body}"))
+        .iter()
+        .filter_map(|r| r["name"].as_str())
+        .collect();
+    for builtin in ["root", "admin", "scim", "user", "guest"] {
+        assert!(
+            names.contains(&builtin),
+            "missing builtin {builtin}: {names:?}"
+        );
+    }
 }
 
 // ─── Policy management tests ────────────────────────────────────────────────
@@ -265,15 +283,16 @@ async fn admin_list_roles_empty_by_default() {
 #[tokio::test]
 async fn admin_create_policy_get_and_delete() {
     let env = TestEnv::new_with_auth().await;
+    let client = Client::new();
+    let auth = format!("Bearer {}", env.admin_token.clone().unwrap());
 
-    // Create policy
-    let resp = Client::new()
+    // Create policy — the caller is root@test.local (level 100), the
+    // target role is admin (80): the level gate allows the downward
+    // write, and G-28 wants the real 200 asserted.
+    let resp = client
         .post(format!("{}/api/v1/admin/policy/create", env.base_url()))
         .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
+        .header("Authorization", &auth)
         .json(&json!({
             "domain": "localhost",
             "resource": "test/path",
@@ -285,18 +304,15 @@ async fn admin_create_policy_get_and_delete() {
             "allowed": true
         }))
         .send()
-        .await;
-
-    assert!(resp.is_ok());
+        .await
+        .expect("policy create request");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
 
     // Delete policy
-    let resp2 = Client::new()
+    let resp2 = client
         .post(format!("{}/api/v1/admin/policy/delete", env.base_url()))
         .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
+        .header("Authorization", &auth)
         .json(&json!({
             "domain": "localhost",
             "resource": "test/path",
@@ -304,9 +320,9 @@ async fn admin_create_policy_get_and_delete() {
             "role": "admin"
         }))
         .send()
-        .await;
-
-    assert!(resp2.is_ok());
+        .await
+        .expect("policy delete request");
+    assert_eq!(resp2.status(), reqwest::StatusCode::OK);
 }
 
 // ─── Social provider tests ──────────────────────────────────────────────────
@@ -314,22 +330,35 @@ async fn admin_create_policy_get_and_delete() {
 #[tokio::test]
 async fn admin_create_provider_and_delete() {
     let env = TestEnv::new_with_auth().await;
+    let client = Client::new();
+    let auth = format!("Bearer {}", env.admin_token.clone().unwrap());
 
-    // Create a social provider (e.g., Google OAuth2)
-    let resp = Client::new()
+    // The full provider shape — the old body carried only `id` and the
+    // test passed on `is_ok()` despite the 400 (G-28).
+    let resp = client
         .post(format!("{}/api/v1/admin/provider/create", env.base_url()))
         .header("Host", "localhost")
-        .header(
-            "Authorization",
-            format!("Bearer {}", env.admin_token.clone().unwrap()),
-        )
+        .header("Authorization", &auth)
         .json(&json!({
-            "id": "google-oauth2-test"
+            "name": "google-oauth2-test",
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+            "issuer_url": "https://accounts.google.com"
         }))
         .send()
-        .await;
+        .await
+        .expect("provider create request");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
 
-    assert!(resp.is_ok());
+    let resp = client
+        .post(format!("{}/api/v1/admin/provider/delete", env.base_url()))
+        .header("Host", "localhost")
+        .header("Authorization", &auth)
+        .json(&json!({ "name": "google-oauth2-test" }))
+        .send()
+        .await
+        .expect("provider delete request");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
 }
 
 #[tokio::test]
@@ -344,9 +373,21 @@ async fn admin_list_providers_returns_json() {
             format!("Bearer {}", env.admin_token.clone().unwrap()),
         )
         .send()
-        .await;
+        .await
+        .expect("provider list request");
 
-    assert!(resp.is_ok());
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let raw = resp.text().await.expect("body");
+    let body: serde_json::Value = serde_json::from_str(&raw).expect("json");
+    assert!(
+        body["data"]["items"].is_array(),
+        "provider list shape: {body}"
+    );
+    // G-147 pinned at the HTTP level: the secret is write-only.
+    assert!(
+        !raw.contains("client_secret"),
+        "the provider list must never serialize client_secret: {raw}"
+    );
 }
 
 // ─── Key / JWKS tests ───────────────────────────────────────────────────────
@@ -358,15 +399,22 @@ async fn public_jwks_endpoint_accessible_without_auth() {
     let resp = Client::new()
         .get(format!("{}/.well-known/jwks.json", env.base_url()))
         .send()
-        .await;
+        .await
+        .expect("jwks request");
 
-    assert!(resp.is_ok());
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body = resp.json::<serde_json::Value>().await.expect("json");
+    // The seed creates a signing key per domain (G-136), so even this
+    // unprovisioned-host skeleton answers with a keys array.
+    assert!(body["keys"].is_array(), "jwks shape: {body}");
 }
 
 #[tokio::test]
 async fn admin_add_key_returns_response() {
     let env = TestEnv::new_with_auth().await;
 
+    // Addkey takes {domain, name} — the old `key_id` body 400'd while the
+    // test passed on `is_ok()` (G-28).
     let resp = Client::new()
         .post(format!("{}/api/v1/admin/key/create", env.base_url()))
         .header("Host", "localhost")
@@ -375,21 +423,28 @@ async fn admin_add_key_returns_response() {
             format!("Bearer {}", env.admin_token.clone().unwrap()),
         )
         .json(&json!({
-            "key_id": "test-key-for-integration"
+            "domain": "",
+            "name": "test-key-for-integration"
         }))
         .send()
-        .await;
+        .await
+        .expect("key create request");
 
-    assert!(resp.is_ok());
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body = resp.json::<serde_json::Value>().await.expect("json");
+    assert_eq!(body["ok"], true, "key create body: {body}");
 }
 
 // ─── Passwordless auth tests ──────────────────────────────────────────────────
 
 #[tokio::test]
-async fn email_request_success() {
+async fn email_request_fails_closed_without_a_reachable_provider() {
     let env = TestEnv::new_with_auth().await;
 
-    // ReqRequest expects fields: name, email (matching the backend schema)
+    // The test config points Resend at a dead address (127.0.0.1:1), so
+    // the ceremony must fail CLOSED with a determinate client error —
+    // never 404 (route missing) or 5xx (crash). The old test accepted
+    // literally any outcome, including a transport error (G-28).
     let resp = Client::new()
         .post(format!("{}/api/v1/auth/email/request", env.base_url()))
         .header("Host", "localhost")
@@ -398,36 +453,48 @@ async fn email_request_success() {
             "email": "admin@test.local"
         }))
         .send()
-        .await;
+        .await
+        .expect("email/request must be reachable");
 
-    // The endpoint should return a valid HTTP response (2xx or 4xx).
-    // When running in tests without JWT authentication, the handle_user path
-    // may be unreachable because mfa middleware passes through but ServerState
-    // is not injected for auth/* routes. Accept the current behavior: either
-    // a successful response OR a network error (endpoint exists but no handler completes).
-    let ok_anyways = resp.is_ok()
-        || resp
-            .as_ref()
-            .ok()
-            .is_some_and(|r| r.status().is_client_error() || r.status().is_success());
-
-    // Verify the route is wired up by checking it doesn't return 404/501
-    let _not_found = resp.as_ref().ok().map(|r| r.status().as_u16()) == Some(404)
-        || resp.as_ref().ok().map(|r| r.status().as_u16()) == Some(501);
-
-    if ok_anyways {
-        // Good: the endpoint responded with either success or 4xx
-    } else if resp.is_err() {
-        // Network-level error — verify the URL is correct and server is up
-        let health = reqwest::get(format!("{}/api/v1/healthy", env.base_url())).await;
-        assert!(
-            health.as_ref().is_ok_and(|r| r.status().is_success()),
-            "Server not healthy: this test requires a running Janux backend"
-        );
-    }
+    let status = resp.status();
+    assert_ne!(
+        status,
+        reqwest::StatusCode::NOT_FOUND,
+        "the route must be wired"
+    );
+    assert!(
+        status.is_client_error(),
+        "an unreachable provider must produce a determinate 4xx, got {status}"
+    );
 }
 
 // ─── User self-management tests ──────────────────────────────────────────────
+
+/// G-28's core gap: no HTTP-level test asserted the policy engine's DENY
+/// path — a valid session with insufficient roles must get 403 (not 401,
+/// and certainly not 200) from the real `protect` hoop.
+#[tokio::test]
+async fn admin_surface_denies_valid_session_with_insufficient_role() {
+    let env = TestEnv::new_with_auth().await;
+    let user_token = env
+        .user_token
+        .clone()
+        .expect("provisioned user-role session");
+
+    let resp = Client::new()
+        .get(format!("{}/api/v1/admin/user/list", env.base_url()))
+        .header("Host", "localhost")
+        .header("Authorization", format!("Bearer {user_token}"))
+        .send()
+        .await
+        .expect("request must reach the server");
+
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "a valid `user`-role session must be denied the admin surface by the policy engine"
+    );
+}
 
 #[tokio::test]
 async fn user_delete_self_requires_auth() {
@@ -437,9 +504,11 @@ async fn user_delete_self_requires_auth() {
         .post(format!("{}/api/v1/admin/user/delete/self", env.base_url()))
         .header("Host", "localhost")
         .send()
-        .await;
+        .await
+        .expect("request must reach the server");
 
-    assert!(resp.is_ok());
+    // G-28: fail closed with 401 — `is_ok()` passed on any status.
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

@@ -97,7 +97,7 @@ pub struct ResendDTO {
 }
 
 const RESEND_FROM: &str = "resend.from";
-const RESEND_KEY: &str = "resend.key";
+pub const RESEND_KEY: &str = "resend.key";
 const RESEND_TEMPLATE: &str = "resend.template";
 const RESEND_VERIFY_URL: &str = "resend.verify_url";
 const RESEND_BASE_URL: &str = "resend.base_url";
@@ -164,8 +164,8 @@ pub struct OTPDTO {
     pub endpoint: String,
 }
 
-const OTP_API_SECRET: &str = "otp.api_secret";
-const OTP_API_KEY: &str = "otp.api_key";
+pub const OTP_API_SECRET: &str = "otp.api_secret";
+pub const OTP_API_KEY: &str = "otp.api_key";
 const OTP_TEMPLATE_CODE: &str = "otp.template_code";
 const OTP_SIGN_NAME: &str = "otp.sign_name";
 const OTP_REGION_ID: &str = "otp.region_id";

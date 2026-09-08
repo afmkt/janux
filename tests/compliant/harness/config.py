@@ -35,7 +35,7 @@ port = {port}
 [[seed]]
 name = "{tenant}"
 domains = [{{ id = "{domain}", cors = [] }}]
-roles = ["root", "admin", "user", "guest"]
+roles = ["root", "admin", "scim", "user", "guest"]
 users = [
     {{ id = "admin@{domain}", active = true, roles = ["admin"], email = "admin@{domain}" }},
     {{ id = "user@{domain}", active = true, roles = ["user"] }},
@@ -62,6 +62,25 @@ POLICY_TEMPLATE = """
 domain = "{domain}"
 resource = "{resource}"
 role = "admin"
+source = "Nothing"
+target = "Nothing"
+mfa = false
+allowed = true
+"""
+
+# SCIM machine-provisioning surface, bound to the builtin `scim` role —
+# the same rows STANDARD_ADMIN_POLICIES seeds (G-124: without them the
+# machine principal mints fine but every /scim/v2 call is default-deny).
+SCIM_RESOURCES = [
+    "/scim/v2/Users",
+    "/scim/v2/Users/{id}",
+]
+
+SCIM_POLICY_TEMPLATE = """
+[[seed.policies]]
+domain = "{domain}"
+resource = "{resource}"
+role = "scim"
 source = "Nothing"
 target = "Nothing"
 mfa = false
@@ -105,6 +124,8 @@ def write_spec(
     config_path = root / "janux-conformance.toml"
     policies = "".join(
         POLICY_TEMPLATE.format(domain=domain, resource=r) for r in ADMIN_RESOURCES
+    ) + "".join(
+        SCIM_POLICY_TEMPLATE.format(domain=domain, resource=r) for r in SCIM_RESOURCES
     )
     config_path.write_text(
         CONFIG_TEMPLATE.format(

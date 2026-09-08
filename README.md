@@ -80,7 +80,10 @@ The data dir holds every tenant schema, all signing keys, and the revocation sto
 janux backup ./backups          # → backups/backup-<timestamp>/ + manifest.json
 janux restore ./backups/backup-<timestamp>          # into an empty data dir
 janux restore ./backups/backup-<timestamp> --force  # disaster recovery: replace the data dir
+janux rekey <64-hex-new-key>    # rotate the encryption key: re-encrypts every at-rest secret
 ```
+
+`janux rekey` re-encrypts signing-key privates, social provider secrets, TOTP secrets and the stored mail/SMS credentials under the new key (upgrading any legacy plaintext rows on the way); the current config `encryption_key` is the old key, and after a successful run you must put the new one in the config or the next boot cannot decrypt.
 
 The complete restore set is the backup dir **plus** your config files (`base.toml`/`seed.toml`) **plus** the `encryption_key` — without the key, the at-rest secrets (signing-key privates, provider credentials, TOTP secrets) in the backup are unrecoverable. Delete-time tenant snapshots (`backups/` inside the data dir, retention 5) travel with the backup. Schedule it with cron/systemd timers; `just backup` wraps the common case.
 

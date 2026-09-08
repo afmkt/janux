@@ -83,6 +83,36 @@ def admin(janux_env):
 
 
 @pytest.fixture(scope="session")
+def scim_token(janux_env, admin) -> str:
+    """The SCIM machine principal (G-124): register a client_credentials
+    client with the `scim` scope through the admin API, then mint its
+    token at /token — exactly how a real IdP (Okta/Entra/IAM Identity
+    Center) is onboarded for provisioning."""
+    r = admin.create_oauth2_client(
+        "scim-conf",
+        "scim-conf-secret",
+        [],
+        grant_types=("client_credentials",),
+        response_types=(),
+        auth_method="client_secret_post",
+        scopes=("scim",),
+    )
+    assert r.status_code == 200, (
+        f"scim client registration failed: {r.status_code} {r.text}"
+    )
+    r = janux_env.http.post(
+        "/token",
+        data={
+            "grant_type": "client_credentials",
+            "client_id": "scim-conf",
+            "client_secret": "scim-conf-secret",
+        },
+    )
+    assert r.status_code == 200, f"machine token mint failed: {r.status_code} {r.text}"
+    return r.json()["access_token"]
+
+
+@pytest.fixture(scope="session")
 def registered_client(janux_env, admin):
     client_id = "conf-rp"
     secret = "conf-rp-secret"

@@ -316,6 +316,11 @@ struct MagicLinkContext<'a> {
     client_id: Option<&'a str>,
     state: Option<&'a str>,
     redirect_uri: Option<&'a str>,
+    /// Marks the link's ceremony for the landing page: `Some("add")` tells
+    /// the hosted SPA to complete an email-ADD verification (session-gated
+    /// `email/add/verify`) instead of a login (G-162: without it the SPA
+    /// had no way to tell the two link kinds apart).
+    flow: Option<&'a str>,
 }
 
 /// Build the magic link: the ceremony halves (token/username/email)
@@ -341,6 +346,9 @@ fn build_magic_link(
     }
     if let Some(v) = ctx.redirect_uri {
         q.append_pair("redirect_uri", v);
+    }
+    if let Some(v) = ctx.flow {
+        q.append_pair("flow", v);
     }
     drop(q);
     Ok(link)
@@ -461,6 +469,7 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     client_id: req_request.client_id.as_deref(),
                     state: req_request.state.as_deref(),
                     redirect_uri: req_request.redirect_uri.as_deref(),
+                    flow: None,
                 };
                 // Phase 1 under the tenant guard: resolve the ceremony
                 // identity, mint its JWT and render the email (local only).
@@ -664,7 +673,7 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     summary = "Remove Magic Link",
     parameters(
         ("name" = String, Query, description="User name"),
-        ("mobile" = String, Query, description="User mobile"),
+        ("email" = String, Query, description="Email address to remove"),
     ),
     responses(
         (status_code = 200, description = "Success", body = EmailResponse),
@@ -904,14 +913,27 @@ struct EmailAddData {
     email: String,
 }
 
-async fn add_user_email_ceremony(
+/// Phase 1 of the add ceremony — runs UNDER the tenant guard: mint the
+/// ceremony JWT and prepare the mail (config, link, rendered content).
+/// G-153: the network send must NOT run while the guard is held — a slow
+/// provider hop used to stall every request for the tenant up to the 15 s
+/// timeout (the login `request` flow learned this as H6).
+struct PreparedAddMail {
+    token: String,
+    cfg: ResendDTO,
+    to: String,
+    subject: String,
+    content: String,
+}
+
+async fn prepare_add_email_ceremony(
     tenant: &mut RefMut<'_, String, Tenant>,
     issuer: &str,
     domain: &str,
     user_name: &str,
     email: &str,
-) -> Result<String, String> {
-    if let Ok(token) = tenant
+) -> Result<PreparedAddMail, String> {
+    let token = tenant
         .jwt_authenticate(
             issuer,
             domain,
@@ -922,33 +944,58 @@ async fn add_user_email_ceremony(
             15,
         )
         .await
+        .map_err(|_| "Fail to issue JWT".to_string())?;
+    let subject = "Confirm your email";
+    let cfg = ResendDTO::load(tenant)
+        .await
+        .ok_or("Failed to load email config")?;
+    let link = build_magic_link(
+        cfg.verify_url.as_str(),
+        token.as_str(),
+        user_name,
+        email,
+        MagicLinkContext {
+            flow: Some("add"),
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("Invalid verify_url in email config: {e}"))?;
+    let content = render_email(&cfg, email, subject, link.as_str()).map_err(|e| e.to_string())?;
+    Ok(PreparedAddMail {
+        token,
+        cfg,
+        to: email.to_string(),
+        subject: subject.to_string(),
+        content,
+    })
+}
+
+/// Phase 2 of the add ceremony — runs AFTER the tenant guard is dropped
+/// (G-153): the provider hop, then the one-shot park.
+async fn deliver_add_email_ceremony(
+    domain: &str,
+    user_name: &str,
+    prepared: PreparedAddMail,
+) -> Result<String, String> {
+    if send(
+        &prepared.cfg,
+        &prepared.to,
+        &prepared.subject,
+        prepared.content.as_ref(),
+    )
+    .await
+    .is_ok()
     {
-        let subject = "Confirm your email";
-        let cfg = ResendDTO::load(tenant)
+        MLINK_CACHE
+            .insert(
+                format!("email_add:{}:{}", domain, prepared.token),
+                user_name.to_string(),
+            )
             .await
-            .ok_or("Failed to load email config")?;
-        let link = build_magic_link(
-            cfg.verify_url.as_str(),
-            token.as_str(),
-            user_name,
-            email,
-            MagicLinkContext::default(),
-        )
-        .map_err(|e| format!("Invalid verify_url in email config: {e}"))?;
-        let content = render_email(&cfg, email, subject, link.as_str()).unwrap();
-        if send(&cfg, email, subject, content.as_ref()).await.is_ok() {
-            MLINK_CACHE
-                .insert(
-                    format!("email_add:{}:{}", domain, token),
-                    user_name.to_string(),
-                )
-                .await
-                .ok();
-            return Ok(token);
-        }
-        return Err("Fail to send email".to_string());
+            .ok();
+        return Ok(prepared.token);
     }
-    Err("Fail to issue JWT".to_string())
+    Err("Fail to send email".to_string())
 }
 
 #[endpoint(
@@ -1025,7 +1072,7 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                 if tenant.user_by_email(&email).await.is_ok() {
                     err_msg = "Email already in use".to_string();
                 } else {
-                    match add_user_email_ceremony(
+                    match prepare_add_email_ceremony(
                         &mut tenant,
                         issuer.as_str(),
                         domain.as_str(),
@@ -1034,15 +1081,27 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     )
                     .await
                     {
-                        Ok(_token) => {
-                            res.status_code(StatusCode::OK);
-                            res.render(Json(EmailResponse {
-                                ok: true,
-                                code: StatusCode::OK.as_u16(),
-                                msg: "Success".to_string(),
-                                jwt: None,
-                            }));
-                            return;
+                        Ok(prepared) => {
+                            // G-153: drop the tenant write guard BEFORE the
+                            // mail network hop (the H6 pattern from the
+                            // login request flow).
+                            drop(tenant);
+                            match deliver_add_email_ceremony(domain.as_str(), &user, prepared).await
+                            {
+                                Ok(_token) => {
+                                    res.status_code(StatusCode::OK);
+                                    res.render(Json(EmailResponse {
+                                        ok: true,
+                                        code: StatusCode::OK.as_u16(),
+                                        msg: "Success".to_string(),
+                                        jwt: None,
+                                    }));
+                                    return;
+                                }
+                                Err(e) => {
+                                    err_msg = e;
+                                }
+                            }
                         }
                         Err(e) => {
                             err_msg = e;
@@ -1164,6 +1223,7 @@ mod tests {
             client_id: Some("client-a"),
             state: Some("st&ate 1"),
             redirect_uri: Some("/admin"),
+            flow: None,
         };
         let link = build_magic_link(
             "https://idp.example/login",
@@ -1181,6 +1241,27 @@ mod tests {
         assert_eq!(q.get("state").map(String::as_str), Some("st&ate 1"));
         assert_eq!(q.get("redirect_uri").map(String::as_str), Some("/admin"));
         assert!(link.as_str().starts_with("https://idp.example/login?"));
+        assert!(!q.contains_key("flow"), "login links carry no flow marker");
+
+        // G-162: add-ceremony links mark `flow=add` so the hosted SPA
+        // completes them against `email/add/verify` instead of the login
+        // endpoint (the token namespaces are disjoint — a login verify
+        // could never consume an add token).
+        let add_link = build_magic_link(
+            "https://idp.example/login",
+            "tok-add",
+            "alice",
+            "new@example.com",
+            MagicLinkContext {
+                flow: Some("add"),
+                ..Default::default()
+            },
+        )
+        .expect("add link builds");
+        assert_eq!(
+            query_map(&add_link).get("flow").map(String::as_str),
+            Some("add")
+        );
     }
 
     #[test]

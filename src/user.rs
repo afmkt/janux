@@ -181,6 +181,17 @@ impl Tenant {
     /// gate: the caller must be `Bootstrap` or strictly outrank the
     /// target user (see `require_above_user`). Seed/system paths pass
     /// `Caller::Bootstrap`.
+    /// gate: caller must outrank the target (H3); self-reactivation of a
+    /// deactivated account is refused by `user_activate_self`'s own path.
+    ///
+    /// G-122 resolution: the check-then-update below is safe WITHOUT a
+    /// compare-and-swap because it runs under the tenant write guard
+    /// (`&mut self` — every caller holds the DashMap RefMut from tenant
+    /// resolution through the update), which serializes all transitions
+    /// for the tenant, and the single-instance-per-data-dir deployment
+    /// contract (DESIGN §6, G-87) means the guard is the only writer.
+    /// Actor-level audit of who flipped whom now exists at the HTTP layer
+    /// (G-89: `target=user:<name>`, `detail=active=<bool>`, `actor=<who>`).
     pub async fn user_activate(&mut self, caller: &crate::role::Caller, name: &str) -> Result<()> {
         let user = self.user(name).await?;
         self.require_above_user(caller, user.id).await?;
@@ -295,8 +306,19 @@ impl Tenant {
             .map_err(Into::into)
     }
 
+    #[allow(dead_code)] // data-layer primitive; production paths use the
+    // DB-paginated `users_page` (G-144), tests use this.
     pub async fn all_users(&mut self) -> Result<Vec<User>> {
         User::all()
+            .exec(&mut self.database)
+            .await
+            .map_err(Into::into)
+    }
+    /// Total number of users (G-144: SCIM `totalResults` needs the count
+    /// without materializing the table).
+    pub async fn users_count(&mut self) -> Result<u64> {
+        User::all()
+            .count()
             .exec(&mut self.database)
             .await
             .map_err(Into::into)
@@ -839,7 +861,13 @@ pub struct UserRoleRequest {
 
 #[endpoint(
     summary = "List all roles of the user",
-    request_body = UserRoleRequest,
+    // Declared as a QUERY parameter, not request_body: this is a GET
+    // route, and a GET-with-body spec generates SDK functions that throw
+    // in browsers (fetch forbids GET bodies). `extract` merges the query,
+    // so the handler is unchanged.
+    parameters(
+        ("user" = String, Query, description = "User name"),
+    ),
     responses(
         (status_code = 200, description = "Success", body = ApiResponse<Vec<String>>),
         (status_code = 400, description = "Bad request", body = ApiProblem)

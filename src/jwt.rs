@@ -329,12 +329,17 @@ impl InvalidJwt {
     /// revocation markers such as the one covering a whole refresh-token
     /// family. Returns `true` when the identifier was newly invalidated.
     ///
-    /// The cache insert is the atomic winner point for concurrent callers,
-    /// but the persistent write is what must survive: when it fails the
-    /// cache entry is rolled back, because a memory-only revocation would
-    /// consume the token until restart — a retry at the refresh rotation
-    /// commit point would then trip replay detection and revoke the whole
-    /// family over a transient persistence error.
+    /// G-121: the PERSISTENT store is the atomic winner point — the `id`
+    /// primary key orders concurrent revocations of the same token/marker
+    /// (the cache's entry API is look-then-insert under moka, so a
+    /// cache-first winner point could let both racers proceed, and the
+    /// DB-failure rollback could evict the winner's entry). The cache is
+    /// populated after the DB verdict and serves purely as the read
+    /// accelerator for `is_valid`. A persistence failure returns Err
+    /// WITHOUT touching the cache — a memory-only revocation would consume
+    /// the token until restart, and a retry at the refresh-rotation commit
+    /// point would then trip replay detection and revoke the whole family
+    /// over a transient error.
     pub async fn invalid_raw(&self, id: &str, expire_at: jiff::Timestamp) -> Result<bool> {
         let key = Self::revocation_id(id);
         // Retain the record for the token's full verification window: the
@@ -350,22 +355,32 @@ impl InvalidJwt {
             .checked_add(VERIFICATION_GRACE_MINUTES.minutes())
             .unwrap_or(expire_at);
         let expire_at = extended.checked_add(1.second()).unwrap_or(extended);
-        if self.cache.insert(key.clone(), expire_at).await.is_err() {
-            return Ok(false);
-        }
         let mut db = self.db.clone();
-        if let Err(e) = toasty::create!(InvalidJWT {
+        match toasty::create!(InvalidJWT {
             id: key.clone(),
             expire_at
         })
         .exec(&mut db)
         .await
         {
-            self.cache.remove(&key).await;
-            return Err(anyhow::anyhow!(e));
+            Ok(_) => {
+                self.cache.insert(key, expire_at).await.ok();
+                crate::ops::record_revocation();
+                Ok(true)
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("UNIQUE constraint failed") || msg.contains("already exists") {
+                    // A concurrent (or earlier) caller already revoked this
+                    // identifier: populate the cache so later reads skip the
+                    // DB, and report the clean loss.
+                    self.cache.insert(key, expire_at).await.ok();
+                    Ok(false)
+                } else {
+                    Err(anyhow::anyhow!(e))
+                }
+            }
         }
-        crate::ops::record_revocation();
-        Ok(true)
     }
     /// Number of revocation records currently stored. Observability only
     /// (the `janux_revocation_records_stored` gauge) — the verification
@@ -451,6 +466,34 @@ mod tests {
             !a.is_valid("g71-never-revoked").await,
             "an unknown identifier must stay accepted"
         );
+    }
+
+    /// G-121: concurrent revocations of the same identifier have exactly
+    /// one winner — the persistent primary key is the commit point (the
+    /// cache's entry API is look-then-insert under moka, so a cache-first
+    /// winner point could let both racers proceed).
+    #[tokio::test]
+    async fn concurrent_revocation_has_a_single_winner() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = InvalidJwt::create(tmp.path()).await.expect("store");
+        let id = format!("g121-race-{}", uuid::Uuid::new_v4());
+        let exp = jiff::Timestamp::now()
+            .checked_add(1.hours())
+            .expect("future expiry");
+
+        let (a, b) = tokio::join!(store.invalid_raw(&id, exp), store.invalid_raw(&id, exp));
+        let wins = [a.expect("racer a"), b.expect("racer b")]
+            .iter()
+            .filter(|won| **won)
+            .count();
+        assert_eq!(wins, 1, "exactly one racer may win the revocation");
+        assert!(
+            store.is_valid(&id).await,
+            "the identifier stays revoked for readers"
+        );
+
+        // A sequential second attempt is a clean loss, not an error.
+        assert!(!store.invalid_raw(&id, exp).await.expect("second call"));
     }
 
     /// regression: verification accepts tokens until `exp + leeway`, so a

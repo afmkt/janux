@@ -1,6 +1,6 @@
 import { SESSION_COOKIE } from '../shared/session'
 
-function base64urlToBytes(value: string): Uint8Array<ArrayBuffer> {
+export function base64urlToBytes(value: string): Uint8Array<ArrayBuffer> {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (value.length % 4)) % 4)
   const binary = atob(padded)
   const bytes = new Uint8Array(binary.length)
@@ -8,7 +8,7 @@ function base64urlToBytes(value: string): Uint8Array<ArrayBuffer> {
   return bytes
 }
 
-function bytesToBase64url(value: ArrayBuffer): string {
+export function bytesToBase64url(value: ArrayBuffer): string {
   const binary = String.fromCharCode(...new Uint8Array(value))
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }

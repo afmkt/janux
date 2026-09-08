@@ -93,6 +93,7 @@ policies = [
     { domain = "localhost", resource = "/api/v1/admin/user/remove_email", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/user/attach_email", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/user/remove_mobile", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/remove_passkey", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/user/remove_social", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/api/v1/admin/user/roles", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
 

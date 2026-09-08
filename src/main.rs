@@ -80,6 +80,18 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Re-encrypt every at-rest secret (signing-key privates, social
+    /// provider secrets, TOTP secrets, stored mail/SMS credentials) under
+    /// a NEW encryption key, then exit (the server does NOT start). COLD
+    /// operation: stop the server first. The current `encryption_key`
+    /// from the config is the OLD key; after a successful run you MUST
+    /// replace it with the new one or nothing decrypts at the next boot.
+    /// Legacy plaintext rows are upgraded to ciphertext on the way
+    /// through (G-150).
+    Rekey {
+        /// New encryption key: 64 hex chars (32 bytes), e.g. `openssl rand -hex 32`
+        new_key: String,
+    },
 }
 
 #[tokio::main]
@@ -194,6 +206,34 @@ async fn main() {
         std::process::exit(1);
     }
 
+    // G-150: key rotation runs AFTER the old key is installed (decryption
+    // side) and BEFORE the server boots — it re-encrypts every at-rest
+    // secret under the new key and exits.
+    if let Some(Commands::Rekey { new_key }) = &cli.command {
+        match db::rekey_data_dir(Path::new(&server_config.data_dir), new_key).await {
+            Ok(report) => {
+                println!(
+                    "Rekeyed {} tenant(s): {} signing key(s), {} provider secret(s), {} TOTP secret(s), {} config secret(s); {} legacy plaintext row(s) upgraded.",
+                    report.tenants,
+                    report.signing_keys,
+                    report.provider_secrets,
+                    report.totp_secrets,
+                    report.config_secrets,
+                    report.legacy_upgraded
+                );
+                println!(
+                    "IMPORTANT: set encryption_key to the NEW value in your config now — \
+                     the data dir no longer decrypts with the old key."
+                );
+                return;
+            }
+            Err(e) => {
+                eprintln!("Rekey failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let mut db = db::Storage::init(Path::new(&server_config.data_dir))
         .await
         .unwrap();
@@ -204,6 +244,12 @@ async fn main() {
     let state = ServerState::create(db, server_config.trust_forwarded_headers)
         .await
         .expect("Can not create server state");
+
+    // G-126: durable back-channel logout worker — a 60 s sweep plus an
+    // immediate wakeup whenever a logout queues deliveries. Replaces the
+    // old detached 3-attempt task that lost notifications on restart or
+    // any RP outage longer than a few seconds.
+    tokio::spawn(crate::oidc_ext::run_backchannel_worker(state.clone()));
 
     // Hourly garbage collection of expired revocation records: keeps the
     // persistent InvalidJwt store and its in-memory cache bounded to the

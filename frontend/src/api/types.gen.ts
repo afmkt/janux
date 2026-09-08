@@ -197,6 +197,10 @@ export type OpenapiPasskeyPasskeyResponse = {
     token: string;
 };
 
+export type OpenapiPasskeyRemovePasskeyRequest = {
+    name: string;
+};
+
 export type OpenapiPasskeyVerifyRequest = {
     cookie?: string | null;
     credential: unknown;
@@ -386,10 +390,6 @@ export type OpenapiUserRemoveRole = {
     user: string;
 };
 
-export type OpenapiUserUserRoleRequest = {
-    user: string;
-};
-
 export type OpenapiUtilsApiProblem = {
     detail?: string | null;
     status: number;
@@ -448,6 +448,11 @@ export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiSocialProviderEntry_
 
 export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiTotpTotpEntry__ = {
     data: OpenapiUtilsPage_openapiTotpTotpEntry_;
+    ok: boolean;
+};
+
+export type OpenapiUtilsApiResponse_openapiVerifySessionInfo_ = {
+    data: OpenapiVerifySessionInfo;
     ok: boolean;
 };
 
@@ -526,6 +531,25 @@ export type OpenapiUtilsPage_openapiTotpTotpEntry_ = {
     limit: number;
     next_offset?: number | null;
     offset: number;
+};
+
+/**
+ * The current session's identity, for first-party frontends that no
+ * longer hold a readable JWT (G-139 moved it into an HttpOnly cookie):
+ * the admin console's MFA/Account tabs and the step-up flows need to
+ * know WHO the session belongs to (G-138/G-162).
+ */
+export type OpenapiVerifySessionInfo = {
+    auth_time?: number | null;
+    domain: string;
+    /**
+     * Factors proven at `auth_time` (feeds amr/acr and the policy
+     * engine's MFA gate).
+     */
+    mfa: Array<string>;
+    roles: Array<string>;
+    user: string;
+    username: string;
 };
 
 export type OpenapiAdminAddDomainData = {
@@ -1577,9 +1601,9 @@ export type OpenapiEmailRemoveData = {
          */
         name: string;
         /**
-         * User mobile
+         * Email address to remove
          */
-        mobile: string;
+        email: string;
     };
     url: '/api/v1/admin/user/remove_email';
 };
@@ -1652,6 +1676,39 @@ export type OpenapiOtpRemoveResponses = {
 
 export type OpenapiOtpRemoveResponse = OpenapiOtpRemoveResponses[keyof OpenapiOtpRemoveResponses];
 
+export type OpenapiPasskeyDeactivateData = {
+    body: OpenapiPasskeyRemovePasskeyRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/admin/user/remove_passkey';
+};
+
+export type OpenapiPasskeyDeactivateErrors = {
+    /**
+     * Unknown user or bad request
+     */
+    400: OpenapiUtilsApiProblem;
+    /**
+     * No verified session
+     */
+    401: OpenapiUtilsApiProblem;
+    /**
+     * Level gate refused the target user
+     */
+    403: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiPasskeyDeactivateError = OpenapiPasskeyDeactivateErrors[keyof OpenapiPasskeyDeactivateErrors];
+
+export type OpenapiPasskeyDeactivateResponses = {
+    /**
+     * Success
+     */
+    200: OpenapiUtilsApiResponse____;
+};
+
+export type OpenapiPasskeyDeactivateResponse = OpenapiPasskeyDeactivateResponses[keyof OpenapiPasskeyDeactivateResponses];
+
 export type OpenapiUserRemoveRoleData = {
     body: OpenapiUserRemoveRole;
     path?: never;
@@ -1713,9 +1770,14 @@ export type OpenapiSocialRemoveResponses = {
 };
 
 export type OpenapiUserUserRolesData = {
-    body: OpenapiUserUserRoleRequest;
+    body?: never;
     path?: never;
-    query?: never;
+    query: {
+        /**
+         * User name
+         */
+        user: string;
+    };
     url: '/api/v1/admin/user/roles';
 };
 
@@ -2105,6 +2167,31 @@ export type OpenapiVerifyRefreshResponses = {
 };
 
 export type OpenapiVerifyRefreshResponse = OpenapiVerifyRefreshResponses[keyof OpenapiVerifyRefreshResponses];
+
+export type OpenapiVerifySessionInfoData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/session';
+};
+
+export type OpenapiVerifySessionInfoErrors = {
+    /**
+     * No valid session
+     */
+    401: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiVerifySessionInfoError = OpenapiVerifySessionInfoErrors[keyof OpenapiVerifySessionInfoErrors];
+
+export type OpenapiVerifySessionInfoResponses = {
+    /**
+     * Session info
+     */
+    200: OpenapiUtilsApiResponse_openapiVerifySessionInfo_;
+};
+
+export type OpenapiVerifySessionInfoResponse = OpenapiVerifySessionInfoResponses[keyof OpenapiVerifySessionInfoResponses];
 
 export type OpenapiSocialRedeemData = {
     body: OpenapiSocialRedeemRequest;

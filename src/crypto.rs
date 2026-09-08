@@ -34,7 +34,37 @@ fn get_encryption_key() -> Result<&'static Key<Aes256Gcm>> {
 }
 
 pub fn encrypt_secret(plaintext: &str) -> Result<String> {
-    let cipher = Aes256Gcm::new(get_encryption_key()?);
+    encrypt_secret_with(get_encryption_key()?, plaintext)
+}
+
+pub fn decrypt_secret(encrypted: &str) -> Result<String> {
+    decrypt_secret_with(get_encryption_key()?, encrypted)
+}
+
+/// An explicit AES-256-GCM cipher — the explicit-key variant used by the
+/// rekey tool (G-150). The process-wide key is a first-call-wins
+/// `OnceLock` and cannot be swapped in place, so rekey decrypts with the
+/// global OLD key and encrypts with an explicit NEW cipher.
+pub type SecretCipher = Key<Aes256Gcm>;
+
+/// Parse and validate a 64-hex-char (32-byte) key — the same rules
+/// `setup_encryption_key` enforces.
+pub fn parse_key_hex(hex_key: &str) -> Result<SecretCipher> {
+    let bytes =
+        hex::decode(hex_key).map_err(|e| anyhow!("encryption key must be hex-encoded: {e}"))?;
+    if bytes.len() != KEY_BYTES {
+        anyhow::bail!(
+            "encryption key must be exactly {} bytes ({} hex chars), got {}",
+            KEY_BYTES,
+            KEY_BYTES * 2,
+            bytes.len()
+        );
+    }
+    Ok(*SecretCipher::from_slice(&bytes))
+}
+
+pub fn encrypt_secret_with(cipher: &SecretCipher, plaintext: &str) -> Result<String> {
+    let cipher = Aes256Gcm::new(cipher);
     let nonce: [u8; 12] = rand::random();
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce), plaintext.as_bytes())
@@ -45,8 +75,8 @@ pub fn encrypt_secret(plaintext: &str) -> Result<String> {
     Ok(BASE64.encode(out))
 }
 
-pub fn decrypt_secret(encrypted: &str) -> Result<String> {
-    let cipher = Aes256Gcm::new(get_encryption_key()?);
+pub fn decrypt_secret_with(cipher: &SecretCipher, encrypted: &str) -> Result<String> {
+    let cipher = Aes256Gcm::new(cipher);
     let data = BASE64
         .decode(encrypted)
         .map_err(|e| anyhow!("invalid ciphertext: {e}"))?;

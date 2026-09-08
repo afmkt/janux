@@ -106,6 +106,10 @@ struct ScimError {
 struct PatchOp {
     #[serde(default)]
     schemas: Vec<String>,
+    // RFC 7644 §3.5.2 spells the attribute "Operations" (and §2.1 makes
+    // attribute names case-insensitive) — accept the spec casing alongside
+    // the camelCase one real IdPs vary between.
+    #[serde(alias = "Operations")]
     operations: Vec<PatchOperation>,
 }
 
@@ -211,7 +215,7 @@ async fn resolve_path_user(tenant: &mut Tenant, id: &str) -> Option<User> {
         return Some(user);
     }
 
-    tenant.user(id).await.ok()
+    resolve_user_ci(tenant, id).await
 }
 
 fn caller_or_401(depot: &Depot, res: &mut Response) -> Option<Caller> {
@@ -344,20 +348,44 @@ fn parse_user_name_filter(filter: &str) -> Result<Option<String>, ()> {
     if filter.is_empty() {
         return Ok(None);
     }
-    let lower = filter.to_lowercase();
-    let Some(rest) = lower.strip_prefix("username") else {
+    // G-145 (RFC 7644 §3.4.2.2): the attribute and operator match
+    // case-insensitively, but the quoted VALUE keeps its case — the old
+    // parser lowercased the whole filter, so `eq "Admin"` searched for
+    // `admin` and missed a stored `Admin`.
+    if filter.len() < "username".len()
+        || !filter[.."username".len()].eq_ignore_ascii_case("username")
+    {
         return Err(());
-    };
-    let rest = rest.trim_start();
-    let Some(rest) = rest.strip_prefix("eq") else {
+    }
+    let rest = filter["username".len()..].trim_start();
+    if rest.len() < 2 || !rest[..2].eq_ignore_ascii_case("eq") {
         return Err(());
-    };
-    let value = rest.trim();
+    }
+    let value = rest[2..].trim();
     if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
         Ok(Some(value[1..value.len() - 1].to_string()))
     } else {
         Err(())
     }
+}
+
+/// RFC 7644 §7.8: `userName` matching is case-insensitive. Exact first,
+/// then the lowercase fold — SCIM-created users are stored folded
+/// (`create_user` folds at the boundary, G-145), so IdP-synced
+/// directories round-trip fully case-insensitive; admin-created
+/// mixed-case names remain reachable by their exact spelling. A
+/// cross-surface folded index (a `name_lower` column) is the tracked
+/// residual for admin-created mixed-case names queried in a different
+/// case.
+async fn resolve_user_ci(tenant: &mut Tenant, name: &str) -> Option<User> {
+    if let Ok(user) = tenant.user(name).await {
+        return Some(user);
+    }
+    let folded = name.to_lowercase();
+    if folded != name {
+        return tenant.user(&folded).await.ok();
+    }
+    None
 }
 
 #[handler]
@@ -385,27 +413,36 @@ pub async fn list_users(req: &mut Request, depot: &mut Depot, res: &mut Response
         }
     };
 
-    let users: Vec<User> = match &names {
-        Some(name) => match tenant.user(name).await {
-            Ok(u) => vec![u],
-            Err(_) => vec![],
-        },
-        None => tenant.all_users().await.unwrap_or_default(),
-    };
-
-    let total = users.len();
     let start_index = req.query::<usize>("startIndex").unwrap_or(1).max(1);
     let count = req
         .query::<usize>("count")
         .unwrap_or(MAX_RESULTS)
         .min(MAX_RESULTS);
-    let page: Vec<ScimUser> = {
-        let mut page = Vec::new();
-        for user in users.iter().skip(start_index - 1).take(count) {
-            page.push(to_scim_user(&mut tenant, user).await);
+
+    // G-144: neither branch materializes the user table any more. A
+    // `userName eq` filter resolves to at most one row (userName is
+    // unique), and the unfiltered list paginates at the DB level with
+    // `totalResults` from a COUNT — the old code loaded every row into
+    // memory to slice one page out of it.
+    let (total, page_users): (usize, Vec<User>) = match &names {
+        Some(name) => match resolve_user_ci(&mut tenant, name).await {
+            Some(user) => (1, vec![user]),
+            None => (0, vec![]),
+        },
+        None => {
+            let total = tenant.users_count().await.unwrap_or(0) as usize;
+            let items = match tenant.users_page(count, start_index - 1).await {
+                Ok(page) => page.items,
+                Err(_) => vec![],
+            };
+            (total, items)
         }
-        page
     };
+
+    let mut page: Vec<ScimUser> = Vec::with_capacity(page_users.len());
+    for user in &page_users {
+        page.push(to_scim_user(&mut tenant, user).await);
+    }
     render_scim(
         res,
         StatusCode::OK,
@@ -450,9 +487,13 @@ async fn apply_attrs(
 ) -> anyhow::Result<User> {
     if let Some(new_name) = &body.user_name
         && !new_name.is_empty()
-        && *new_name != user.name
     {
-        user = tenant.user_rename(caller, &user.name, new_name).await?;
+        // G-145: renames fold case at the SCIM boundary too, so a
+        // PUT/PATCH cannot reintroduce a case-split identity.
+        let folded = new_name.to_lowercase();
+        if folded != user.name {
+            user = tenant.user_rename(caller, &user.name, &folded).await?;
+        }
     }
 
     if let Some(external_id) = &body.external_id {
@@ -512,7 +553,11 @@ pub async fn create_user(req: &mut Request, depot: &mut Depot, res: &mut Respons
         .user_name
         .as_deref()
         .filter(|n| !n.is_empty())
-        .map(|n| n.to_string())
+        // G-145: fold case at the SCIM boundary — RFC 7644 §7.8 treats
+        // userName as case-insensitive, so SCIM-provisioned directories
+        // store the canonical lowercase form and round-trip lookups
+        // (filter, path, uniqueness) never split on case.
+        .map(|n| n.to_lowercase())
     else {
         scim_error(
             res,
@@ -645,7 +690,12 @@ pub async fn patch_user(req: &mut Request, depot: &mut Depot, res: &mut Response
     };
 
     for op in &patch.operations {
-        if op.op.to_lowercase() != "replace" && op.op.to_lowercase() != "add" {
+        // G-146: `remove` is implemented (it used to be rejected despite
+        // `ServiceProviderConfig` advertising patch support), and `add`
+        // on a multi-valued attribute now APPENDS per RFC 7644 §3.5.2.1
+        // instead of applying replace semantics.
+        let op_name = op.op.to_lowercase();
+        if op_name != "replace" && op_name != "add" && op_name != "remove" {
             scim_error(
                 res,
                 StatusCode::BAD_REQUEST,
@@ -655,11 +705,17 @@ pub async fn patch_user(req: &mut Request, depot: &mut Depot, res: &mut Response
             return;
         }
         // Attribute map form: no path, value carries the attributes.
+        // `remove` may omit the value entirely (drop the whole attribute
+        // / every value of a multi-valued one, RFC 7644 §3.5.2.3).
+        let null_value = serde_json::Value::Null;
         let attrs: Vec<(String, &serde_json::Value)> = match (&op.path, &op.value) {
-            (None, Some(serde_json::Value::Object(map))) => {
+            (None, Some(serde_json::Value::Object(map))) if op_name != "remove" => {
                 map.iter().map(|(k, v)| (k.to_lowercase(), v)).collect()
             }
             (Some(path), Some(value)) => vec![(path.to_lowercase(), value)],
+            (Some(path), None) if op_name == "remove" => {
+                vec![(path.to_lowercase(), &null_value)]
+            }
             _ => {
                 scim_error(
                     res,
@@ -681,6 +737,12 @@ pub async fn patch_user(req: &mut Request, depot: &mut Depot, res: &mut Response
         for (attr, value) in attrs {
             match attr.as_str() {
                 "active" => {
+                    if op_name == "remove" {
+                        // Removing a singular attribute resets it to its
+                        // default — accounts are active by default.
+                        single.active = Some(true);
+                        continue;
+                    }
                     let Some(b) = value.as_bool() else {
                         scim_error(
                             res,
@@ -693,6 +755,15 @@ pub async fn patch_user(req: &mut Request, depot: &mut Depot, res: &mut Response
                     single.active = Some(b);
                 }
                 "username" => {
+                    if op_name == "remove" {
+                        scim_error(
+                            res,
+                            StatusCode::BAD_REQUEST,
+                            Some("invalidValue"),
+                            "userName is REQUIRED and cannot be removed",
+                        );
+                        return;
+                    }
                     let Some(s) = value.as_str() else {
                         scim_error(
                             res,
@@ -705,6 +776,12 @@ pub async fn patch_user(req: &mut Request, depot: &mut Depot, res: &mut Response
                     single.user_name = Some(s.to_string());
                 }
                 "externalid" => {
+                    if op_name == "remove" {
+                        // apply_attrs maps the empty string to a cleared
+                        // externalId.
+                        single.external_id = Some(String::new());
+                        continue;
+                    }
                     let Some(s) = value.as_str() else {
                         scim_error(
                             res,
@@ -717,28 +794,60 @@ pub async fn patch_user(req: &mut Request, depot: &mut Depot, res: &mut Response
                     single.external_id = Some(s.to_string());
                 }
                 "emails" => {
-                    let parsed: Vec<ScimEmailValue> = match serde_json::from_value(value.clone()) {
-                        Ok(v) => v,
-                        Err(_) => {
-                            scim_error(
-                                res,
-                                StatusCode::BAD_REQUEST,
-                                Some("invalidValue"),
-                                "emails must be an array of {value}",
-                            );
-                            return;
-                        }
+                    let parsed: Vec<ScimEmailValue> = match value {
+                        serde_json::Value::Null => vec![],
+                        other => match serde_json::from_value(other.clone()) {
+                            Ok(v) => v,
+                            Err(_) => {
+                                scim_error(
+                                    res,
+                                    StatusCode::BAD_REQUEST,
+                                    Some("invalidValue"),
+                                    "emails must be an array of {value}",
+                                );
+                                return;
+                            }
+                        },
                     };
-                    // Replace semantics for the email set.
-                    let keep: std::collections::HashSet<&str> =
-                        parsed.iter().map(|e| e.value.as_str()).collect();
-                    let current = tenant.user_email(user.id).await.unwrap_or_default();
-                    for email in current {
-                        if !keep.contains(email.id.as_str()) {
-                            tenant.email_delete(&user.name, &email.id).await.ok();
+                    match op_name.as_str() {
+                        // §3.5.2.1: `add` to a multi-valued attribute
+                        // appends — apply_attrs is attach-only, so passing
+                        // the new values through merges them with the
+                        // existing set instead of wiping it.
+                        "add" => {
+                            single.emails.extend(parsed);
+                        }
+                        // §3.5.2.2: `replace` swaps the whole set.
+                        "replace" => {
+                            let keep: std::collections::HashSet<&str> =
+                                parsed.iter().map(|e| e.value.as_str()).collect();
+                            let current = tenant.user_email(user.id).await.unwrap_or_default();
+                            for email in current {
+                                if !keep.contains(email.id.as_str()) {
+                                    tenant.email_delete(&user.name, &email.id).await.ok();
+                                }
+                            }
+                            single.emails = parsed;
+                        }
+                        // §3.5.2.3: `remove` with a value filter drops the
+                        // matching values; without one, every value.
+                        _ => {
+                            let current = tenant.user_email(user.id).await.unwrap_or_default();
+                            if parsed.is_empty() {
+                                for email in current {
+                                    tenant.email_delete(&user.name, &email.id).await.ok();
+                                }
+                            } else {
+                                let drop: std::collections::HashSet<&str> =
+                                    parsed.iter().map(|e| e.value.as_str()).collect();
+                                for email in current {
+                                    if drop.contains(email.id.as_str()) {
+                                        tenant.email_delete(&user.name, &email.id).await.ok();
+                                    }
+                                }
+                            }
                         }
                     }
-                    single.emails = parsed;
                 }
                 other => {
                     scim_error(
@@ -1024,6 +1133,239 @@ mod tests {
         serde_json::from_str(&res.take_string().await.unwrap_or_default()).unwrap()
     }
 
+    /// G-145: `userName` is case-insensitive at the SCIM boundary (RFC
+    /// 7644 §5, §7.8): create folds to the canonical lowercase form and
+    /// filter lookups resolve regardless of the presented case — the old
+    /// parser lowercased the filter VALUE and then matched case-
+    /// sensitively, so `eq "Admin"` could never find anything.
+    #[tokio::test]
+    async fn scim_user_name_is_case_insensitive() {
+        let (state, _tmp) = scim_test_env().await;
+        let service = scim_service(state);
+        let token = machine_token(&service).await;
+        let bearer = Some(token.as_str());
+
+        let mut res = service
+            .handle(build(
+                salvo::http::Method::POST,
+                "http://localhost/scim/v2/Users",
+                bearer,
+                Some(serde_json::json!({
+                    "schemas": [USER_SCHEMA],
+                    "userName": "MixedCase@Example.COM",
+                    "active": true
+                })),
+            ))
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::CREATED));
+        let created = scim_json(&mut res).await;
+        assert_eq!(
+            created["userName"], "mixedcase@example.com",
+            "create folds case at the SCIM boundary"
+        );
+
+        for queried in [
+            "MixedCase@Example.COM",
+            "mixedcase@example.com",
+            "MIXEDCASE@EXAMPLE.COM",
+        ] {
+            let raw_filter = format!("userName eq \"{queried}\"");
+            let filter = urlencoding::encode(&raw_filter);
+            let mut res = service
+                .handle(build(
+                    salvo::http::Method::GET,
+                    &format!("http://localhost/scim/v2/Users?filter={filter}"),
+                    bearer,
+                    None,
+                ))
+                .await;
+            assert_eq!(res.status_code, Some(StatusCode::OK), "{queried}");
+            let page = scim_json(&mut res).await;
+            assert_eq!(
+                page["totalResults"], 1,
+                "filter {queried} must resolve the folded user: {page}"
+            );
+        }
+    }
+
+    /// G-146: PATCH `add` APPENDS to a multi-valued attribute and
+    /// `remove` is implemented (RFC 7644 §3.5.2) — the old replace-only
+    /// behavior silently wiped addresses a compliant IdP added
+    /// incrementally, and rejected `remove` despite
+    /// ServiceProviderConfig advertising patch support.
+    #[tokio::test]
+    async fn scim_patch_add_appends_and_remove_drops() {
+        let (state, _tmp) = scim_test_env().await;
+        let service = scim_service(state);
+        let token = machine_token(&service).await;
+        let bearer = Some(token.as_str());
+
+        let mut res = service
+            .handle(build(
+                salvo::http::Method::POST,
+                "http://localhost/scim/v2/Users",
+                bearer,
+                Some(serde_json::json!({
+                    "schemas": [USER_SCHEMA],
+                    "userName": "patchy",
+                    "active": true,
+                    "emails": [{"value": "a@x.com"}]
+                })),
+            ))
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::CREATED));
+        let id = scim_json(&mut res).await["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+
+        async fn get_emails(service: &Service, bearer: Option<&str>, id: &str) -> Vec<String> {
+            let mut res = service
+                .handle(build(
+                    salvo::http::Method::GET,
+                    &format!("http://localhost/scim/v2/Users/{id}"),
+                    bearer,
+                    None,
+                ))
+                .await;
+            assert_eq!(res.status_code, Some(StatusCode::OK));
+            let user = scim_json(&mut res).await;
+            user["emails"]
+                .as_array()
+                .map(|es| {
+                    es.iter()
+                        .filter_map(|e| e["value"].as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        }
+
+        // add APPENDS: both addresses present.
+        let res = service
+            .handle(build(
+                salvo::http::Method::PATCH,
+                &format!("http://localhost/scim/v2/Users/{id}"),
+                bearer,
+                Some(serde_json::json!({
+                    "schemas": [PATCH_OP_SCHEMA],
+                    "Operations": [{"op": "add", "path": "emails", "value": [{"value": "b@x.com"}]}]
+                })),
+            ))
+            .await;
+        assert_eq!(
+            res.status_code,
+            Some(StatusCode::OK),
+            "add must be accepted"
+        );
+        let emails = get_emails(&service, bearer, &id).await;
+        assert!(
+            emails.contains(&"a@x.com".to_string()) && emails.contains(&"b@x.com".to_string()),
+            "add appends without wiping: {emails:?}"
+        );
+
+        // remove with a value filter drops just that value.
+        let res = service
+            .handle(build(
+                salvo::http::Method::PATCH,
+                &format!("http://localhost/scim/v2/Users/{id}"),
+                bearer,
+                Some(serde_json::json!({
+                    "schemas": [PATCH_OP_SCHEMA],
+                    "Operations": [{"op": "remove", "path": "emails", "value": [{"value": "b@x.com"}]}]
+                })),
+            ))
+            .await;
+        assert_eq!(
+            res.status_code,
+            Some(StatusCode::OK),
+            "remove must be accepted"
+        );
+        let emails = get_emails(&service, bearer, &id).await;
+        assert_eq!(emails, vec!["a@x.com".to_string()], "{emails:?}");
+
+        // remove without a value drops every value.
+        let res = service
+            .handle(build(
+                salvo::http::Method::PATCH,
+                &format!("http://localhost/scim/v2/Users/{id}"),
+                bearer,
+                Some(serde_json::json!({
+                    "schemas": [PATCH_OP_SCHEMA],
+                    "Operations": [{"op": "remove", "path": "emails"}]
+                })),
+            ))
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::OK));
+        let emails = get_emails(&service, bearer, &id).await;
+        assert!(emails.is_empty(), "remove-all: {emails:?}");
+    }
+
+    /// G-144: the unfiltered list is DB-paginated with `totalResults`
+    /// from a COUNT — pages are disjoint slices of a stable order and the
+    /// table is never materialized whole.
+    #[tokio::test]
+    async fn scim_list_paginates_with_total_results() {
+        let (state, _tmp) = scim_test_env().await;
+        let service = scim_service(state);
+        let token = machine_token(&service).await;
+        let bearer = Some(token.as_str());
+
+        for name in ["page-u1", "page-u2", "page-u3"] {
+            let res = service
+                .handle(build(
+                    salvo::http::Method::POST,
+                    "http://localhost/scim/v2/Users",
+                    bearer,
+                    Some(serde_json::json!({
+                        "schemas": [USER_SCHEMA],
+                        "userName": name,
+                        "active": true
+                    })),
+                ))
+                .await;
+            assert_eq!(res.status_code, Some(StatusCode::CREATED), "{name}");
+        }
+
+        async fn list(service: &Service, bearer: Option<&str>, query: &str) -> serde_json::Value {
+            let mut res = service
+                .handle(build(
+                    salvo::http::Method::GET,
+                    &format!("http://localhost/scim/v2/Users?{query}"),
+                    bearer,
+                    None,
+                ))
+                .await;
+            assert_eq!(res.status_code, Some(StatusCode::OK));
+            scim_json(&mut res).await
+        }
+
+        let page1 = list(&service, bearer, "count=2&startIndex=1").await;
+        assert!(
+            page1["totalResults"].as_u64().expect("count") >= 3,
+            "totalResults comes from a COUNT: {page1}"
+        );
+        assert_eq!(page1["itemsPerPage"], 2);
+        assert_eq!(page1["startIndex"], 1);
+        let ids1: Vec<String> = page1["Resources"]
+            .as_array()
+            .expect("page items")
+            .iter()
+            .map(|u| u["id"].as_str().unwrap_or_default().to_string())
+            .collect();
+
+        let page2 = list(&service, bearer, "count=2&startIndex=3").await;
+        let ids2: Vec<String> = page2["Resources"]
+            .as_array()
+            .expect("page items")
+            .iter()
+            .map(|u| u["id"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            ids1.iter().all(|id| !ids2.contains(id)),
+            "pages are disjoint: {ids1:?} vs {ids2:?}"
+        );
+    }
+
     #[tokio::test]
     async fn discovery_is_public_and_speaks_scim() {
         let (state, _tmp) = scim_test_env().await;
@@ -1247,8 +1589,8 @@ mod tests {
             .await;
         assert_eq!(
             res.status_code,
-            Some(StatusCode::UNAUTHORIZED),
-            "default-deny: a `user`-role session must not reach the SCIM surface"
+            Some(StatusCode::FORBIDDEN),
+            "default-deny: a VALID `user`-role session is authenticated-but-forbidden (403, G-28) — 401 stays reserved for missing/invalid credentials"
         );
     }
 }

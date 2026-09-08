@@ -676,6 +676,82 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     res.render(Json(err));
 }
 
+// ─── Admin recovery: deactivate a user's passkeys (G-101) ───────────────────
+
+#[derive(Deserialize, Serialize, Debug, ToSchema)]
+pub struct RemovePasskeyRequest {
+    pub name: String,
+}
+
+#[endpoint(
+    summary = "Deactivate all passkeys of a user (admin recovery path)",
+    description = "G-101: a user who lost every authenticator was unrecoverable — passkey deactivation was self-session-only, so there was no admin path back into a passkey-only account. This is the recovery lever: an admin (outranking the target, H3) deactivates the user's passkeys on this domain; the user then signs in with a remaining factor, or an admin vouches an email credential (`user/attach_email`, G-131) and the user re-registers passkeys after the magic-link signin.",
+    request_body = RemovePasskeyRequest,
+    responses(
+        (status_code = 200, description = "Success", body = ApiResponse<()>),
+        (status_code = 400, description = "Unknown user or bad request", body = ApiProblem),
+        (status_code = 401, description = "No verified session", body = ApiProblem),
+        (status_code = 403, description = "Level gate refused the target user", body = ApiProblem)
+    )
+)]
+pub async fn deactivate(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    // H3, symmetric with `email::remove`/`otp::remove`: credential
+    // removal is a user-lifecycle mutation — the caller must outrank the
+    // target, or a lower admin could strip root's factors.
+    let caller = match crate::utils::caller_from_depot(depot) {
+        Some(c) => c,
+        None => {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            res.render(Json(ApiProblem::unauthorized()));
+            return;
+        }
+    };
+    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let domain = crate::utils::get_domain(req, state)
+        .unwrap_or("")
+        .to_string();
+    if let Some(body) = crate::utils::extract::<RemovePasskeyRequest>(req, None).await
+        && !body.name.is_empty()
+        && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
+    {
+        crate::audit::record_target_detail(
+            res,
+            "credential",
+            "passkey",
+            &format!("user={},flow=admin-remove-all", body.name),
+        );
+        let target = match tenant.user(&body.name).await {
+            Ok(t) => t,
+            Err(_) => {
+                res.status_code(StatusCode::BAD_REQUEST);
+                res.render(Json(ApiProblem::validation_error("Unknown user")));
+                return;
+            }
+        };
+        if let Err(e) = tenant.require_above_user(&caller, target.id).await {
+            crate::utils::render_admin_error(res, e);
+            return;
+        }
+        match tenant.deactivate_passkeys(&body.name, &domain).await {
+            Ok(_) => {
+                res.status_code(StatusCode::OK);
+                res.render(Json(ApiResponse::ok(())));
+            }
+            Err(_) => {
+                res.status_code(StatusCode::BAD_REQUEST);
+                res.render(Json(ApiProblem::validation_error(
+                    "Failed to deactivate passkeys",
+                )));
+            }
+        }
+        return;
+    }
+    res.status_code(StatusCode::BAD_REQUEST);
+    res.render(Json(ApiProblem::validation_error(
+        "Failed to parse request body",
+    )))
+}
+
 // ─── Remove Endpoint (Deactivate Own Passkeys) ─────────────────────────────
 
 #[endpoint(
@@ -922,6 +998,86 @@ mod tests {
             StatusCode::FORBIDDEN,
             "a fresh session passes the sudo gate"
         );
+    }
+
+    /// Stands in for the `protect` hoop: an `admin` (level 80) session as
+    /// the RBAC caller for the admin-gated deactivate endpoint.
+    #[handler]
+    async fn inject_admin_caller(
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
+        depot.inject(JwtVerify {
+            can_access: true,
+            jwt_data: crate::db::JwtData {
+                user: uuid::Uuid::nil().to_string(),
+                username: "alice".to_string(),
+                domain: DOMAIN.to_string(),
+                mfa: HashSet::new(),
+                roles: HashSet::from(["admin".to_string()]),
+            },
+            expect_mfa: false,
+            domain: DOMAIN.to_string(),
+            auth_time: Some(jiff::Timestamp::now().as_second().max(0) as usize),
+        });
+        ctrl.call_next(req, depot, res).await;
+    }
+
+    /// G-101: the admin recovery lever — deactivating a user's passkeys is
+    /// level-gated (H3) like every credential removal: an admin may free a
+    /// locked-out user, but may not strip a root-level account's factors.
+    #[tokio::test]
+    async fn admin_passkey_deactivate_is_level_gated() {
+        let (state, _tmp) = passkey_test_env().await;
+        {
+            let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+            let bootstrap = crate::role::Caller::Bootstrap;
+            for (name, _) in crate::role::BUILTIN_ROLES {
+                tenant
+                    .role_create(&bootstrap, name, 0)
+                    .await
+                    .expect("builtin role");
+            }
+            tenant.user_create("newbie").await.expect("newbie");
+            tenant.user_create("boss").await.expect("boss");
+            tenant
+                .user_add_role(&bootstrap, "boss", "root")
+                .await
+                .expect("boss holds root");
+        }
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .hoop(inject_admin_caller)
+                .push(Router::with_path("user/remove_passkey").post(deactivate)),
+        );
+        async fn call(service: &Service, name: &str) -> Option<StatusCode> {
+            salvo::test::TestClient::post(format!("http://{DOMAIN}/user/remove_passkey"))
+                .add_header("Host", DOMAIN, true)
+                .json(&serde_json::json!({ "name": name }))
+                .send(service)
+                .await
+                .status_code
+        }
+
+        // admin (80) → credential-less user: allowed (the recovery path).
+        assert_eq!(
+            call(&service, "newbie").await,
+            Some(StatusCode::OK),
+            "admin may deactivate a lower user's passkeys"
+        );
+
+        // admin (80) → root (100): refused by the H3 level gate.
+        assert_eq!(
+            call(&service, "boss").await,
+            Some(StatusCode::FORBIDDEN),
+            "admin must not strip a root account's factors"
+        );
+
+        // Unknown user: 400, not a silent no-op.
+        assert_eq!(call(&service, "ghost").await, Some(StatusCode::BAD_REQUEST));
     }
 
     async fn post_request(

@@ -192,6 +192,38 @@ impl Tenant {
     /// without a migration script. Best effort: without a configured key
     /// or on a write failure the row is left untouched — reads keep
     /// working through the legacy fallback in `Totp::totp`.
+    /// Re-encrypt every TOTP secret under an explicit cipher (the
+    /// `janux rekey` tool, G-150). Legacy plaintext rows are upgraded to
+    /// ciphertext under the new key. Returns `(rekeyed, legacy_upgraded)`.
+    pub async fn rekey_totp_secrets(
+        &mut self,
+        new_cipher: &crate::crypto::SecretCipher,
+    ) -> anyhow::Result<(usize, usize)> {
+        let mut count = 0;
+        let mut legacy = 0;
+        for t in Totp::all().exec(&mut self.database).await? {
+            let (plain, was_legacy) = match crate::crypto::decrypt_secret(&t.secret) {
+                Ok(p) => (p, false),
+                Err(_) => (t.secret.clone(), true),
+            };
+            let ct = crate::crypto::encrypt_secret_with(new_cipher, &plain)?;
+            toasty::update!(Totp::filter(
+                Totp::fields()
+                    .user_id()
+                    .eq(t.user_id)
+                    .and(Totp::fields().name().eq(t.name.clone()))
+                    .and(Totp::fields().domain_id().eq(t.domain_id.clone()))
+            ) { secret: ct })
+            .exec(&mut self.database)
+            .await?;
+            count += 1;
+            if was_legacy {
+                legacy += 1;
+            }
+        }
+        Ok((count, legacy))
+    }
+
     async fn ensure_secret_encrypted(&mut self, totp: &mut Totp) {
         if crate::crypto::decrypt_secret(&totp.secret).is_ok() {
             return; // already ciphertext

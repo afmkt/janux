@@ -35,6 +35,10 @@ const landing = {
   username: params.get('username'),
   email: params.get('email'),
   code: params.get('code'),
+  // G-162: `flow=add` marks an email-ADD confirmation link — it completes
+  // against the session-gated `email/add/verify` endpoint, not the login
+  // ceremony (the token namespaces are disjoint server-side).
+  flow: params.get('flow'),
 }
 // A magic-link landing is only actionable when the link carries all three
 // ceremony halves; a bare `?token=…` used to render a blank page (G-25).
@@ -59,6 +63,7 @@ function App() {
     return null
   })
   const [username, setUsername] = useState('')
+  const [notice, setNotice] = useState<string | null>(null)
   const [activeFactor, setActiveFactor] = useState<string | null>(null)
   const [identifier, setIdentifier] = useState('')
   const [otpCode, setOtpCode] = useState('')
@@ -99,6 +104,23 @@ function App() {
           window.history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname)
           setBusy(false)
         })
+      return
+    }
+    if (landing.flow === 'add' && landing.token && landing.email) {
+      landingHandled = true
+      // Email-add confirmation: the session rides in the HttpOnly cookie
+      // (the user clicked the link while signed in); the body carries only
+      // the ceremony token and the address being added.
+      postJson('/api/v1/auth/email/add/verify', {
+        token: landing.token,
+        email: landing.email,
+      })
+        .then(() => {
+          setNotice('Email address verified and added to your account.')
+          setPhase('done')
+        })
+        .catch((e: Error) => setError(e.message))
+        .finally(() => setBusy(false))
       return
     }
     if (landingTokenComplete) {
@@ -378,7 +400,7 @@ function App() {
             </>
           )}
 
-          {phase === 'done' && <Alert color="green">Signed in.</Alert>}
+          {phase === 'done' && <Alert color="green">{notice ?? 'Signed in.'}</Alert>}
         </Stack>
       </Container>
     </MantineProvider>

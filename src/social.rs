@@ -226,32 +226,22 @@ impl Tenant {
     }
 
     /// Build a `DashMap` from pre-fetched providers (no DB query).
-    pub async fn all_providers_as_entries(
-        &self,
-        providers: &[SocialProvider],
-    ) -> DashMap<String, SocialLoginEntry> {
-        let ret = DashMap::new();
-        for p in providers {
-            if let Ok(client) = p.build().await {
-                ret.insert(
-                    p.id.clone(),
-                    SocialLoginEntry {
-                        scopes: p.scopes.clone(),
-                        client,
-                    },
-                );
-            }
+    /// The provider ROWS for a domain: TTL cache first, DB on miss (and
+    /// populate). G-153: split from registry building so callers can drop
+    /// the tenant write guard before the discovery network hop —
+    /// [`registry_from_providers`] is guard-free.
+    pub async fn providers_cached(&mut self, domain: &str) -> Vec<SocialProvider> {
+        if let Some(providers) = SOCIAL_PROVIDERS_CACHE.get(domain).await {
+            return providers;
         }
-        ret
-    }
-
-    /// Build a `SocialLoginRegistry` from pre-fetched providers (no DB query).
-    async fn build_registry_from_providers(
-        &self,
-        providers: &[SocialProvider],
-    ) -> SocialLoginRegistry {
-        let entries = self.all_providers_as_entries(providers).await;
-        SocialLoginRegistry { entries }
+        let providers = self.all_providers().await;
+        if !providers.is_empty() {
+            SOCIAL_PROVIDERS_CACHE
+                .insert(domain.to_string(), providers.clone())
+                .await
+                .ok();
+        }
+        providers
     }
 
     /// Build a `SocialLoginRegistry`, first checking the shared TTL-based cache.
@@ -259,8 +249,7 @@ impl Tenant {
     pub async fn build_registry_cached(&mut self, domain: &str) -> (SocialLoginRegistry, bool) {
         // Check cache first
         if let Some(providers) = SOCIAL_PROVIDERS_CACHE.get(domain).await {
-            let registry = self.build_registry_from_providers(&providers).await;
-            return (registry, true);
+            return (registry_from_providers(&providers).await, true);
         }
 
         // Cache miss — fetch from DB and build
@@ -271,8 +260,7 @@ impl Tenant {
                 .await
                 .ok();
         }
-        let registry = self.build_registry_from_providers(&providers).await;
-        (registry, false)
+        (registry_from_providers(&providers).await, false)
     }
 
     /// Invalidate the social providers cache for a tenant's domain.
@@ -484,6 +472,26 @@ pub struct SocialLoginRegistry {
     entries: DashMap<String, SocialLoginEntry>,
 }
 
+/// Build a registry from pre-fetched provider rows. Pure network work
+/// (OIDC discovery per provider), no tenant access — safe to run with the
+/// tenant write guard DROPPED (G-153: a slow or hung IdP must not stall
+/// every request for the tenant, the H6 lesson from the login flows).
+pub async fn registry_from_providers(providers: &[SocialProvider]) -> SocialLoginRegistry {
+    let entries = DashMap::new();
+    for p in providers {
+        if let Ok(client) = p.build().await {
+            entries.insert(
+                p.id.clone(),
+                SocialLoginEntry {
+                    scopes: p.scopes.clone(),
+                    client,
+                },
+            );
+        }
+    }
+    SocialLoginRegistry { entries }
+}
+
 impl SocialLoginRegistry {
     /// Build an authorization URL with a fresh PKCE challenge.
     ///
@@ -678,7 +686,12 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 
     // 2. Build the registry (in-memory client pool) from discovered providers.
     // Uses TTL-based cache in Storage — invalidated on provider CRUD.
-    let (registry, _cache_hit) = tenant.build_registry_cached(domain.as_ref()).await;
+    // G-153: the provider ROWS come from the guarded DB/cache, but OIDC
+    // discovery is a network hop — drop the tenant write guard first (the
+    // H6 head-of-line-blocking lesson from the login flows).
+    let providers = tenant.providers_cached(domain.as_ref()).await;
+    drop(tenant);
+    let registry = registry_from_providers(&providers).await;
 
     // 3. Generate auth URL + fresh PKCE challenge + nonce.
     let (auth_url, pkce_verifier, csrf, nonce) = match registry.authorization_url(&provider_id, "")
@@ -792,7 +805,11 @@ pub async fn link(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         }
     };
 
-    let (registry, _cache_hit) = tenant.build_registry_cached(domain.as_ref()).await;
+    // G-153: same guard-drop as the login request handler — OIDC
+    // discovery is a network hop and must not hold the tenant write lock.
+    let providers = tenant.providers_cached(domain.as_ref()).await;
+    drop(tenant);
+    let registry = registry_from_providers(&providers).await;
 
     let (auth_url, pkce_verifier, csrf, nonce) = match registry.authorization_url(&provider_id, "")
     {

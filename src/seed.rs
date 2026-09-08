@@ -90,6 +90,7 @@ pub const STANDARD_ADMIN_POLICIES: &[(&str, &str)] = &[
     ("/api/v1/admin/user/remove_email", "admin"),
     ("/api/v1/admin/user/attach_email", "admin"),
     ("/api/v1/admin/user/remove_mobile", "admin"),
+    ("/api/v1/admin/user/remove_passkey", "admin"),
     ("/api/v1/admin/user/remove_social", "admin"),
     ("/api/v1/admin/user/roles", "admin"),
     // admin: roles

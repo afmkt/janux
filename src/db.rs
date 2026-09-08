@@ -721,6 +721,12 @@ impl Storage {
         ret
     }
 
+    /// All loaded tenant ids (G-126: the back-channel worker sweeps every
+    /// tenant; ordering is unspecified).
+    pub fn tenant_ids(&self) -> Vec<String> {
+        self.tenants.iter().map(|e| e.key().clone()).collect()
+    }
+
     pub async fn new_tenant(&self, name: &str) -> Result<RefMut<'_, String, Tenant>> {
         let _guard = self.topology.lock().await;
         let path = self.tenant_path(name)?;
@@ -1156,6 +1162,113 @@ pub async fn restore_data_dir(
     ensure_dir(data_dir).await?;
     copy_dir_recursive(backup_dir, data_dir).await?;
     Ok(manifest)
+}
+
+// ─── Encryption-key rotation (G-150) ─────────────────────────────────────────
+
+/// What `janux rekey` rewrote.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct RekeyReport {
+    pub tenants: usize,
+    pub signing_keys: usize,
+    pub provider_secrets: usize,
+    pub totp_secrets: usize,
+    pub config_secrets: usize,
+    /// Rows that were still LEGACY PLAINTEXT and got upgraded to
+    /// ciphertext under the new key on the way through.
+    pub legacy_upgraded: usize,
+}
+
+/// Re-encrypt every at-rest secret in the data dir under a NEW AES-256
+/// key (G-150): signing-key privates, social provider secrets, TOTP
+/// secrets, and the config-stored mail/SMS credentials. COLD operation —
+/// the server must be stopped (`Storage::init` takes the same exclusive
+/// locks the backup probe checks for).
+///
+/// The OLD key is the process-wide encryption key (the caller sets it up
+/// from config before calling); the NEW key is explicit because the
+/// process-wide `OnceLock` cannot be swapped in place. Legacy plaintext
+/// rows (written before encryption at rest) are upgraded to ciphertext
+/// under the new key. Argon2 client-secret HASHES are one-way and need no
+/// rekey. After a successful run the caller MUST persist the new key in
+/// the config — the data dir no longer decrypts with the old one.
+pub async fn rekey_data_dir(data_dir: &Path, new_key_hex: &str) -> Result<RekeyReport> {
+    let new_cipher = crate::crypto::parse_key_hex(new_key_hex)?;
+    let storage = Storage::init(data_dir).await?;
+    let mut report = RekeyReport::default();
+    for id in storage.tenant_ids() {
+        let Some(mut tenant) = storage.tenant_by_id(&id) else {
+            continue;
+        };
+        report.tenants += 1;
+
+        // Signing-key privates (ciphertext bytes; pre-H2 rows are
+        // plaintext PEM).
+        for key in tenant.all_keys().await? {
+            let stored = String::from_utf8_lossy(&key.private).to_string();
+            let (plain, was_legacy) = match crate::crypto::decrypt_secret(&stored) {
+                Ok(p) => (p, false),
+                Err(_) => (stored, true),
+            };
+            let ct = crate::crypto::encrypt_secret_with(&new_cipher, &plain)?;
+            Key::update_by_id(key.id.as_str())
+                .private(ct.into_bytes())
+                .exec(&mut tenant.database)
+                .await?;
+            report.signing_keys += 1;
+            if was_legacy {
+                report.legacy_upgraded += 1;
+            }
+        }
+
+        // Social provider secrets.
+        for p in tenant.all_providers().await {
+            let (plain, was_legacy) = match crate::crypto::decrypt_secret(&p.client_secret) {
+                Ok(s) => (s, false),
+                Err(_) => (p.client_secret.clone(), true),
+            };
+            let ct = crate::crypto::encrypt_secret_with(&new_cipher, &plain)?;
+            crate::social::SocialProvider::update_by_id(p.id.as_str())
+                .client_secret(ct)
+                .exec(&mut tenant.database)
+                .await?;
+            report.provider_secrets += 1;
+            if was_legacy {
+                report.legacy_upgraded += 1;
+            }
+        }
+
+        // TOTP secrets (composite key — the loop lives in totp.rs).
+        let (n, legacy) = tenant.rekey_totp_secrets(&new_cipher).await?;
+        report.totp_secrets += n;
+        report.legacy_upgraded += legacy;
+
+        // Config-stored provider credentials (JSON-encoded ciphertext;
+        // legacy rows hold the plaintext string).
+        for name in [
+            crate::config::RESEND_KEY,
+            crate::config::OTP_API_SECRET,
+            crate::config::OTP_API_KEY,
+        ] {
+            let Some(value) = tenant.config_get(name).await else {
+                continue;
+            };
+            let Some(stored) = value.as_str() else {
+                continue;
+            };
+            let (plain, was_legacy) = match crate::crypto::decrypt_secret(stored) {
+                Ok(s) => (s, false),
+                Err(_) => (stored.to_string(), true),
+            };
+            let ct = crate::crypto::encrypt_secret_with(&new_cipher, &plain)?;
+            tenant.config_set(name, serde_json::json!(ct)).await?;
+            report.config_secrets += 1;
+            if was_legacy {
+                report.legacy_upgraded += 1;
+            }
+        }
+    }
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -3238,6 +3351,77 @@ mod tests {
         assert!(
             tenant.user("alice").await.is_ok(),
             "user data must survive the round trip"
+        );
+    }
+
+    /// G-150: `janux rekey` re-encrypts every at-rest secret under the
+    /// new key — the old process key no longer decrypts, the new cipher
+    /// decrypts everything, and the signing-key PEM survives intact.
+    #[tokio::test]
+    async fn rekey_reencrypts_every_secret_under_the_new_key() {
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let new_hex = "b7".repeat(32);
+        {
+            let storage = crate::db::Storage::init(tmp.path()).await.expect("init");
+            storage.new_tenant("rk").await.expect("tenant");
+            storage.add_domain("rk.local", "rk").await.expect("domain");
+            let mut tenant = storage.tenant_by_id("rk").expect("tenant");
+            tenant.key_create("rk.local", "key1").await.expect("key");
+            tenant
+                .provider_create("prov", "cid", "provider-secret", "https://issuer.example")
+                .await
+                .expect("provider");
+            crate::config::ResendDTO {
+                from: "noreply@rk.local".into(),
+                resend_key: "re_secret".into(),
+                template: "./template/email/verify.html".into(),
+                verify_url: "http://rk.local/login".into(),
+                base_url: None,
+            }
+            .save(&mut tenant)
+            .await
+            .expect("resend config");
+        }
+
+        let report = crate::db::rekey_data_dir(tmp.path(), &new_hex)
+            .await
+            .expect("rekey");
+        assert_eq!(report.tenants, 1);
+        assert_eq!(report.signing_keys, 1);
+        assert_eq!(report.provider_secrets, 1);
+        assert!(report.config_secrets >= 1, "{report:?}");
+
+        let cipher = crate::crypto::parse_key_hex(&new_hex).expect("cipher");
+        let storage = crate::db::Storage::init(tmp.path()).await.expect("reload");
+        let mut tenant = storage.tenant_by_id("rk").expect("tenant");
+
+        // The OLD process key no longer decrypts the signing private;
+        // the new cipher does, and the PEM is intact.
+        let key = Tenant::key(&mut tenant, "key1").await.expect("key row");
+        let stored = String::from_utf8(key.private.clone()).expect("utf8");
+        assert!(
+            crate::crypto::decrypt_secret(&stored).is_err(),
+            "the old key must not decrypt rekeyed rows"
+        );
+        let pem = crate::crypto::decrypt_secret_with(&cipher, &stored).expect("new key decrypts");
+        assert!(pem.contains("PRIVATE KEY"), "PEM survives the rekey");
+
+        let providers = tenant.all_providers().await;
+        assert_eq!(
+            crate::crypto::decrypt_secret_with(&cipher, &providers[0].client_secret)
+                .expect("provider secret"),
+            "provider-secret"
+        );
+
+        let raw = tenant
+            .config_get(crate::config::RESEND_KEY)
+            .await
+            .and_then(|v| v.as_str().map(str::to_string))
+            .expect("resend key row");
+        assert_eq!(
+            crate::crypto::decrypt_secret_with(&cipher, &raw).expect("config secret"),
+            "re_secret"
         );
     }
 

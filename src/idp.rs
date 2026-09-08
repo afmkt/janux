@@ -298,6 +298,82 @@ impl crate::db::Tenant {
         Ok(())
     }
 
+    /// Update a registered client's metadata (RFC 7592 §4, G-125). The
+    /// `client_id` and secret are immutable here; redirect URIs are
+    /// REPLACED as a set. Because `RedirectURI` rows are keyed by the URI
+    /// string across all clients (G-143), the replacement checks foreign
+    /// ownership FIRST (fail-fast, no partial write), then drops the
+    /// removed rows before binding the added ones — all under the tenant
+    /// write guard, so the check-then-act is serialized.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn oauth2client_update(
+        &mut self,
+        domain: &str,
+        id: &str,
+        grant_types: &str,
+        response_types: &str,
+        auth_method: &str,
+        scope: &str,
+        redirect_uris: &[String],
+    ) -> anyhow::Result<()> {
+        let c = OAuth2Client::get_by_id(&mut self.database, id)
+            .await
+            .map_err(|_e| anyhow::anyhow!("OAuth2 client '{}' not found", id))?;
+        if c.domain_id != domain {
+            return Err(anyhow::anyhow!("OAuth2 client '{}' not found", id));
+        }
+        let current = self
+            .oauth2client_redirect_uris(id)
+            .await?
+            .into_iter()
+            .map(|r| r.id)
+            .collect::<std::collections::HashSet<String>>();
+
+        // Fail-fast conflict check: a URI already bound to ANOTHER client
+        // can never be taken over (the string is its global primary key).
+        for uri in redirect_uris {
+            if current.contains(uri) {
+                continue;
+            }
+            if let Ok(existing) = RedirectURI::get_by_id(&mut self.database, uri.as_str()).await
+                && existing.client_id != id
+            {
+                return Err(anyhow::anyhow!(
+                    "redirect_uri '{uri}' is already registered to another client"
+                ));
+            }
+        }
+
+        OAuth2Client::update_by_id(id)
+            .grant_types(grant_types.to_string())
+            .response_types(response_types.to_string())
+            .token_endpoint_auth_method(auth_method.to_string())
+            .scope(scope.to_string())
+            .exec(&mut self.database)
+            .await
+            .map_err(Into::<anyhow::Error>::into)?;
+
+        let wanted: std::collections::HashSet<&str> =
+            redirect_uris.iter().map(|s| s.as_str()).collect();
+        for uri in &current {
+            if !wanted.contains(uri.as_str()) {
+                RedirectURI::delete_by_id(&mut self.database, uri.as_str())
+                    .await
+                    .ok();
+            }
+        }
+        for uri in redirect_uris {
+            if !current.contains(uri) {
+                RedirectURI::create()
+                    .id(uri.clone())
+                    .client_id(id.to_string())
+                    .exec(&mut self.database)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     /// One DB-level page of active OAuth2 clients on `domain`, ordered by id
     /// so pages are stable and disjoint. The `limit + 1` probe row (see
     /// [`crate::utils::Page`]) is fetched and folded into `next_offset`

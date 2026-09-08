@@ -834,10 +834,13 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     {
                         Ok(token) => {
                             let code = generate_otp_code();
-                            if sendsms(&cfg, &req_request.mobile, code.as_str())
-                                .await
-                                .is_ok()
-                            {
+                            let mobile = req_request.mobile.clone();
+                            // G-153: drop the tenant write guard BEFORE the
+                            // SMS network hop (the H6 pattern from the
+                            // login request flow) — a slow provider must
+                            // not stall every request for the tenant.
+                            drop(tenant);
+                            if sendsms(&cfg, &mobile, code.as_str()).await.is_ok() {
                                 OTP_CODE_CACHE
                                     .insert(format!("otp_add:{}:{}", domain, token), code)
                                     .await

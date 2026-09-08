@@ -2,6 +2,7 @@ use crate::db::JwtVerify;
 use crate::utils::{ApiProblem, ApiResponse, refresh_jwt, validate_jwt, validate_jwt_for};
 use crate::utils::{get_domain, get_jwt};
 use salvo::prelude::*;
+use serde::Serialize;
 
 #[endpoint(
     summary = "Verify JWT, entry for forward-auth",
@@ -80,14 +81,16 @@ pub async fn logout(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                 && tkn.claims.iss == *issuer
                 && tkn.claims.aud == domain
             {
-                let targets = crate::oidc_ext::backchannel_logout_targets(
+                let targets =
+                    crate::oidc_ext::backchannel_logout_targets(&mut tenant, &tkn.claims.sub).await;
+                crate::oidc_ext::queue_backchannel_deliveries(
                     &mut tenant,
                     issuer,
                     domain,
                     &tkn.claims.sub,
+                    targets,
                 )
                 .await;
-                crate::oidc_ext::spawn_backchannel_delivery(targets);
             }
 
             // G-139: the session cookie is HttpOnly — only the server can
@@ -187,6 +190,13 @@ pub async fn protect_at(
             let _ = res.add_header("X-MFA-Required", "true", true);
             return;
         }
+        // G-28: a VALID session whose roles do not satisfy the policy set
+        // is authenticated-but-forbidden → 403. The 401 below is reserved
+        // for missing/invalid credentials; conflating the two made the
+        // engine's deny path indistinguishable from a bad token.
+        res.status_code(StatusCode::FORBIDDEN);
+        res.render(Json(ApiProblem::forbidden()));
+        return;
     }
 
     // Fallback if auth fails
@@ -219,6 +229,55 @@ pub async fn session(
         depot.inject(data);
     }
     ctrl.call_next(req, depot, res).await;
+}
+
+// ─── Session introspection (whoami) ──────────────────────────────────────────
+
+/// The current session's identity, for first-party frontends that no
+/// longer hold a readable JWT (G-139 moved it into an HttpOnly cookie):
+/// the admin console's MFA/Account tabs and the step-up flows need to
+/// know WHO the session belongs to (G-138/G-162).
+#[derive(Serialize, ToSchema)]
+pub struct SessionInfo {
+    pub username: String,
+    pub user: String,
+    pub domain: String,
+    pub roles: Vec<String>,
+    /// Factors proven at `auth_time` (feeds amr/acr and the policy
+    /// engine's MFA gate).
+    pub mfa: Vec<String>,
+    pub auth_time: Option<usize>,
+}
+
+#[endpoint(
+    summary = "Describe the current session (whoami)",
+    responses(
+        (status_code = 200, description = "Session info", body = ApiResponse<SessionInfo>),
+        (status_code = 401, description = "No valid session", body = ApiProblem),
+    )
+)]
+pub async fn session_info(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    match crate::utils::validate_session(req, depot).await {
+        Some(v) => {
+            let mut roles: Vec<String> = v.jwt_data.roles.into_iter().collect();
+            roles.sort();
+            let mut mfa: Vec<String> = v.jwt_data.mfa.into_iter().collect();
+            mfa.sort();
+            res.status_code(StatusCode::OK);
+            res.render(Json(ApiResponse::ok(SessionInfo {
+                username: v.jwt_data.username,
+                user: v.jwt_data.user,
+                domain: v.domain,
+                roles,
+                mfa,
+                auth_time: v.auth_time,
+            })));
+        }
+        None => {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            res.render(Json(ApiProblem::unauthorized()));
+        }
+    }
 }
 
 // ─── Canonical session cookie (G-139) ────────────────────────────────────────

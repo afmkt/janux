@@ -25,7 +25,12 @@ flips them loudly.
 harness/        janux test-server lifecycle, mock Resend (email interception),
                 magic-link login, admin API, OIDC protocol primitives
 tests_op/       discovery, JWKS, authorize errors, full code flow + token lifecycle
-tests_scim/     RFC 7643/7644 surface
+tests_scim/     RFC 7643/7644 surface: discovery documents, the
+                unauthenticated 401, and the full user CRUD track driven
+                by a real machine principal (client_credentials → scim
+                scope): create/get/list/filter/pagination, PATCH
+                add/replace/remove, case-insensitive userName,
+                uniqueness, delete (G-124)
 oidf/           driver + plan configs for the official OIDF suite
 ```
 

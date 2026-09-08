@@ -17,6 +17,9 @@ static PROVISION_STORE_INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::
 pub struct TestEnv {
     pub base_url: String,
     pub admin_token: Option<String>,
+    /// A session for the seeded `user@test.local` (only the `user` role) —
+    /// the deny-path principal: valid token, insufficient roles (G-28).
+    pub user_token: Option<String>,
     /// The running server's data dir — for on-disk assertions (e.g. the
     /// tenant-delete backup under `backups/{name}-{ts}/janux.db`).
     data_dir: std::path::PathBuf,
@@ -161,6 +164,7 @@ impl TestEnv {
         let data_dir = temp_dir.path().join("data");
 
         let mut admin_token = None;
+        let mut user_token = None;
         let server_config_path = if provision {
             // Seed + key + session in THIS process, then hand the server a
             // config without a seed block so it cannot double-seed (policy
@@ -168,16 +172,19 @@ impl TestEnv {
             // startup).
             let seed_config =
                 build_test_config(temp_dir.path(), port, &config.encryption_key, false, true);
-            let token = provision_admin_session(&data_dir, &seed_config, &config.encryption_key)
+            let (admin, user) = provision_sessions(&data_dir, &seed_config, &config.encryption_key)
                 .await
                 .unwrap_or_else(|e| {
                     panic!(
-                        "janux-test: failed to provision an admin session: {e:#} — \
-                         authenticated integration tests cannot run"
+                        "janux-test: failed to provision test sessions: {e:#} — \
+                             authenticated integration tests cannot run"
                     )
                 });
-            println!("janux-test: provisioned seed + signing key + real admin session");
-            admin_token = Some(token);
+            println!(
+                "janux-test: provisioned seed + signing key + real admin and user-role sessions"
+            );
+            admin_token = Some(admin);
+            user_token = Some(user);
             build_test_config(
                 temp_dir.path(),
                 port,
@@ -205,6 +212,7 @@ impl TestEnv {
         TestEnv {
             base_url: format!("http://127.0.0.1:{port}"),
             admin_token,
+            user_token,
             data_dir,
             encryption_key: config.encryption_key.clone(),
             _child: Some(child),
@@ -218,13 +226,16 @@ impl TestEnv {
     }
 }
 
-/// Seed the tenant, create its first signing key and mint the admin
-/// session — all through the janux lib, before the server process exists.
-async fn provision_admin_session(
+/// Seed the tenant, create its first signing key and mint the test
+/// sessions — all through the janux lib, before the server process exists.
+/// Returns `(admin_token, user_token)`: the admin session drives the
+/// happy paths; the user-role session is the deny-path principal (G-28 —
+/// a VALID token with insufficient roles must get 403, not 401/200).
+async fn provision_sessions(
     data_dir: &std::path::Path,
     seed_config: &std::path::Path,
     encryption_key: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, String)> {
     // Same key for every env (tests/test_config.toml); the setter is
     // process-wide first-call-wins and errors on later calls.
     let _ = janux::crypto::setup_encryption_key(encryption_key);
@@ -259,9 +270,18 @@ async fn provision_admin_session(
             120,
         )
         .await?;
+    let user_token = tenant
+        .authenticate_jwt(
+            &std::collections::HashSet::new(),
+            "http://localhost",
+            "localhost",
+            "user@test.local",
+            120,
+        )
+        .await?;
     // `storage`/`tenant` drop here, releasing the tenant DB handles so the
     // server process can open them exclusively-clean on boot.
-    Ok(token)
+    Ok((token, user_token))
 }
 
 // ─── Port allocation and server startup ────────────────────────────────────────
@@ -358,7 +378,10 @@ users = [
 from = "test@test.com"
 resend_key = "test-key"
 template = "./email/verify.html"
-verify_url = "http://localhost/api/v1/verify"
+verify_url = "http://localhost/login"
+# Dead address: email ceremonies fail closed and FAST in tests instead of
+# calling the real Resend API with a dummy key.
+base_url = "http://127.0.0.1:1"
 
 [seed.alisms]
 api_secret = "test-secret"
@@ -420,6 +443,7 @@ fn seed_policy_rows(domain: &str) -> String {
         "/api/v1/admin/user/remove_email",
         "/api/v1/admin/user/attach_email",
         "/api/v1/admin/user/remove_mobile",
+        "/api/v1/admin/user/remove_passkey",
         "/api/v1/admin/user/remove_social",
         "/api/v1/admin/user/roles",
         "/api/v1/admin/role/list",
