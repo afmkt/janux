@@ -141,4 +141,4 @@ Open `/admin` **in the same tab** you signed in on — the session cookie is bro
 
 `/consent` and `/device-login` can't be exercised standalone — they're only reached through a live `/authorize` (consent) or device-code grant (device-login). They light up automatically in Phase 4 of the integration guide: first OIDC login redirects you to `/consent`, and the device flow lands on `/device-login` to approve a user code.
 
-Passkey note: the passkey button on `/login` only asserts existing credentials; enrollment requires an existing session (G-100), so expect it to fail for a brand-new user — that's known behavior, not a bug.
+Passkey note: the passkey button on `/login` only asserts existing credentials; enrollment requires an existing session — passkey is deliberately **not** a bootstrap factor (DESIGN.md §1: anchor first via magic link/OTP/social, then register passkeys in the admin console's Account tab). A brand-new user clicking it is told to sign in another way first; that's the design, not a bug.
