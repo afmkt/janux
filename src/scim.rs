@@ -522,6 +522,7 @@ pub async fn create_user(req: &mut Request, depot: &mut Depot, res: &mut Respons
         );
         return;
     };
+    crate::audit::record_target(res, "scim-user", &name);
     let state = depot
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
@@ -563,6 +564,7 @@ pub async fn put_user(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         return;
     };
     let id = req.param::<String>("id").unwrap_or_default();
+    crate::audit::record_target(res, "scim-user", &id);
     let Some(body) = extract_scim::<ScimUserRequest>(req).await else {
         scim_error(
             res,
@@ -610,6 +612,7 @@ pub async fn patch_user(req: &mut Request, depot: &mut Depot, res: &mut Response
         return;
     };
     let id = req.param::<String>("id").unwrap_or_default();
+    crate::audit::record_target(res, "scim-user", &id);
     let Some(patch) = extract_scim::<PatchOp>(req).await else {
         scim_error(
             res,
@@ -767,6 +770,7 @@ pub async fn delete_user(req: &mut Request, depot: &mut Depot, res: &mut Respons
         return;
     };
     let id = req.param::<String>("id").unwrap_or_default();
+    crate::audit::record_target_detail(res, "scim-user", &id, "delete");
     let state = depot
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
@@ -789,7 +793,7 @@ pub async fn delete_user(req: &mut Request, depot: &mut Depot, res: &mut Respons
 
 // ─── Router ──────────────────────────────────────────────────────────────────
 
-pub fn router() -> Router {
+pub fn router(disable_rate_limits: bool) -> Router {
     use salvo::rate_limiter::{BasicQuota, FixedGuard, MokaStore, RateLimiter};
 
     let limiter = || {
@@ -797,7 +801,12 @@ pub fn router() -> Router {
             FixedGuard::new(),
             MokaStore::new(),
             crate::utils::JanuxIssuer,
-            BasicQuota::per_minute(RATE_LIMIT_PER_MINUTE),
+            // G-136 enabler: see `router::quota` — test configs widen the
+            // quota instead of removing the hoop.
+            BasicQuota::per_minute(crate::router::quota(
+                disable_rate_limits,
+                RATE_LIMIT_PER_MINUTE,
+            )),
         )
     };
 
@@ -947,7 +956,7 @@ mod tests {
             Router::new()
                 .hoop(salvo::affix_state::inject(state))
                 .push(Router::with_path("token").post(crate::oidc::token))
-                .push(router()),
+                .push(router(false)),
         )
     }
 

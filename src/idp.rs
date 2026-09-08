@@ -507,6 +507,34 @@ impl crate::db::Tenant {
         Ok(())
     }
 
+    /// The grant recorded for a presented authorization-code hash — the
+    /// persistent code→grant mapping used for REPLAY detection (G-142):
+    /// the one-shot code cache cannot distinguish "expired" from "already
+    /// exchanged", but a grant row carrying this `code_hash` proves tokens
+    /// were issued. Deliberately NOT restricted to non-revoked rows — a
+    /// replay must find its grant even after the first revocation.
+    pub async fn auth_grant_by_code_hash(
+        &mut self,
+        code_hash: &str,
+    ) -> anyhow::Result<Option<AuthGrant>> {
+        AuthGrant::filter(AuthGrant::fields().code_hash().eq(code_hash.to_string()))
+            .latest_by(AuthGrant::fields().created_at())
+            .first()
+            .exec(&mut self.database)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Revoke a single grant by jti (the code-replay response, G-142).
+    pub async fn auth_grant_revoke_jti(&mut self, jti: &str) -> anyhow::Result<()> {
+        AuthGrant::update_by_jti(jti)
+            .revoked(true)
+            .exec(&mut self.database)
+            .await
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
     /// Record a new authorization grant (audit + consent record).
     pub async fn auth_grant_create(
         &mut self,
@@ -566,6 +594,15 @@ pub async fn new_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut Re
             return;
         }
     };
+    crate::audit::record_target_detail(
+        res,
+        "client",
+        &body.client_id,
+        &format!(
+            "grants={},auth={}",
+            body.grant_types, body.token_endpoint_auth_method
+        ),
+    );
 
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
@@ -685,6 +722,7 @@ pub async fn delete_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut
             return;
         }
     };
+    crate::audit::record_target(res, "client", &body.client_id);
 
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");

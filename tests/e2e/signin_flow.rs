@@ -1,82 +1,45 @@
-//! E2E test: Sign-in flow (email/password, social, TOTP, passkey).
+//! E2E test: sign-in surface contracts over HTTP.
 //!
-//! Uses Playwright to simulate real user interactions:
-//! 1. Load the sign-in page
-//! 2. Enter credentials
-//! 3. Submit form
-//! 4. Verify successful navigation/redirect
-//!
-//! Required: A running Janux server with seeded users.
+//! G-158: this file used to claim Playwright-driven form interactions
+//! and assert `resp.is_ok()` — which passes on 500s. There is no browser
+//! in this tier; what is pinned here is the wire contract of the hosted
+//! login surface: the SPA page serves, the passwordless API refuses
+//! password-shaped bodies, unauthenticated admin calls fail closed, and
+//! a REAL provisioned root session can read roles through the full
+//! protect → policy → handler stack.
 
 use crate::fixtures::TestApiClient;
 
-// ─── Sign-in with email/password ─────────────────────────────────────────────
-
-/// Test that a seeded user can sign in via the frontend UI.
+/// The hosted login SPA must serve at /login (the magic-link landing —
+/// G-133 — and the factor picker).
 #[tokio::test]
-async fn test_signin_with_valid_credentials() {
+async fn test_login_page_serves() {
     let base_url = super::shared_server().await;
 
-    // Verify server is running and health endpoint responds
     assert!(
         TestApiClient::is_server_healthy(&base_url).await,
         "Janux server must be healthy at {}",
         base_url
     );
 
-    // Check that the login page loads (frontend asset)
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = reqwest::Client::new()
         .get(format!("{}/login", base_url.trim_end_matches('/')))
         .send()
-        .await;
-
-    assert!(resp.is_ok(), "Signin page should be accessible");
-
-    if let Ok(response) = resp {
-        assert!(
-            { response.status().is_success() },
-            "Signin page should return 200"
-        );
-    }
+        .await
+        .expect("login page request");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body = resp.text().await.expect("login page body");
+    assert!(!body.is_empty(), "the SPA shell must not be empty");
 }
 
-/// Test that the signin page shows email/password fields (HTML structure check).
-#[ignore]
+/// Janux is PASSWORDLESS: the session-verification endpoint takes a
+/// ceremony JWT, never a user/password pair — a password-shaped body
+/// must be refused 401, not 200 and not 500.
 #[tokio::test]
-async fn test_signin_form_structure() {
+async fn test_password_shaped_verify_is_refused() {
     let base_url = super::shared_server().await;
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{}/login", base_url.trim_end_matches('/')))
-        .send()
-        .await;
-
-    assert!(resp.is_ok());
-
-    if let Ok(body) = resp.unwrap().text().await {
-        // The signin form should have email and password inputs
-        assert!(
-            body.contains("Sign In")
-                || body.to_lowercase().contains("sign in")
-                || body.contains("signin"),
-            "Signin page should contain 'Sign In' text"
-        );
-
-        // Should have either a login panel or form elements
-        let has_form = body.contains("<form") && (body.contains("email") || body.contains("Email"));
-        assert!(has_form, "Signin page should contain email input");
-    }
-}
-
-/// Test that wrong credentials return 401 from the verify endpoint.
-#[tokio::test]
-async fn test_signin_with_wrong_credentials_fails() {
-    let base_url = super::shared_server().await;
-
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = reqwest::Client::new()
         .post(format!(
             "{}/api/v1/auth/verify",
             base_url.trim_end_matches('/')
@@ -87,94 +50,114 @@ async fn test_signin_with_wrong_credentials_fails() {
             "password": "wrong-password-xyz"
         }))
         .send()
-        .await;
+        .await
+        .expect("verify request");
 
-    // Should be OK structurally (HTTP 200/401), not a connection error
-    assert!(resp.is_ok());
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "a password-shaped body carries no ceremony JWT — must fail closed"
+    );
 }
 
-/// Test that the API health endpoint is reachable before running signin flow.
+/// Health endpoint contract before the rest of the suite runs.
 #[tokio::test]
 async fn test_verify_server_healthy_before_signin() {
     let base_url = super::shared_server().await;
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = reqwest::Client::new()
         .get(format!("{}/api/v1/healthy", base_url.trim_end_matches('/')))
         .send()
-        .await;
-
-    if let Ok(response) = resp {
-        assert!(
-            response.status().is_success(),
-            "Health endpoint should return 200"
-        );
-    }
+        .await
+        .expect("health request");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.expect("json body");
+    assert_eq!(body["ok"], true, "healthy body: {body}");
 }
 
-// ─── Social sign-in helpers ──────────────────────────────────────────────────
+// ─── Admin surface under real and missing sessions ──────────────────────────
 
-/// Test that social login provider list is accessible via admin API.
+/// The social provider list is admin-gated: no session → 401, never 200.
 #[tokio::test]
 async fn test_social_provider_list_requires_auth() {
     let base_url = super::shared_server().await;
 
-    // Without auth, should not work for admin endpoints
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = reqwest::Client::new()
         .get(format!(
             "{}/api/v1/admin/provider/list",
             base_url.trim_end_matches('/')
         ))
         .header("Host", "localhost")
         .send()
-        .await;
+        .await
+        .expect("provider list request");
 
-    if let Ok(response) = resp {
-        // Should be 401 without auth header
-        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
-    }
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "admin surface must fail closed without a session"
+    );
 }
 
-/// Test that passkey endpoint is available.
+/// The passkey request endpoint is reachable and refuses a bodyless
+/// request with 400 — never 404 (route missing) or 500.
 #[tokio::test]
 async fn test_passkey_request_endpoint_accessible() {
     let base_url = super::shared_server().await;
-
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = reqwest::Client::new()
         .post(format!(
             "{}/api/v1/auth/passkey/request",
             base_url.trim_end_matches('/')
         ))
         .header("Host", "localhost")
         .send()
-        .await;
+        .await
+        .expect("passkey request");
 
-    // Endpoint should be reachable (may return 400/401 for invalid body)
-    assert!(resp.is_ok());
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "a bodyless passkey request is a validation error, not a crash"
+    );
 }
 
-/// Verify that user with roles can access their role list.
+/// G-158: the old version of this test called a password login that
+/// always returned None, so the `if let Some(token)` body — the actual
+/// assertion — never ran. With the provisioned root session it now
+/// exercises the full protect → policy → handler stack over HTTP.
 #[tokio::test]
 async fn test_user_roles_lookup_works() {
     let base_url = super::shared_server().await;
+    let token = TestApiClient::admin_bearer_token().await;
 
-    let admin_token = crate::fixtures::TestApiClient::get_bearer_token("admin", "admin").await;
+    let resp = reqwest::Client::new()
+        .get(format!(
+            "{}/api/v1/admin/user/roles",
+            base_url.trim_end_matches('/')
+        ))
+        .header("Host", "localhost")
+        .header("Authorization", format!("Bearer {token}"))
+        .query(&[("user", "root@test.local")])
+        .send()
+        .await
+        .expect("roles request");
 
-    if let Some(token) = admin_token {
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!(
-                "{}/api/v1/admin/user/roles",
-                base_url.trim_end_matches('/')
-            ))
-            .header("Host", "localhost")
-            .header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({"user": "admin@test.local"}))
-            .send()
-            .await;
-
-        assert!(resp.is_ok(), "Roles endpoint should be accessible");
-    }
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "the provisioned root session must pass protect + the policy gate"
+    );
+    // ApiResponse<Vec<String>>: {ok, data: [role ids]}
+    let body: serde_json::Value = resp.json().await.expect("json body");
+    assert_eq!(body["ok"], true, "roles body: {body}");
+    let names: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap_or_else(|| panic!("roles response shape: {body}"))
+        .iter()
+        .filter_map(|r| r.as_str())
+        .collect();
+    assert!(
+        names.contains(&"root"),
+        "root@test.local must hold the root role, got {names:?}"
+    );
 }

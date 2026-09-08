@@ -149,6 +149,29 @@ fn default_scopes() -> Vec<String> {
     ]
 }
 
+/// The wire shape of `admin/provider/list` (G-147): `client_secret` is
+/// WRITE-ONLY. The raw model used to serialize straight to the response,
+/// handing every admin session (and anything logging responses) the
+/// stored secret — plaintext for legacy rows, ciphertext for newer ones.
+#[derive(Serialize, ToSchema)]
+pub struct ProviderEntry {
+    pub id: String,
+    pub client_id: String,
+    pub issuer_url: String,
+    pub scopes: Vec<String>,
+}
+
+impl From<&SocialProvider> for ProviderEntry {
+    fn from(p: &SocialProvider) -> Self {
+        ProviderEntry {
+            id: p.id.clone(),
+            client_id: p.client_id.clone(),
+            issuer_url: p.issuer_url.clone(),
+            scopes: p.scopes.clone(),
+        }
+    }
+}
+
 pub struct SocialLoginEntry {
     pub scopes: Vec<String>,
     pub client: DiscoveredClient,
@@ -590,6 +613,12 @@ pub struct SocialAuthSession {
     /// entries parked before this field existed login-only.
     #[serde(default)]
     pub link_user: Option<String>,
+    /// Requested session lifetime in MINUTES (G-90), clamped at request
+    /// time to the 15-minute ceiling — the callback mint honors it.
+    /// `#[serde(default)]` → entries parked before this field existed
+    /// mint at the ceiling, as before.
+    #[serde(default)]
+    pub lifetime_min: Option<i32>,
 }
 
 /// Generate a unique key prefix so every `request` call writes to its own
@@ -680,6 +709,13 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             .query::<String>("redirect_uri")
             .filter(|s| !s.is_empty()),
         link_user: None,
+        // G-90: `lifetime` (seconds) requested at initiation, clamped to
+        // the 15-minute ceiling; the callback mint honors it.
+        lifetime_min: Some(crate::utils::clamped_token_lifetime_minutes(
+            req.query::<String>("lifetime")
+                .and_then(|s| s.parse::<i64>().ok()),
+            15,
+        )),
     };
     let key = auth_key(domain.as_str(), &csrf);
     if SOCIAL_SESSION_CACHE.insert(key, session).await.is_err() {
@@ -738,6 +774,12 @@ pub async fn link(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .obtain::<ServerState>()
         .expect("ServerState not found");
     let provider_id = req.param::<String>("id").unwrap_or_default();
+    crate::audit::record_target_detail(
+        res,
+        "credential",
+        &format!("social:{provider_id}"),
+        &format!("user={user},flow=link"),
+    );
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -776,6 +818,13 @@ pub async fn link(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         oidc_state: None,
         redirect_uri: None,
         link_user: Some(user),
+        // G-90: same clamped `lifetime` query parameter as the login
+        // initiation — the re-minted session honors it.
+        lifetime_min: Some(crate::utils::clamped_token_lifetime_minutes(
+            req.query::<String>("lifetime")
+                .and_then(|s| s.parse::<i64>().ok()),
+            15,
+        )),
     };
     let key = auth_key(domain.as_str(), &csrf);
     if SOCIAL_SESSION_CACHE.insert(key, session).await.is_err() {
@@ -972,7 +1021,10 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             issuer.as_str(),
             domain.as_ref(),
             &username,
-            15,
+            // G-90: honor the lifetime requested at initiation
+            // (already clamped); parked entries without it mint at the
+            // 15-minute ceiling, as before.
+            session.lifetime_min.unwrap_or(15),
         )
         .await
     {
@@ -1061,6 +1113,31 @@ pub async fn redeem(req: &mut Request, _depot: &mut Depot, res: &mut Response) {
         && let Some(entry) = SOCIAL_LOGIN_CODE_CACHE.get_one_shot(&body.code).await
         && bind.as_deref() == Some(entry.bind.as_str())
     {
+        // G-89: attribute the social login to the authenticated identity.
+        // The username rides inside the parked session JWT (flattened
+        // JwtData); decode the payload WITHOUT verification — it was
+        // minted and stored by this server, and this is audit metadata,
+        // not an authorization decision.
+        let username = entry
+            .jwt
+            .split('.')
+            .nth(1)
+            .and_then(|p| {
+                base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, p).ok()
+            })
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| {
+                v.get("username")
+                    .and_then(|u| u.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "-".to_string());
+        crate::audit::record_target_detail(
+            res,
+            "auth",
+            &username,
+            &format!("factor=social,bind={}", entry.bind),
+        );
         // G-139: same HttpOnly session-cookie option as the other verify
         // endpoints (attributes are server-side, H5/G-111).
         if let Some(name) = body.cookie {
@@ -1239,6 +1316,12 @@ pub async fn add_provider(req: &mut Request, depot: &mut Depot, res: &mut Respon
             .await
             .is_ok()
     {
+        crate::audit::record_target_detail(
+            res,
+            "provider",
+            &req_request.name,
+            &format!("client_id={}", req_request.client_id),
+        );
         // Invalidate TTL-based social providers cache so next login uses fresh discovery
         let _ = tenant.invalidate_social_cache(domain.as_ref()).await;
         let resp = ApiResponse::ok(());
@@ -1259,7 +1342,7 @@ pub async fn add_provider(req: &mut Request, depot: &mut Depot, res: &mut Respon
         ("offset" = Option<usize>, Query, description = "Number of items to skip"),
     ),
     responses(
-        (status_code = 200, description = "Success", body = ApiResponse<Page<SocialProvider>>),
+        (status_code = 200, description = "Success — client_secret is write-only and never returned (G-147)", body = ApiResponse<Page<ProviderEntry>>),
         (status_code = 400, description = "Bad request", body = ApiProblem),
     )
 )]
@@ -1271,8 +1354,16 @@ pub async fn all_providers(req: &mut Request, depot: &mut Depot, res: &mut Respo
     let (limit, offset) = crate::utils::page_params(req);
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
         let page = tenant.providers_page(limit, offset).await;
+        // G-147: map to the wire DTO — the model's client_secret never
+        // leaves the process.
+        let entries = crate::utils::Page {
+            items: page.items.iter().map(ProviderEntry::from).collect(),
+            limit: page.limit,
+            offset: page.offset,
+            next_offset: page.next_offset,
+        };
         res.status_code(StatusCode::OK);
-        res.render(Json(ApiResponse::ok(page)));
+        res.render(Json(ApiResponse::ok(entries)));
         return;
     }
     let err = ApiProblem::validation_error("Failed to parse request body");
@@ -1303,6 +1394,7 @@ pub async fn remove_provider(req: &mut Request, depot: &mut Depot, res: &mut Res
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
         && tenant.provider_delete(&req_request.name).await.is_ok()
     {
+        crate::audit::record_target_detail(res, "provider", &req_request.name, "delete");
         // Invalidate TTL-based social providers cache so next login uses fresh discovery
         let _ = tenant.invalidate_social_cache(domain.as_ref()).await;
         let resp = ApiResponse::ok(());
@@ -1450,6 +1542,7 @@ mod tests {
             oidc_state: Some("parked state/&x".to_string()),
             redirect_uri: Some("https://app.example/after?x=1".to_string()),
             link_user: None,
+            lifetime_min: None,
         }
     }
 
@@ -1464,6 +1557,7 @@ mod tests {
             oidc_state: None,
             redirect_uri: None,
             link_user: None,
+            lifetime_min: None,
         };
         assert_eq!(landing_url(&session, "abc123"), "/login?code=abc123");
     }
@@ -1948,6 +2042,47 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some("true"),
             "the 403 must carry the re-auth signal"
+        );
+    }
+
+    /// G-147: the provider list is an admin surface, but the secret is
+    /// write-only — `client_secret` (plaintext for legacy rows,
+    /// ciphertext for newer ones) must never leave the process.
+    #[tokio::test]
+    async fn provider_list_never_serializes_client_secret() {
+        let issuer = spawn_mock_issuer().await;
+        let (state, _tmp) = social_test_env(&issuer).await;
+        {
+            let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+            // Unique id: the env already seeds the "mockp" provider.
+            tenant
+                .provider_create("listp", "client-123", "s3cret-value", &issuer)
+                .await
+                .expect("provider");
+        }
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .push(Router::with_path("provider/list").get(all_providers)),
+        );
+        let mut res = salvo::test::TestClient::get("http://social.test/provider/list")
+            .add_header("Host", DOMAIN, true)
+            .send(&service)
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::OK));
+        use salvo::test::ResponseExt;
+        let body = res.take_string().await.unwrap_or_default();
+        assert!(
+            !body.contains("client_secret"),
+            "the secret field must not appear in the wire shape: {body}"
+        );
+        assert!(
+            !body.contains("s3cret-value"),
+            "the plaintext secret must never be serialized: {body}"
+        );
+        assert!(
+            body.contains("listp") && body.contains("client-123"),
+            "non-secret fields are listed: {body}"
         );
     }
 

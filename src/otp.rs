@@ -139,6 +139,11 @@ struct VerifyRequest {
     mobile: String,
     code: String,
     cookie: Option<String>,
+    /// Requested session lifetime in seconds (G-90), clamped to the
+    /// 15-minute ceiling — a caller may shorten its session, never
+    /// lengthen it. Omitted → 15 minutes.
+    #[serde(default)]
+    lifetime: Option<i64>,
 }
 
 /// Payload of the 15-minute OTP JWT. A struct (not a bare `String`) because
@@ -279,7 +284,8 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             .chars()
             .filter(|c| c.is_ascii_digit())
             .collect();
-        if !crate::utils::send_throttle_allows(&format!("mobile:{mobile_digits}"), 3).await {
+        if !crate::utils::send_throttle_allows(&format!("{domain}|mobile:{mobile_digits}"), 3).await
+        {
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
             res.render(Json(MobileResponse {
                 ok: false,
@@ -455,6 +461,9 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let mut gate_key: Option<String> = None;
     let mut ceremony_valid = false;
     if let Some(verify_reqest) = crate::utils::extract::<VerifyRequest>(req, None).await {
+        // G-89: attribute the authentication attempt — successes AND
+        // failures — to the claimed identity.
+        crate::audit::record_target_detail(res, "auth", &verify_reqest.name, "factor=otp");
         // The account gate is checked BEFORE the one-shot code is
         // consumed: a locked-out attacker must not be able to burn the
         // code just issued to the legitimate user.
@@ -510,7 +519,10 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                                     issuer.as_str(),
                                     domain.as_ref(),
                                     &verify_reqest.name,
-                                    15,
+                                    crate::utils::clamped_token_lifetime_minutes(
+                                        verify_reqest.lifetime,
+                                        15,
+                                    ),
                                 )
                                 .await
                             {
@@ -600,6 +612,12 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         && !req_request.name.is_empty()
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
     {
+        crate::audit::record_target_detail(
+            res,
+            "credential",
+            &format!("mobile:{}", req_request.mobile),
+            &format!("user={},flow=remove", req_request.name),
+        );
         if let Ok(target) = tenant.user(&req_request.name).await
             && let Err(e) = tenant.require_above_user(&caller, target.id).await
         {
@@ -760,6 +778,12 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(req_request) = crate::utils::extract::<MobileAddRequest>(req, None).await {
+        crate::audit::record_target_detail(
+            res,
+            "credential",
+            &format!("mobile:{}", req_request.mobile),
+            &format!("user={user},flow=add"),
+        );
         // per-recipient throttle — adding must not become an SMS
         // bomb either. Digits-only key so formatting cannot evade.
         let digits: String = req_request
@@ -767,7 +791,7 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             .chars()
             .filter(|c| c.is_ascii_digit())
             .collect();
-        if !crate::utils::send_throttle_allows(&format!("mobile:{digits}"), 3).await {
+        if !crate::utils::send_throttle_allows(&format!("{domain}|mobile:{digits}"), 3).await {
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
             res.render(Json(MobileResponse {
                 ok: false,
@@ -881,6 +905,7 @@ pub async fn add_verify(req: &mut Request, depot: &mut Depot, res: &mut Response
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(verify_request) = crate::utils::extract::<MobileAddVerifyRequest>(req, None).await {
+        crate::audit::record_target_detail(res, "auth", &user, "factor=otp,flow=add");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
             let stored = OTP_CODE_CACHE
                 .get_one_shot(&format!("otp_add:{}:{}", domain, verify_request.token))

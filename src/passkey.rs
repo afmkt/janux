@@ -319,6 +319,7 @@ async fn finish_passkey_login(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn render_passkey_auth_success(
     res: &mut Response,
     tenant: &mut Tenant,
@@ -327,6 +328,8 @@ async fn render_passkey_auth_success(
     username: &str,
     previous_fa: &HashSet<String>,
     cookie_name: Option<String>,
+    // G-90: session lifetime in minutes, already clamped by the caller.
+    lifetime_min: i32,
 ) {
     // Step-up consistent with the other verify handlers: a passkey
     // ceremony completed inside an existing session carries the session's
@@ -334,7 +337,7 @@ async fn render_passkey_auth_success(
     let mut fa = previous_fa.clone();
     fa.insert(AuthType::PassKey.as_str().to_string());
     if let Ok(jwt) = tenant
-        .authenticate_jwt(&fa, issuer, domain, username, 15)
+        .authenticate_jwt(&fa, issuer, domain, username, lifetime_min)
         .await
     {
         if let Some(cookie_name) = cookie_name {
@@ -511,6 +514,11 @@ pub struct VerifyRequest {
     /// challenge. Required — without it no ceremony can be completed.
     pub token: uuid::Uuid,
     pub cookie: Option<String>,
+    /// Requested session lifetime in seconds (G-90), clamped to the
+    /// 15-minute ceiling — a caller may shorten its session, never
+    /// lengthen it. Omitted → 15 minutes.
+    #[serde(default)]
+    pub lifetime: Option<i64>,
 }
 
 #[endpoint(
@@ -535,6 +543,8 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(mut tenant) = state.storage.tenant_by_domain(&domain)
         && let Some(rqst) = crate::utils::extract::<VerifyRequest>(req, None).await
     {
+        // G-89: attribute the WebAuthn attempt to the claimed identity.
+        crate::audit::record_target_detail(res, "auth", &rqst.username, "factor=passkey");
         if let Ok(x) =
             serde_json::from_value::<pk::RegisterPublicKeyCredential>(rqst.credential_json.clone())
         {
@@ -589,6 +599,7 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                         &rqst.username,
                         &previous_fa,
                         rqst.cookie.clone(),
+                        crate::utils::clamped_token_lifetime_minutes(rqst.lifetime, 15),
                     )
                     .await;
                     return;
@@ -646,6 +657,7 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                         &rqst.username,
                         &previous_fa,
                         rqst.cookie.clone(),
+                        crate::utils::clamped_token_lifetime_minutes(rqst.lifetime, 15),
                     )
                     .await;
                     return;
@@ -695,6 +707,12 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
+    crate::audit::record_target_detail(
+        res,
+        "credential",
+        "passkey",
+        &format!("user={user},flow=remove-all"),
+    );
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
         && tenant.deactivate_passkeys(&user, &domain).await.is_ok()
     {

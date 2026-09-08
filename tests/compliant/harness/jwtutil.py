@@ -8,7 +8,12 @@ from jwcrypto import jwk, jwt
 
 
 def load_jwks(jwks_dict: dict) -> jwk.JWKSet:
-    return jwk.JWKSet(keys=[jwk.JWK(**key) for key in jwks_dict.get("keys", [])])
+    # JWKSet(keys=[...]) does NOT work: its dict-style __setitem__ passes
+    # the whole list to _JWKkeys.add, which only accepts JWK objects.
+    keyset = jwk.JWKSet()
+    for key in jwks_dict.get("keys", []):
+        keyset.add(jwk.JWK(**key))
+    return keyset
 
 
 def _part(token: str, index: int) -> dict:

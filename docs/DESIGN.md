@@ -1,6 +1,6 @@
 # Janux — Design Decisions
 
-This document records the design decisions behind Janux. When reviewing the codebase, treat the sections below as **intentional design** — if one of them looks wrong, that is a design discussion, not a gap to file. The public overview, quickstart and deployment notes live in [README.md](../README.md); open issues are tracked in [KNOWN_ISSUES.md](../KNOWN_ISSUES.md).
+This document records the design decisions behind Janux. When reviewing the codebase, treat the sections below as **intentional design** — if one of them looks wrong, that is a design discussion, not a gap to file. The public overview, quickstart and deployment notes live in [README.md](../README.md); open issues are tracked in [gaps.md](../gaps.md).
 
 ---
 

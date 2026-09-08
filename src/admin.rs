@@ -39,6 +39,16 @@ pub async fn new_tenant(req: &mut Request, depot: &mut Depot, res: &mut Response
             return;
         }
     };
+    crate::audit::record_target_detail(
+        res,
+        "tenant",
+        &body.name,
+        &format!(
+            "domain={},admin={}",
+            body.domain.as_deref().unwrap_or("-"),
+            body.admin.as_deref().unwrap_or("-")
+        ),
+    );
 
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
 
@@ -125,6 +135,7 @@ pub async fn all_tenants(req: &mut Request, depot: &mut Depot, res: &mut Respons
 pub async fn set_cors(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
     if let Some(body) = crate::utils::extract::<SetCors>(req, None).await {
+        crate::audit::record_target_detail(res, "domain", &body.domain, "cors");
         if body.share_tenant.is_some() && body.share_tenant.unwrap() {
             let ret = state
                 .storage
@@ -185,6 +196,12 @@ pub async fn all_domains(req: &mut Request, depot: &mut Depot, res: &mut Respons
 )]
 pub async fn add_domain(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<AddDomain>(req, None).await {
+        crate::audit::record_target_detail(
+            res,
+            "domain",
+            &body.domain,
+            &format!("tenant={}", body.tenant),
+        );
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         let tenant_name = {
@@ -234,6 +251,7 @@ pub async fn remove_tenant(req: &mut Request, depot: &mut Depot, res: &mut Respo
             return;
         }
     };
+    crate::audit::record_target(res, "tenant", &body.name);
 
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
 
@@ -266,6 +284,12 @@ pub struct DeleteDomain {
 )]
 pub async fn delete_domain(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<DeleteDomain>(req, None).await {
+        crate::audit::record_target_detail(
+            res,
+            "domain",
+            &body.domain,
+            &format!("tenant={}", body.tenant),
+        );
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         let tenant_name = {

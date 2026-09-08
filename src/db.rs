@@ -397,6 +397,24 @@ impl Tenant {
                 "session token reuse was detected; the whole session chain has been revoked"
             ));
         }
+        // G-151: absolute cap on the refresh CHAIN. Rotation preserves the
+        // original `auth_time`, so without this a session refreshed every
+        // 15 minutes never re-authenticates; the OIDC path bounds families
+        // at 30 days and the internal chain — which gates the admin API —
+        // now matches. A missing `auth_time` fails closed: the chain's age
+        // cannot be proven.
+        match decision.claims.auth_time {
+            Some(auth_time)
+                if jiff::Timestamp::now()
+                    .as_second()
+                    .saturating_sub(auth_time as i64)
+                    <= crate::utils::INTERNAL_SESSION_MAX_AGE_SEC => {}
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "session exceeded its absolute lifetime; re-authentication required"
+                ));
+            }
+        }
         let user_id = uuid::Uuid::try_parse(&decision.claims.data.user)
             .map_err(|_| anyhow::anyhow!("token subject is not a valid user id"))?;
         let user = match self.user_by_id(user_id).await {
@@ -426,12 +444,23 @@ impl Tenant {
         let mut d = decision.claims.data;
         d.username = user.name.clone();
         d.roles = HashSet::from_iter(roles.into_iter().map(|a| a.id));
+        // G-90: a client-shortened session stays shortened across
+        // rotation — re-mint with the lifetime the presented token
+        // itself carried (exp − iat), clamped into [1, `minutes`].
+        // Callers that never requested a custom lifetime see no change
+        // (presented == default).
+        let presented_minutes = decision
+            .claims
+            .exp
+            .saturating_sub(decision.claims.iat)
+            .saturating_div(60)
+            .clamp(1, minutes.max(1) as usize) as i32;
         let new_jwt = jwt_authenticate(
             issuer,
             &d.user,
             &d,
             &key,
-            minutes,
+            presented_minutes,
             JwtOidcParams {
                 client_id: domain.to_string(),
                 nonce: Some(uuid::Uuid::new_v4().to_string()),
@@ -944,6 +973,189 @@ impl Storage {
         }
         Ok(storage)
     }
+}
+
+// ─── Backup & restore (G-88) ─────────────────────────────────────────────────
+
+/// Manifest describing a backup created by [`backup_data_dir`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupManifest {
+    /// Bumped when the layout changes; restore refuses unknown versions.
+    pub version: u32,
+    /// RFC 3339 creation time.
+    pub created_at: String,
+    /// Tenant names found under `tenants/`.
+    pub tenants: Vec<String>,
+    /// Every copied file, relative to the backup root.
+    pub files: Vec<String>,
+}
+
+const BACKUP_MANIFEST_VERSION: u32 = 1;
+
+/// Every `*.db` file under `dir`, recursively.
+async fn collect_db_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    let mut entries = read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.is_dir() {
+            Box::pin(collect_db_files(&path, out)).await?;
+        } else if path.extension().is_some_and(|e| e == "db") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Copy `src` into `dst` recursively; returns the copied files relative
+/// to `dst`.
+async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<Vec<String>> {
+    let mut files = Vec::new();
+    let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
+    while let Some((s, d)) = stack.pop() {
+        ensure_dir(&d).await?;
+        let mut entries = read_dir(&s).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let from = entry.path();
+            let to = d.join(entry.file_name());
+            if from.is_dir() {
+                stack.push((from, to));
+            } else {
+                tokio::fs::copy(&from, &to).await?;
+                if let Ok(rel) = to.strip_prefix(dst) {
+                    files.push(rel.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+/// Take a COLD backup of the data directory (G-88).
+///
+/// Tenant databases are exclusively locked while the server holds them,
+/// so this validates first: every `*.db` under `data_dir` must open and
+/// answer a trivial query — which fails loudly while the server is
+/// running instead of copying torn files. Then the whole tree (tenant
+/// schemas, the `jwt.db` revocation store, delete-time snapshots under
+/// `backups/`, ACME state) is copied verbatim into
+/// `dest/backup-<unix-ts>/` and a manifest is written next to it.
+///
+/// Config files (base.toml/seed.toml) live OUTSIDE the data dir and are
+/// the operator's to version; a backup plus the config files plus the
+/// `encryption_key` are the complete restore set — without the key the
+/// at-rest secrets (signing keys, provider credentials) are unrecoverable.
+pub async fn backup_data_dir(data_dir: &Path, dest: &Path) -> Result<(PathBuf, BackupManifest)> {
+    if !data_dir.is_dir() {
+        anyhow::bail!("data dir {} does not exist", data_dir.display());
+    }
+    let mut dbs = Vec::new();
+    collect_db_files(data_dir, &mut dbs).await?;
+    for db in &dbs {
+        let path_str = db.display().to_string();
+        let handle = turso::Builder::new_local(&path_str)
+            .build()
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "cannot open {} — is the server still running? ({e})",
+                    db.display()
+                )
+            })?;
+        let conn = handle.connect().map_err(|e| {
+            anyhow::anyhow!(
+                "cannot open {} — is the server still running? ({e})",
+                db.display()
+            )
+        })?;
+        // Probe with a write-lock round trip: `BEGIN IMMEDIATE` fails with
+        // SQLITE_BUSY while the server holds the database, and neither
+        // statement returns rows (turso's `execute` rejects result sets).
+        conn.execute("BEGIN IMMEDIATE", ()).await.map_err(|e| {
+            anyhow::anyhow!(
+                "cannot lock {} — is the server still running? ({e})",
+                db.display()
+            )
+        })?;
+        conn.execute("ROLLBACK", ()).await.map_err(|e| {
+            anyhow::anyhow!(
+                "cannot read {} — is the server still running? ({e})",
+                db.display()
+            )
+        })?;
+    }
+
+    let stamp = jiff::Timestamp::now().as_second();
+    let root = dest.join(format!("backup-{stamp}"));
+    ensure_dir(&root).await?;
+    let files = copy_dir_recursive(data_dir, &root).await?;
+
+    let mut tenants = Vec::new();
+    let tenants_dir = data_dir.join("tenants");
+    if tenants_dir.is_dir() {
+        let mut entries = read_dir(&tenants_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            if entry.path().is_dir()
+                && let Some(name) = entry.path().file_name().and_then(|n| n.to_str())
+            {
+                tenants.push(name.to_string());
+            }
+        }
+    }
+    tenants.sort();
+
+    let manifest = BackupManifest {
+        version: BACKUP_MANIFEST_VERSION,
+        created_at: jiff::Timestamp::now().to_string(),
+        tenants,
+        files,
+    };
+    tokio::fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest)?,
+    )
+    .await?;
+    Ok((root, manifest))
+}
+
+/// Restore a backup created by [`backup_data_dir`] (cold: the server must
+/// be stopped). Refuses to touch a non-empty `data_dir` unless `force`,
+/// in which case the existing tree is removed first — this is disaster
+/// recovery, not a merge.
+pub async fn restore_data_dir(
+    backup_dir: &Path,
+    data_dir: &Path,
+    force: bool,
+) -> Result<BackupManifest> {
+    let raw = tokio::fs::read(backup_dir.join("manifest.json"))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "{} is not a janux backup (no manifest.json)",
+                backup_dir.display()
+            )
+        })?;
+    let manifest: BackupManifest = serde_json::from_slice(&raw)?;
+    if manifest.version != BACKUP_MANIFEST_VERSION {
+        anyhow::bail!(
+            "unsupported backup manifest version {} (this build writes {BACKUP_MANIFEST_VERSION})",
+            manifest.version
+        );
+    }
+    if data_dir.is_dir() {
+        let mut entries = read_dir(data_dir).await?;
+        if entries.next_entry().await?.is_some() {
+            if !force {
+                anyhow::bail!(
+                    "data dir {} is not empty — pass force to replace it",
+                    data_dir.display()
+                );
+            }
+            tokio::fs::remove_dir_all(data_dir).await?;
+        }
+    }
+    ensure_dir(data_dir).await?;
+    copy_dir_recursive(backup_dir, data_dir).await?;
+    Ok(manifest)
 }
 
 #[cfg(test)]
@@ -1831,6 +2043,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn role_delete_cascades_policies_and_memberships() {
+        // G-154: deleting only the Role row used to leave dangling Policy
+        // rows (DB AND cache) plus UserRole memberships behind — and
+        // re-creating a same-named role silently resurrected every stale
+        // policy without passing policy_create's gates again.
+        let (storage, _tmp) = role_gate_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let alice = jwt_caller("alice", &["admin"]);
+        let nothing = crate::policy::SourceResolver::Nothing;
+        let no_target = crate::policy::TargetResolver::Nothing;
+        tenant
+            .role_create(&alice, "temp", 50)
+            .await
+            .expect("custom role");
+        tenant
+            .policy_create(
+                &alice,
+                DOMAIN,
+                None,
+                "/api/v1/app/x",
+                "temp",
+                &nothing,
+                &no_target,
+                false,
+                true,
+            )
+            .await
+            .expect("policy");
+        tenant
+            .user_add_role(&alice, "bob", "temp")
+            .await
+            .expect("membership");
+        assert!(
+            tenant
+                .policies
+                .get(DOMAIN)
+                .is_some_and(|m| m.contains_key("temp")),
+            "the cache serves the new role's policies"
+        );
+
+        tenant.role_delete(&alice, "temp").await.expect("delete");
+
+        // Cache entry evicted...
+        assert!(
+            !tenant
+                .policies
+                .get(DOMAIN)
+                .is_some_and(|m| m.contains_key("temp")),
+            "the cache must not keep the deleted role's policies"
+        );
+        // ...DB rows gone (a fresh load finds nothing for the role)...
+        let fresh = tenant.all_policy_entries().await.expect("reload");
+        assert!(
+            !fresh.get(DOMAIN).is_some_and(|m| m.contains_key("temp")),
+            "the policy rows must be deleted, not just evicted"
+        );
+        // ...and the membership no longer resolves.
+        let bob = tenant.user("bob").await.expect("bob");
+        let roles = tenant.user_roles(bob.id).await.expect("roles");
+        assert!(
+            !roles.iter().any(|r| r.id == "temp"),
+            "memberships of a deleted role must be removed"
+        );
+
+        // Re-creating the name resurrects nothing.
+        tenant
+            .role_create(&alice, "temp", 50)
+            .await
+            .expect("recreate");
+        let fresh = tenant.all_policy_entries().await.expect("reload");
+        assert!(
+            !fresh.get(DOMAIN).is_some_and(|m| m.contains_key("temp")),
+            "a same-named role must start with a clean policy set"
+        );
+    }
+
+    #[tokio::test]
     async fn role_create_is_bound_by_creator_level() {
         let (storage, _tmp) = role_gate_env().await;
         let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
@@ -2328,6 +2617,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_rejects_chain_past_absolute_cap() {
+        // G-151: rotation preserves the original `auth_time`, so without
+        // the absolute cap a session refreshed every 15 minutes would
+        // never re-authenticate. Past the cap the chain must die; inside
+        // it, an aged-but-valid chain still rotates.
+        let (storage, _tmp) = refresh_test_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let key = tenant.current_key(DOMAIN).expect("key");
+        let alice_id = {
+            let u = tenant.user("alice").await.expect("alice");
+            u.id.to_string()
+        };
+        let mint = |auth_time: usize| {
+            crate::jwt::jwt_authenticate(
+                TEST_ISSUER,
+                &alice_id,
+                &JwtData {
+                    user: alice_id.clone(),
+                    username: "alice".into(),
+                    domain: DOMAIN.into(),
+                    mfa: HashSet::new(),
+                    roles: HashSet::new(),
+                },
+                &key,
+                15,
+                crate::jwt::JwtOidcParams {
+                    client_id: DOMAIN.into(),
+                    nonce: None,
+                    amr: None,
+                    acr: None,
+                    access_token: None,
+                    auth_time: Some(auth_time),
+                },
+            )
+            .expect("token")
+        };
+
+        let now = jiff::Timestamp::now().as_second().max(0) as usize;
+        let aged = mint(now - crate::utils::INTERNAL_SESSION_MAX_AGE_SEC as usize - 60);
+        let err = refresh(&mut tenant, &aged)
+            .await
+            .expect_err("chains past the absolute cap must re-authenticate");
+        assert!(err.to_string().contains("absolute lifetime"), "{err}");
+
+        let recent = mint(now - 60);
+        assert!(
+            refresh(&mut tenant, &recent).await.is_ok(),
+            "an aged-but-in-cap chain still rotates"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_preserves_client_shortened_lifetime() {
+        // G-90: a session minted with a client-shortened lifetime keeps
+        // it across rotation instead of silently jumping back to the
+        // 15-minute default.
+        let (storage, _tmp) = refresh_test_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+
+        let short = tenant
+            .authenticate_jwt(&HashSet::new(), TEST_ISSUER, DOMAIN, "alice", 5)
+            .await
+            .expect("5-minute session");
+        let rotated = refresh(&mut tenant, &short).await.expect("refresh");
+        let decoded = crate::jwt::jwt_decode::<JwtData>(
+            &rotated,
+            crate::jwt::VERIFICATION_GRACE_MINUTES,
+            &mut tenant,
+        )
+        .await
+        .expect("decode");
+        assert_eq!(
+            decoded.claims.exp - decoded.claims.iat,
+            300,
+            "rotation must preserve the 5-minute lifetime"
+        );
+
+        // And the default-lifetime chain is unchanged by the mechanism.
+        let full = tenant
+            .authenticate_jwt(&HashSet::new(), TEST_ISSUER, DOMAIN, "alice", 15)
+            .await
+            .expect("15-minute session");
+        let rotated = refresh(&mut tenant, &full).await.expect("refresh");
+        let decoded = crate::jwt::jwt_decode::<JwtData>(
+            &rotated,
+            crate::jwt::VERIFICATION_GRACE_MINUTES,
+            &mut tenant,
+        )
+        .await
+        .expect("decode");
+        assert_eq!(
+            decoded.claims.exp - decoded.claims.iat,
+            900,
+            "a default-lifetime chain keeps rotating at the default"
+        );
+    }
+
+    #[tokio::test]
     async fn verification_stays_stateless_for_deactivated_users() {
         let (storage, _tmp) = refresh_test_env().await;
         let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
@@ -2789,6 +3176,68 @@ mod tests {
             tenant.current_key("localhost").expect("seated").id,
             "key1",
             "the migrated row is seated as the domain signer"
+        );
+    }
+
+    /// G-88: backup validates the DBs open, copies the tree and writes a
+    /// manifest; restore refuses to merge into a non-empty data dir, and
+    /// the restored tree boots as a working Storage with the original
+    /// data. (jwt.db is only asserted when present — the revocation-store
+    /// singleton is first-wins per process, so which env's data dir holds
+    /// it depends on test order.)
+    #[tokio::test]
+    async fn backup_and_restore_round_trip() {
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let data = tmp.path().join("data");
+        {
+            let storage = crate::db::Storage::init(&data).await.expect("init");
+            storage.new_tenant("bk").await.expect("tenant");
+            storage.add_domain("bk.local", "bk").await.expect("domain");
+            let mut tenant = storage.tenant_by_id("bk").expect("tenant");
+            tenant.user_create("alice").await.expect("user");
+        } // storage drops here → locks released (the cold-backup precondition)
+
+        let (backup_dir, manifest) = crate::db::backup_data_dir(&data, &tmp.path().join("backups"))
+            .await
+            .expect("backup");
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.tenants, vec!["bk".to_string()]);
+        assert!(
+            manifest
+                .files
+                .iter()
+                .any(|f| f.ends_with("tenants/bk/janux.db")),
+            "the tenant schema must be in the backup: {:?}",
+            manifest.files
+        );
+        assert!(backup_dir.join("manifest.json").exists());
+
+        // Restore refuses to merge into a non-empty data dir...
+        let restored = tmp.path().join("restored");
+        tokio::fs::create_dir_all(restored.join("tenants"))
+            .await
+            .expect("dir");
+        assert!(
+            crate::db::restore_data_dir(&backup_dir, &restored, false)
+                .await
+                .is_err(),
+            "restore must refuse a non-empty data dir without force"
+        );
+
+        // ...and into a fresh dir the restored tree boots as a working
+        // Storage with the original data.
+        let fresh = tmp.path().join("fresh-restore");
+        crate::db::restore_data_dir(&backup_dir, &fresh, false)
+            .await
+            .expect("restore into a fresh dir");
+        let storage = crate::db::Storage::init(&fresh)
+            .await
+            .expect("reloaded storage");
+        let mut tenant = storage.tenant_by_id("bk").expect("tenant restored");
+        assert!(
+            tenant.user("alice").await.is_ok(),
+            "user data must survive the round trip"
         );
     }
 

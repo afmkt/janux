@@ -549,6 +549,15 @@ pub async fn all_policies(req: &mut Request, depot: &mut Depot, res: &mut Respon
 )]
 pub async fn add_policy(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<PolicyEntry>(req, None).await {
+        crate::audit::record_target_detail(
+            res,
+            "policy",
+            &body.resource,
+            &format!(
+                "role={},allowed={},mfa={},domain={}",
+                body.role, body.allowed, body.mfa, body.domain
+            ),
+        );
         let caller = match crate::utils::caller_from_depot(depot) {
             Some(c) => c,
             None => {
@@ -618,6 +627,12 @@ pub struct DeletePolicy {
 )]
 pub async fn delete_policy(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<DeletePolicy>(req, None).await {
+        crate::audit::record_target_detail(
+            res,
+            "policy",
+            &body.resource,
+            &format!("role={}", body.role),
+        );
         let caller = match crate::utils::caller_from_depot(depot) {
             Some(c) => c,
             None => {

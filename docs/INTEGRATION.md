@@ -18,9 +18,9 @@ Tenants are resolved from the request `Host` header. `seed.toml` bootstraps tena
 ## Phase 1 — Run Janux standalone
 
 1. `just run` (builds the frontend into `frontend/dist`, then `cargo run`). Server binds `0.0.0.0:8080` (`base.toml`).
-2. Before this works cleanly, fix two config gotchas:
-   - `base.toml` has `trust_forwarded_headers = true` — that mode assumes a reverse proxy in front. Since you're hitting the server directly, create `janux.toml` (gitignored, highest precedence — see `src/server.rs` config layering) with `trust_forwarded_headers = false`, and run `cargo run -- -c base -c seed -c janux` (or check `src/main.rs:48` for the exact flag handling).
+2. One config gotcha to fix, one default to know:
    - `seed.toml` `[seed.resend] verify_url` is `http://localhost/login` (port 80) — the hosted login SPA that consumes the link's `token`/`username`/`email` query params (G-133). Your server runs on 8080 — change it to `http://localhost:8080/login` so magic links point at your running instance. Also set the admin's seed `email` to your real inbox if you haven't already (G-131).
+   - `base.example.toml` ships `trust_forwarded_headers = false` — the safe standalone default (G-149): `X-Forwarded-*` headers are ignored and tenant resolution uses the raw `Host`, which is exactly right while you hit the server directly. Flip it to `true` only when every request traverses a reverse proxy that overwrites those headers (boot logs a loud warning while it is on).
 3. Verify discovery: `curl -s http://localhost:8080/.well-known/openid-configuration | jq`. The `issuer` must be `http://localhost:8080` (derived from Host, `src/utils.rs:312`). Note the `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `jwks_uri`.
 4. Verify JWKS: `curl -s http://localhost:8080/.well-known/jwks.json` — you should see an RSA key. That's what RPs use to verify tokens.
 
@@ -78,7 +78,7 @@ Create a new small service, e.g. `sample_rp/` — a single-file FastAPI app on p
 
 **Endpoint 2: `GET /callback`** — exchange the code.
 - Verify `state` matches what you stored (reject otherwise — this is CSRF protection).
-- `POST http://localhost:8080/token` **form-encoded** (`TokenRequest`, `src/oidc.rs:1547`): `grant_type=authorization_code`, `code`, `redirect_uri` (must be byte-identical to the one in `/authorize`), `client_id`, `client_secret`, `code_verifier`.
+- `POST http://localhost:8080/token` **form-encoded** (`TokenRequest`, `src/oidc.rs`): `grant_type=authorization_code`, `code`, `redirect_uri` (must be byte-identical to the one in `/authorize`), `client_id`, `client_secret`, `code_verifier`. Optional `lifetime` (seconds, G-90): requested ACCESS-token lifetime, clamped into `[60, ceiling]` — ceiling 60 min for user access tokens, 90 days for `client_credentials`. A client may **shorten** its tokens, never lengthen them past policy; omitted → ceiling. ID tokens (15-min authentication assertions) and refresh-family windows (30 days) are unaffected. The ceremony `verify` endpoints accept the same parameter for the session JWT (ceiling 15 min), and social login takes it as a `lifetime` query param at initiation; shortened internal sessions keep their lifetime across `auth/refresh` rotation.
 - The response is `TokenResponse`: `access_token`, `id_token` (because you asked for `openid`), `refresh_token` (because of `offline_access`), `expires_in`.
 - Validate the `id_token` properly: fetch JWKS from `jwks_uri`, verify signature (**RS256**, `src/jwt.rs:114`), and check `iss` equals the issuer from discovery, `aud` equals your `client_id`, `exp` not passed. Then (or additionally) call `GET /userinfo` with `Authorization: Bearer <access_token>` to get claims.
 - Set your own local session cookie and redirect to `/`.

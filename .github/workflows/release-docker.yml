@@ -138,11 +138,93 @@ jobs:
             type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
             type=image,name=${{ env.ALIYUN_IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
+  # ═══════════════ Image smoke test (G-135) ═══════════════
+  #
+  # The per-arch jobs push BY DIGEST — untagged and invisible to users.
+  # This job actually RUNS the amd64 image with a minimal config and
+  # probes its health endpoint; only then does docker-publish attach the
+  # user-visible tags. A broken image never receives `latest`/version
+  # tags. (Attestations stay disabled: ACR Personal Edition rejects
+  # buildx attestation manifests — see the build jobs' comments.)
+
+  docker-smoke:
+    name: Smoke-test built image
+    needs: [docker-amd64]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run image and probe health
+        env:
+          DIGEST: ${{ needs.docker-amd64.outputs.digest }}
+        run: |
+          set -euo pipefail
+          IMAGE="$REGISTRY/$IMAGE_NAME@$DIGEST"
+          docker pull "$IMAGE"
+          mkdir -p smoke
+          cat > smoke/base.toml <<'EOF'
+          data_dir = "./data"
+          encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          trust_forwarded_headers = false
+
+          [bind]
+          address = "0.0.0.0"
+          port = 8080
+          EOF
+          cat > smoke/seed.toml <<'EOF'
+          [[seed]]
+          name = "smoke"
+          domains = [{ id = "localhost", cors = [] }]
+          roles = ["root", "admin", "user", "guest"]
+          users = []
+          policies = []
+
+          [seed.resend]
+          from = "noreply@localhost"
+          resend_key = "smoke-key"
+          template = "./template/email/verify.html"
+          verify_url = "http://localhost/login"
+          base_url = "http://127.0.0.1:1"
+
+          [seed.alisms]
+          api_secret = "smoke"
+          api_key = "smoke"
+          template_code = "SMOKE"
+          sign_name = "smoke"
+          region_id = "cn-shanghai"
+          endpoint = "dysmsapi.aliyuncs.com"
+          EOF
+          # Strip the heredoc indentation (YAML block scalar adds it).
+          sed -i 's/^          //' smoke/base.toml smoke/seed.toml
+          docker run -d --name janux-smoke -p 18080:8080 \
+            -v "$PWD/smoke/base.toml:/app/base.toml:ro" \
+            -v "$PWD/smoke/seed.toml:/app/seed.toml:ro" \
+            "$IMAGE"
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:18080/api/v1/healthy" >/dev/null; then
+              echo "smoke: image is healthy"
+              docker rm -f janux-smoke >/dev/null
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "smoke: image never became healthy; logs:" >&2
+          docker logs janux-smoke >&2 || true
+          docker rm -f janux-smoke >/dev/null || true
+          exit 1
+
   # ═══════════════ Multi-arch manifest + tags ═══════════════
 
   docker-publish:
     name: Publish multi-arch manifest
-    needs: [docker-amd64, docker-arm64]
+    needs: [docker-amd64, docker-arm64, docker-smoke]
     runs-on: ubuntu-latest
     permissions:
       packages: write

@@ -99,13 +99,8 @@ def test_advertised_grants_are_implemented(discovery):
     assert set(discovery.get("grant_types_supported", [])) <= KNOWN_GRANTS
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "janux implements client_credentials at /token but does not advertise it "
-        "in grant_types_supported (oidc.rs SUPPORTED_GRANT_TYPES vs well_known)"
-    ),
-)
+# The discovery gap landed (G-136 enabler #4): client_credentials is
+# implemented at /token AND advertised — this was a strict xfail before.
 def test_client_credentials_advertised(discovery):
     assert "client_credentials" in discovery.get("grant_types_supported", [])
 

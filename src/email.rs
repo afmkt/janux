@@ -224,6 +224,11 @@ struct VerifyRequest {
     name: String,
     email: String,
     cookie: Option<String>,
+    /// Requested session lifetime in seconds (G-90), clamped to the
+    /// 15-minute ceiling — a caller may shorten its session, never
+    /// lengthen it. Omitted → 15 minutes.
+    #[serde(default)]
+    lifetime: Option<i64>,
 }
 
 /// Payload of the 15-minute magic-link JWT. A struct (not a bare `String`)
@@ -434,7 +439,7 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(req_request) = extract::<ReqRequest>(req, None).await {
         if !crate::utils::send_throttle_allows(
-            &format!("email:{}", req_request.email.to_lowercase()),
+            &format!("{domain}|email:{}", req_request.email.to_lowercase()),
             3,
         )
         .await
@@ -579,6 +584,9 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             .await
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
     {
+        // G-89: attribute the authentication attempt — successes AND
+        // failures — to the claimed identity.
+        crate::audit::record_target_detail(res, "auth", &verify_reqest.name, "factor=email");
         let data_wrap = tenant
             .jwt_verify::<MagicLinkData>(issuer.as_str(), &verify_reqest.name, &verify_reqest.token)
             .await;
@@ -613,7 +621,10 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                             issuer.as_str(),
                             domain.as_ref(),
                             &verify_reqest.name,
-                            15,
+                            crate::utils::clamped_token_lifetime_minutes(
+                                verify_reqest.lifetime,
+                                15,
+                            ),
                         )
                         .await
                     {
@@ -684,6 +695,12 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         && !req_request.name.is_empty()
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
     {
+        crate::audit::record_target_detail(
+            res,
+            "credential",
+            &format!("email:{}", req_request.email),
+            &format!("user={},flow=remove", req_request.name),
+        );
         if let Ok(target) = tenant.user(&req_request.name).await
             && let Err(e) = tenant.require_above_user(&caller, target.id).await
         {
@@ -753,6 +770,12 @@ pub async fn attach(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         // Same normalization as the self-service add flow: addresses are
         // stored lowercase (G-105 partial — the wire boundary folds case).
         let email = req_request.email.to_lowercase();
+        crate::audit::record_target_detail(
+            res,
+            "credential",
+            &format!("email:{email}"),
+            &format!("user={},flow=attach,verified", req_request.name),
+        );
         let target = match tenant.user(&req_request.name).await {
             Ok(t) => t,
             Err(_) => {
@@ -977,9 +1000,15 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(req_request) = extract::<EmailAddRequest>(req, None).await {
         let email = req_request.email.to_lowercase();
+        crate::audit::record_target_detail(
+            res,
+            "credential",
+            &format!("email:{email}"),
+            &format!("user={user},flow=add"),
+        );
         // per-recipient throttle — adding must not become a mail
         // bomb either.
-        if !crate::utils::send_throttle_allows(&format!("email:{email}"), 3).await {
+        if !crate::utils::send_throttle_allows(&format!("{domain}|email:{email}"), 3).await {
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
             res.render(Json(EmailResponse {
                 ok: false,
@@ -1067,6 +1096,7 @@ pub async fn add_verify(req: &mut Request, depot: &mut Depot, res: &mut Response
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(verify_request) = extract::<EmailAddVerifyRequest>(req, None).await {
+        crate::audit::record_target_detail(res, "auth", &user, "factor=email,flow=add");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
             // One-shot consume under the add namespace — login tokens can
             // never be consumed here and vice versa.
@@ -1311,6 +1341,43 @@ mod tests {
         )
     }
 
+    /// G-90: a verify request may shorten the minted session (clamped to
+    /// the 15-minute ceiling) — callers embedding the ceremony can pick
+    /// a smaller exposure window than the default.
+    #[tokio::test]
+    async fn verify_honors_clamped_session_lifetime() {
+        let (state, _tmp) = email_test_env().await;
+        let service = email_service(state.clone());
+        let token = issue_ceremony_for(&state, "alice", ALICE_EMAIL, false).await;
+
+        let (status, body) = post_verify(
+            &service,
+            &serde_json::json!({
+                "token": token,
+                "name": "alice",
+                "email": ALICE_EMAIL,
+                "lifetime": 300,
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let jwt = body["jwt"].as_str().expect("session jwt");
+
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let decoded = crate::jwt::jwt_decode::<crate::db::JwtData>(
+            jwt,
+            crate::jwt::VERIFICATION_GRACE_MINUTES,
+            &mut tenant,
+        )
+        .await
+        .expect("decode");
+        assert_eq!(
+            decoded.claims.exp - decoded.claims.iat,
+            300,
+            "the session must carry the requested 5-minute lifetime"
+        );
+    }
+
     /// Takeover attempt: a signup ceremony targeting a pre-existing username
     /// must fail and must not attach the attacker's email to the victim.
     #[tokio::test]
@@ -1489,6 +1556,68 @@ mod tests {
                 .hoop(salvo::affix_state::inject(state))
                 .push(Router::with_path("verify").hoop(session).post(verify)),
         )
+    }
+
+    /// G-152: the send throttle is tenant-scoped — the same address on a
+    /// sibling domain has its own budget. The key used to be the bare
+    /// recipient, so any account on one tenant could exhaust a victim's
+    /// 3/min magic-link budget on ANOTHER tenant of the same deployment.
+    #[tokio::test]
+    async fn send_throttle_is_scoped_per_domain() {
+        const SIBLING: &str = "throttle-sibling.test";
+        let (state, _tmp) = email_test_env().await;
+        state
+            .storage
+            .add_domain(SIBLING, "test-tenant")
+            .await
+            .expect("sibling domain");
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .push(Router::with_path("email/request").post(request)),
+        );
+        // Unique address: SEND_THROTTLE is process-global across tests.
+        // (The env has no mail provider, so sends may fail downstream —
+        // the throttle increments before the send and that is what is
+        // pinned here.)
+        let body = serde_json::json!({
+            "name": "throttled",
+            "email": "throttle-scoped@example.com",
+        });
+
+        for i in 0..3 {
+            let res = salvo::test::TestClient::post("http://localhost/email/request")
+                .add_header("Host", DOMAIN, true)
+                .json(&body)
+                .send(&service)
+                .await;
+            assert_ne!(
+                res.status_code,
+                Some(StatusCode::TOO_MANY_REQUESTS),
+                "send {i} is within the domain's budget"
+            );
+        }
+        let res = salvo::test::TestClient::post("http://localhost/email/request")
+            .add_header("Host", DOMAIN, true)
+            .json(&body)
+            .send(&service)
+            .await;
+        assert_eq!(
+            res.status_code,
+            Some(StatusCode::TOO_MANY_REQUESTS),
+            "the 4th send on the same domain is throttled"
+        );
+
+        let res = salvo::test::TestClient::post("http://sibling.test/email/request")
+            .add_header("Host", SIBLING, true)
+            .json(&body)
+            .send(&service)
+            .await;
+        assert_ne!(
+            res.status_code,
+            Some(StatusCode::TOO_MANY_REQUESTS),
+            "the sibling domain has its own budget for the same recipient"
+        );
     }
 
     /// Stands in for a session whose authentication is OLDER than the sudo

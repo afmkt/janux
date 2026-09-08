@@ -11,13 +11,6 @@ from harness.oidc import fetch_discovery, fetch_jwks
 from harness.resend import MockResend
 from harness.server import JanuxServer
 
-ADMIN_LOGIN_BLOCKED = (
-    "black-box admin login is blocked by janux seed gaps: seeded tenants have "
-    "no signing key (ceremony JWTs cannot be issued) and seeded users have no "
-    "email credential; needs the janux seed extensions — see README "
-    "'Janux enablers'"
-)
-
 
 def pytest_addoption(parser):
     parser.addoption(
@@ -82,10 +75,10 @@ def jwks(jwks_dict):
 def admin(janux_env):
     if janux_env.resend is None:
         pytest.skip("attached mode: no mock resend to intercept the admin login email")
-    try:
-        jwt = magic_link_login(janux_env, f"admin@{janux_env.domain}", f"admin@{janux_env.domain}")
-    except (AssertionError, TimeoutError, ValueError):
-        pytest.skip(ADMIN_LOGIN_BLOCKED)
+    # No graceful skip: the seed vouches the admin's email (G-131) and
+    # creates the signing key (G-136), so a failure here is a real
+    # regression, not a known gap.
+    jwt = magic_link_login(janux_env, f"admin@{janux_env.domain}", f"admin@{janux_env.domain}")
     return AdminApi(janux_env, jwt)
 
 

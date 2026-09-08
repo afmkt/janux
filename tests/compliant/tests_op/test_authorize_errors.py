@@ -94,23 +94,28 @@ def test_missing_redirect_uri_rejected(janux_env, registered_client):
 
 
 def test_public_client_requires_pkce(janux_env, admin):
+    from uuid import uuid4
+
     client_id = "conf-public"
+    # Unique callback: RedirectURI rows are keyed by the URI string ACROSS
+    # clients (gaps.md G-143), so reusing the session fixture's redirect
+    # URI collides with the registered_client's row.
+    redirect_uri = f"https://public-{uuid4().hex[:8]}.rp.example.com/callback"
     r = admin.create_oauth2_client(
         client_id,
         "",
-        [REDIRECT_URI],
+        [redirect_uri],
         auth_method="none",
     )
-    if r.status_code != 200:
-        import pytest
-
-        pytest.skip(f"could not register public client: {r.status_code} {r.text}")
+    assert r.status_code == 200, (
+        f"public client registration failed: {r.status_code} {r.text}"
+    )
     r = janux_env.http.get(
         "/authorize",
         params={
             "response_type": "code",
             "client_id": client_id,
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "scope": "openid",
         },
     )

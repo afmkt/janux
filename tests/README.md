@@ -1,169 +1,131 @@
 # Janux Auth Test Suite
 
-This directory contains all test code for the Janux auth server, organized into three tiers:
+Test tiers, from fastest to most end-to-end:
 
-- **Unit tests** — Fast, isolated tests for individual modules (no DB or network required)
-- **Integration tests** — API-level tests with auto-started server  
-- **E2E tests** — HTTP-level tests verifying full user flows with auto-started server
+- **Lib suite** (`cargo test --lib`) — ~310 tests living next to the code
+  in `src/**` `#[cfg(test)]` modules: data-layer gates, factor ceremony
+  semantics, OIDC handler behavior via salvo `TestClient` services.
+- **Unit tests** (`tests/unit_tests.rs` → `tests/unit/*_unit.rs`) —
+  external-crate tests for pure contracts (policy engine, crypto,
+  at_hash, AMR/ACR, cache, API helpers). No DB, no network.
+- **Integration tests** (`tests/z_integration_tests.rs`) — a real server
+  subprocess is auto-started (`tests/common.rs` `TestEnv`), provisioned
+  with a real root+admin session; API-level flows over HTTP.
+- **E2E tests** (`tests/e2e/all_tests.rs`) — HTTP-level end-to-end
+  against one shared auto-started server: discovery, JWKS, factor
+  surfaces, admin RBAC, hosted SPA pages. **No browser automation** —
+  the old "Playwright-driven" claims described tests that never existed
+  and were removed (gaps.md G-158); browser-driven UI coverage is a
+  tracked future item.
+- **Conformance suite** (`tests/compliant/`, Python + uv) — black-box
+  OIDC/OAuth2/SCIM standards tests (discovery, code flow + PKCE, refresh
+  rotation, revocation, introspection, device flow, JWKS, SCIM
+  discovery) against a spawned server with a mock mail provider.
 
-## Quick Start
+All Rust tiers share process-wide singletons (revocation store,
+throttle caches) and **must run single-threaded** (`--test-threads=1`) —
+the `just` targets and CI both do.
+
+## Quick start
 
 ```bash
-# Run unit tests only (no server needed)
-cargo test --lib
-
-# Install Playwright browsers (one-time setup)
-just e2e-setup
-
-# Run everything (auto-starts server, no env vars needed)
-just test
+just unit          # lib suite + tests/unit (matches the CI command)
+just integration   # integration tests
+just e2e           # HTTP-level e2e
+just compliant     # conformance suite (needs uv; builds the binary itself)
+just test          # unit + integration + e2e
 ```
 
 ## Configuration
 
-All test configuration lives in `tests/test_config.toml`. No environment variables required.
-
-Key settings:
+Rust-tier configuration lives in `tests/test_config.toml` (no env vars):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `server.port` / `bind.port` | 18092 | Base port for test server |
+| `bind.port` | 18092 | Base port for the test server |
 | `encryption_key` | hex string | AES-256 key (64 hex chars) |
 | `[[seed]]` | seeded users | Default tenant with admin@test.local + user@test.local |
 
-The test suite auto-selects an available port in range `[base_port, base_port + 20000)` to avoid collisions.
+The suite auto-selects an available port in `[base_port, base_port + 20000)`.
+The conformance suite generates its own server config
+(`tests/compliant/harness/config.py`) — including
+`disable_rate_limits = true`, the test-only knob that widens the per-IP
+quotas so a single-IP suite run does not 429 itself.
 
-## Unit Tests
+## Unit test modules (`tests/unit/`)
 
-Located in `tests/unit/`. Run:
+Run one module: `cargo test --test unit_tests crypto_unit`.
 
-```bash
-cargo test --lib                    # All unit tests
-cargo test crypto_unit              # Individual module
-cargo test policy_unit  
-cargo test cache_unit
-cargo test key_unit
-cargo test utils_unit
-```
+| Module | What it tests |
+|--------|--------------|
+| `amr_unit` | RFC 8176 `amr` derivation, `acr` factor-name vocabulary (G-94), claim round-trips |
+| `crypto_unit` | AES-256-GCM at rest: key validation order, round-trip, unique nonces, tampered/truncated ciphertext rejection, legacy fallback |
+| `key_unit` | `at_hash` (OIDC Core §3.1.3.6): pinned spec vector, reference construction, base64url shape |
+| `policy_unit` | RBAC policy engine: path matching (incl. the G-129 path constraint), source/target resolution, MFA gating, domain/action checks |
+| `cache_unit` | EphemCache (Moka): insert/get, one-shot deletes, cleanup, unicode |
+| `utils_unit` | ApiProblem/ApiResponse shapes, HttpMethod, JWT/JwtVerify construction |
 
-### Test modules
+The RSA key LIFECYCLE (generation, encryption at rest, kid routing,
+retirement, JWKS) needs a database and lives in the lib suite
+(`src/key.rs`, `src/db.rs`).
 
-| Module | What it tests | Key coverage areas |
-|--------|--------------|-------------------|
-| `crypto_unit` | AES-256-GCM encryption | Key validation, round-trip encrypt/decrypt, nonce randomization, tampered ciphertext rejection |
-| `policy_unit` | RBAC policy engine | Path matching, source/target resolution, MFA gating, domain/action checks, edge cases |
-| `cache_unit` | EphemCache (Moka) | Insert/get, duplicate rejection, one-shot deletes, cleanup, unicode keys/values |
-| `key_unit` | RSA key management & at_hash | Key hex validation, base64url encoding, JWT claim structure |
-| `utils_unit` | API helpers | ApiProblem variants, ApiResponse serialization, HttpMethod enum tests, JWT/JwtVerify struct construction |
+## Integration tests
 
-## Integration Tests
-
-Located in `tests/z_integration_tests.rs`. Server is auto-started.
+`tests/z_integration_tests.rs`; server auto-started per test env.
 
 ```bash
-just test-integration
-# or manually:
-cargo test --test z_integration_tests
+just integration
 ```
 
-### Test categories
+Covers: health, tenant lifecycle (create → bootstrap → delete → backup),
+domains, users/roles/policies CRUD under real sessions, social providers,
+keys/JWKS, auth channel contracts, self-service endpoints.
 
-| Category | Endpoints Tested | Notes |
-|----------|-----------------|-------|
-| Health | `GET /api/v1/healthy` | Basic connectivity check |
-| Tenant CRUD | `POST/GET/DELETE /admin/tenant/*` | Full tenant lifecycle (create → verify → delete) |
-| Domain mgmt | `GET/POST/DELETE /admin/domain/*` | CORS and domain config |
-| User lifecycle | `/admin/user/create, list, delete, activate, roles` | Complete user management flow |
-| Role mgmt | `/admin/role/create, list, delete` | Role creation/deletion |
-| Policy mgmt | `/admin/policy/create, list, delete` | RBAC policy CRUD |
-| Social providers | `/admin/provider/*` | OAuth2 provider registration |  
-| Key/JWKS | `/admin/key/*`, `/.well-known/jwks.json` | JWT key rotation |
-| Auth flows | `/auth/email/request` | Passwordless auth channels |
-| User self-mgmt | `/user/delete/self, /activate/self` | Self-service endpoints |
+## E2E tests
 
-## E2E Tests
+`tests/e2e/`; one shared server for the whole run
+(`all_tests::shared_server`), provisioned WITH a real root+admin session
+(`shared_admin_token`) so authenticated probes exercise the real
+protect → policy → handler stack.
 
-Located in `tests/e2e/`. Server is auto-started from `test_config.toml`.
-
-```bash
-just test-e2e                       # Run all e2e tests
-cargo test --test all_tests         # Same
-
-# Headed mode:
-JUST test-e2e-headed                # Interactive browser
-```
-
-### Test modules
-
-| Module | Flow Tested | 
+| Module | Flow tested |
 |--------|------------|
-| `signin_flow` | Login page loads, form structure, wrong credentials handling |
-| `signup_flow` | Registration page, signup form elements, OIDC authorize/token endpoints |
-| `passkey_flow` | WebAuthn challenge flow, passkey verify/reject |
-| `oidc_flow` | Well-known discovery, userinfo, revoke, introspect, token, JWKS |
-| `tenant_lifecycle` | Server health, tenant CRUD, domain mgmt, email/refresh/logout endpoints |
+| `signin_flow` | Login SPA serves, password-shaped verify refused 401, admin surface fails closed, roles lookup under a real session |
+| `signup_flow` | SPA entry, health, parameterless `/authorize` contract |
+| `passkey_flow` | Passkey request/verify wire contracts, admin SPA path |
+| `oidc_flow` | Discovery (provisioned doc), userinfo/token/revoke/introspect error semantics, JWKS populated |
+| `host_resolution` | Tenant resolution from Host, unprovisioned-host skeletons |
+| `tenant_lifecycle` | Unauthenticated-contract probes (the authenticated lifecycle runs in the integration tier) |
 
-### How tests work
-
-Tests use a shared config loader that reads from `tests/test_config.toml`. No env vars — just:
-
-```rust
-// Every test file uses this shared helper:
-let base_url = e2e_config::base_url();  // → "http://127.0.0.1:18092" (from config)
-```
-
-The server auto-launches from `common.rs`'s `TestEnv::new()` with a temp data dir and seeded tenant, then kills itself when the test process exits.
-
-## Running All Tests
+## Conformance suite
 
 ```bash
-# Full suite (unit → integration → e2e)
-just test                             # Everything, auto-starts server
+just compliant        # or: cd tests/compliant && uv run pytest -q
 ```
 
-## CI Integration
+Spawns `target/debug/janux` with a generated config and a mock Resend,
+then runs black-box standards tests. See `tests/compliant/README.md` for
+the spec mapping and the (all-landed) server enablers. The external OIDF
+certification driver under `tests/compliant/oidf/` is manual (gaps.md
+G-124).
 
-This suite is designed for GitHub Actions (or equivalent):
+## CI
 
-1. `cargo install just` — if not installed
-2. `just e2e-setup` — install Playwright browsers 
-3. Run: `just test`
+`.github/workflows/ci.yml` runs: fmt + clippy (`-D warnings`) + OpenAPI
+drift check + frontend lint/test + lib/unit suites (single-threaded) →
+integration → e2e → conformance, plus `cargo audit` and a Docker build
+check. Release workflows re-run the lib/unit suite before publishing and
+smoke-test every artifact (G-135).
 
-No env vars, no manual server setup.
+## Adding tests
 
-## Adding New Tests
-
-### Unit tests
-Create `tests/unit/<name>_unit.rs`, add to `mod.rs`:
-
-```rust
-// tests/unit/mod.rs
-mod crypto_unit;   // existing
-mod my_feature;    // new module
-```
-
-### Integration tests
-Add to `z_integration_tests.rs`:
-
-```rust
-#[tokio::test]  
-async fn my_api_endpoint_test() {
-    let env = TestEnv::new_with_auth().await;
-    // ...
-}
-```
-
-### E2E tests
-Create `tests/e2e/<flow>.rs`, add to `all_tests.rs`:
-
-```rust
-// tests/e2e/all_tests.rs
-mod my_flow;   // new module
-
-// In your flow file:
-#[tokio::test]
-async fn test_my_feature() {
-    let base_url = e2e_config::base_url();
-    // ...
-}
-```
+- **Lib/unit**: next to the code in `src/**` `mod tests`, or a new
+  `tests/unit/<name>_unit.rs` registered in `tests/unit_tests.rs`
+  (`#[path = "unit/<name>_unit.rs"] mod <name>_unit;`).
+- **Integration**: add to `tests/z_integration_tests.rs` using
+  `TestEnv::new_with_auth()`.
+- **E2E**: create `tests/e2e/<flow>.rs`, register it in
+  `tests/e2e/all_tests.rs`, and drive the shared server via
+  `super::shared_server()` / `super::shared_admin_token()`.
+- **Conformance**: add under `tests/compliant/tests_op/` (OIDC/OAuth2)
+  or `tests_scim/`, using the `janux_env` / `admin` fixtures.

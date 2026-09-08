@@ -312,6 +312,7 @@ pub async fn add_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // `obtain_mut` keeps depot mutably borrowed for the rest of the handler.
     let caller = crate::utils::caller_from_depot(depot);
     if let Some(body) = crate::utils::extract::<Addkey>(req, None).await {
+        crate::audit::record_target(res, "key", &body.name);
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
@@ -379,6 +380,7 @@ pub struct RetireKey {
 )]
 pub async fn retire_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<RetireKey>(req, None).await {
+        crate::audit::record_target_detail(res, "key", &body.name, "retire");
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
@@ -426,6 +428,7 @@ pub async fn retire_key(req: &mut Request, depot: &mut Depot, res: &mut Response
 )]
 pub async fn delete_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<DeleteKey>(req, None).await {
+        crate::audit::record_target_detail(res, "key", &body.name, "delete");
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {

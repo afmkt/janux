@@ -2,7 +2,6 @@ use crate::cache::EphemCache;
 use crate::key::Key;
 use anyhow::Result;
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jiff::ToSpan;
 use jsonwebtoken::Algorithm;
 use jsonwebtoken::DecodingKey;
@@ -14,7 +13,7 @@ use jsonwebtoken::Validation;
 // use rsa::traits::PublicKeyParts;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -63,6 +62,16 @@ pub struct JwtOidcParams {
     pub auth_time: Option<usize>,
 }
 
+/// OIDC Core §3.1.3.6/§3.3.2 `at_hash`: the left half of the SHA-256 over
+/// the access token's octets, base64url-no-pad. Extracted from the three
+/// token-mint sites in `oidc.rs` so the contract is one named function
+/// tests can pin (G-137 — the old unit test re-implemented the hash
+/// locally and asserted tautologies instead of exercising product code).
+pub fn compute_at_hash(access_token: &str) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(&sha2::Sha256::digest(access_token.as_bytes())[..16])
+}
+
 /// Generate a JWT for the **OIDC `/token` endpoint**.
 /// Populates all claims with correct semantic values expected by external relying parties
 /// (per OpenID Connect Core 1.0 sections 2 and 5.1).
@@ -84,10 +93,7 @@ where
         .map_err(|_e| anyhow::anyhow!("failed to calculate the expiration time"))?;
 
     // Compute at_hash per OIDC Core section 3.3.2.10.
-    let at_hash = params
-        .access_token
-        .as_ref()
-        .and_then(|at| compute_at_hash(at));
+    let at_hash = params.access_token.as_ref().map(|at| compute_at_hash(at));
 
     let claim = Claim {
         iss: issuer.to_string(),
@@ -162,16 +168,6 @@ fn encode_jwt<T: Serialize>(claim: &Claim<T>, key: &Key) -> anyhow::Result<Strin
         &EncodingKey::from_rsa_pem(key.private_pem()?.as_bytes())?,
     )
     .map_err(Into::into)
-}
-
-fn compute_at_hash(access_token: &str) -> Option<String> {
-    let mut hasher = Sha256::new();
-
-    hasher.update(access_token.as_bytes());
-    let digest = hasher.finalize();
-
-    // Take first 16 bytes (half of SHA-256 output) and base64url encode with no padding.
-    Some(URL_SAFE_NO_PAD.encode(&digest[..16]))
 }
 
 /// The clock-skew leeway, in minutes, that every token verification path

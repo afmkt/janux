@@ -2,21 +2,21 @@ import pytest
 
 PRIVATE_RSA_FIELDS = {"d", "p", "q", "dp", "dq", "qi"}
 
+# The seed extension landed (G-136 enabler #3): every seeded domain gets a
+# signing key at seed time, so an empty JWKS is now a real failure, not a
+# known gap.
 NO_KEYS_REASON = (
-    "seeded tenants get no signing key (key_create is admin-only and the "
-    "seeded admin cannot log in black-box); needs the janux seed extension — "
-    "see README 'Janux enablers'"
+    "seeded tenants must advertise a signing key — the seed creates one per "
+    "domain (TenantDTO::save); an empty JWKS means that regressed"
 )
 
 
 @pytest.fixture()
 def keys(jwks_dict):
-    if not jwks_dict.get("keys"):
-        pytest.skip(NO_KEYS_REASON)
+    assert jwks_dict.get("keys"), NO_KEYS_REASON
     return jwks_dict["keys"]
 
 
-@pytest.mark.xfail(strict=True, reason=NO_KEYS_REASON)
 def test_jwks_not_empty(jwks_dict):
     assert jwks_dict.get("keys"), "JWKS must contain at least one signing key"
 

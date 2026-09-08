@@ -58,6 +58,28 @@ enum Commands {
         /// Target directory (created if missing; existing files overwritten)
         dir: std::path::PathBuf,
     },
+    /// Back up the data directory, then exit (the server does NOT start).
+    /// COLD operation: stop the server first — the databases are
+    /// exclusively locked while it holds them, and the backup validates
+    /// that every database opens before copying. Creates
+    /// DEST/backup-<timestamp>/ with a manifest.json. The config files
+    /// (base.toml/seed.toml) and the encryption_key live outside the data
+    /// dir — back them up separately; without the key the at-rest secrets
+    /// in the backup are unrecoverable.
+    Backup {
+        /// Destination directory (a timestamped backup dir is created inside)
+        dest: std::path::PathBuf,
+    },
+    /// Restore a backup created by `janux backup`, then exit (the server
+    /// does NOT start). COLD operation: stop the server first. Refuses to
+    /// replace a non-empty data dir unless --force.
+    Restore {
+        /// The timestamped backup directory (containing manifest.json)
+        src: std::path::PathBuf,
+        /// Replace a non-empty data dir (disaster recovery, not a merge)
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -65,8 +87,8 @@ async fn main() {
     let cli = Cli::parse();
     tracing_subscriber::fmt().init();
 
-    if let Some(Commands::DumpFrontend { dir }) = cli.command {
-        match pages::dump_frontend(&dir) {
+    if let Some(Commands::DumpFrontend { dir }) = &cli.command {
+        match pages::dump_frontend(dir) {
             Ok(n) => {
                 println!(
                     "Dumped {n} frontend files to {} (janux {}, marker {})",
@@ -100,6 +122,70 @@ async fn main() {
             config_paths
         )
     });
+
+    // Backup/restore are COLD operations handled before anything opens
+    // the data dir (Storage::init would take the very locks the backup
+    // validation checks for).
+    match &cli.command {
+        Some(Commands::Backup { dest }) => {
+            match db::backup_data_dir(Path::new(&server_config.data_dir), dest).await {
+                Ok((dir, manifest)) => {
+                    println!(
+                        "Backed up {} tenant(s), {} file(s) to {}",
+                        manifest.tenants.len(),
+                        manifest.files.len(),
+                        dir.display()
+                    );
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("Backup failed: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some(Commands::Restore { src, force }) => {
+            match db::restore_data_dir(src, Path::new(&server_config.data_dir), *force).await {
+                Ok(manifest) => {
+                    println!(
+                        "Restored {} tenant(s) into {} (backup created {})",
+                        manifest.tenants.len(),
+                        server_config.data_dir,
+                        manifest.created_at
+                    );
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("Restore failed: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    // G-149: trusting X-Forwarded-* hands tenant resolution and every
+    // per-IP limiter to whoever can set headers — only safe behind a
+    // proxy that overwrites them. Say so loudly at boot.
+    if server_config.trust_forwarded_headers {
+        tracing::warn!(
+            "trust_forwarded_headers = true: X-Forwarded-Host/Uri/Method select the tenant \
+             context and X-Forwarded-For feeds the per-IP rate limiters. Only safe when EVERY \
+             request passes a reverse proxy that overwrites these headers; a directly \
+             reachable server in this mode can be tenant-spoofed and limiter-bypassed."
+        );
+    }
+    // G-150: the example key is public knowledge — accepting it silently
+    // would mean at-rest encryption protects nothing.
+    if server_config.encryption_key.as_deref()
+        == Some("1234567812345678123456781234567812345678123456781234567812345678")
+    {
+        tracing::warn!(
+            "encryption_key is the well-known example key from base.example.toml — secrets at \
+             rest are effectively plaintext. Generate a fresh 32-byte hex key (e.g. `openssl \
+             rand -hex 32`) before any real deployment."
+        );
+    }
 
     if let Some(ref key) = server_config.encryption_key {
         crypto::setup_encryption_key(key).expect("failed to initialize encryption key");
@@ -139,11 +225,13 @@ async fn main() {
         .await
         .expect("Failed to load server config from database");
 
+    let disable_rate_limits = server_config.disable_rate_limits;
     let result = server_config
         .run(item_config, move || {
             // Inject ServerState by value (it is a cheap Arc clone). Do NOT
             // inject Arc<ServerState> — handlers obtain_mut::<ServerState>().
-            router::api_with_doc().hoop(salvo::affix_state::inject(state.clone()))
+            router::api_with_doc(disable_rate_limits)
+                .hoop(salvo::affix_state::inject(state.clone()))
         })
         .await;
     if let Err(e) = result {

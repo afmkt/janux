@@ -67,6 +67,11 @@ pub async fn logout(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         )
         .await
         .ok();
+        // G-89: attribute the logout to the session's owner when the
+        // token decodes (revocation itself works regardless).
+        if let Some(tkn) = &decoded {
+            crate::audit::record_target_detail(res, "auth", &tkn.claims.data.username, "logout");
+        }
         if crate::utils::revoke_token(&mut tenant, jwt, None, "logout")
             .await
             .is_ok()

@@ -365,6 +365,12 @@ pub async fn enroll(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(req_request) = extract::<EnrollTotpRequest>(req, None).await {
+        crate::audit::record_target_detail(
+            res,
+            "credential",
+            &format!("totp:{}", req_request.name),
+            &format!("user={user},flow=enroll"),
+        );
         // the name can not be empty string ""
         if !req_request.name.is_empty()
             && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
@@ -467,6 +473,11 @@ pub struct VerifyTotpRequest {
     code: String,
     token: Option<String>,
     cookie: Option<String>,
+    /// Requested session lifetime in seconds (G-90), clamped to the
+    /// 15-minute ceiling — a caller may shorten its session, never
+    /// lengthen it. Omitted → 15 minutes.
+    #[serde(default)]
+    lifetime: Option<i64>,
 }
 
 async fn verify_totp(
@@ -485,6 +496,8 @@ async fn verify_totp(
     let mut gate_key: Option<String> = None;
     let mut ceremony_valid = false;
     if let Some(verify_reqest) = extract::<VerifyTotpRequest>(req, None).await {
+        // G-89: attribute the step-up attempt to the claimed identity.
+        crate::audit::record_target_detail(res, "auth", &verify_reqest.user, "factor=totp");
         // The account gate is checked BEFORE the one-shot enrollment token
         // is consumed: a locked-out attacker must not be able to burn the
         // token just issued to the legitimate user.
@@ -563,7 +576,13 @@ async fn verify_totp(
                 tmp.insert(AuthType::TOTP.as_str().to_string());
 
                 if let Ok(jwt) = tenant
-                    .authenticate_jwt(&tmp, &issuer, domain.as_ref(), &verify_reqest.user, 15)
+                    .authenticate_jwt(
+                        &tmp,
+                        &issuer,
+                        domain.as_ref(),
+                        &verify_reqest.user,
+                        crate::utils::clamped_token_lifetime_minutes(verify_reqest.lifetime, 15),
+                    )
                     .await
                 {
                     if let Some(key) = &gate_key {
@@ -721,6 +740,12 @@ pub async fn remove_totp(req: &mut Request, depot: &mut Depot, res: &mut Respons
         && !req_request.totp.is_empty()
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
     {
+        crate::audit::record_target_detail(
+            res,
+            "credential",
+            &format!("totp:{}", req_request.totp),
+            &format!("user={},flow=remove", req_request.name),
+        );
         if let Ok(target) = tenant.user(&req_request.name).await
             && let Err(e) = tenant.require_above_user(&caller, target.id).await
         {

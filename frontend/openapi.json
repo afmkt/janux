@@ -502,6 +502,14 @@
             ]
           },
           "credential": {},
+          "lifetime": {
+            "description": "Requested session lifetime in seconds (G-90), clamped to the\n15-minute ceiling — a caller may shorten its session, never\nlengthen it. Omitted → 15 minutes.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "token": {
             "description": "Flow handle from `passkey/request`: selects the cached\nchallenge. Required — without it no ceremony can be completed.",
             "format": "uuid",
@@ -744,6 +752,33 @@
         ],
         "type": "object"
       },
+      "openapi.social.ProviderEntry": {
+        "description": "The wire shape of `admin/provider/list` (G-147): `client_secret` is\nWRITE-ONLY. The raw model used to serialize straight to the response,\nhanding every admin session (and anything logging responses) the\nstored secret — plaintext for legacy rows, ciphertext for newer ones.",
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "issuer_url": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "client_id",
+          "issuer_url",
+          "scopes"
+        ],
+        "type": "object"
+      },
       "openapi.social.RedeemRequest": {
         "properties": {
           "code": {
@@ -770,35 +805,6 @@
         },
         "required": [
           "name"
-        ],
-        "type": "object"
-      },
-      "openapi.social.SocialProvider": {
-        "properties": {
-          "client_id": {
-            "type": "string"
-          },
-          "client_secret": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "issuer_url": {
-            "type": "string"
-          },
-          "scopes": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "id",
-          "client_id",
-          "client_secret",
-          "issuer_url"
         ],
         "type": "object"
       },
@@ -906,6 +912,14 @@
           "cookie": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "lifetime": {
+            "description": "Requested session lifetime in seconds (G-90), clamped to the\n15-minute ceiling — a caller may shorten its session, never\nlengthen it. Omitted → 15 minutes.",
+            "format": "int64",
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -1181,10 +1195,10 @@
         ],
         "type": "object"
       },
-      "openapi.utils.ApiResponse<openapi.utils.Page<openapi.social.SocialProvider>>": {
+      "openapi.utils.ApiResponse<openapi.utils.Page<openapi.social.ProviderEntry>>": {
         "properties": {
           "data": {
-            "$ref": "#/components/schemas/openapi.utils.Page<openapi.social.SocialProvider>"
+            "$ref": "#/components/schemas/openapi.utils.Page<openapi.social.ProviderEntry>"
           },
           "ok": {
             "type": "boolean"
@@ -1371,12 +1385,12 @@
         ],
         "type": "object"
       },
-      "openapi.utils.Page<openapi.social.SocialProvider>": {
+      "openapi.utils.Page<openapi.social.ProviderEntry>": {
         "description": "Pagination envelope for list endpoints. `next_offset` is `Some` only when\nmore rows follow this page, so clients can loop without a total count.",
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/openapi.social.SocialProvider"
+              "$ref": "#/components/schemas/openapi.social.ProviderEntry"
             },
             "type": "array"
           },
@@ -2264,11 +2278,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<openapi.social.SocialProvider>>"
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.utils.Page<openapi.social.ProviderEntry>>"
                 }
               }
             },
-            "description": "Success"
+            "description": "Success — client_secret is write-only and never returned (G-147)"
           },
           "400": {
             "content": {

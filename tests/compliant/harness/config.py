@@ -24,6 +24,9 @@ ADMIN_RESOURCES = [
 CONFIG_TEMPLATE = """data_dir = "{data_dir}"
 encryption_key = "{encryption_key}"
 trust_forwarded_headers = false
+# G-136 enabler #1: the suite drives every flow from one IP and would
+# exhaust the per-minute quotas in seconds. TEST CONFIG ONLY.
+disable_rate_limits = true
 
 [bind]
 address = "127.0.0.1"
@@ -34,7 +37,7 @@ name = "{tenant}"
 domains = [{{ id = "{domain}", cors = [] }}]
 roles = ["root", "admin", "user", "guest"]
 users = [
-    {{ id = "admin@{domain}", active = true, roles = ["admin"] }},
+    {{ id = "admin@{domain}", active = true, roles = ["admin"], email = "admin@{domain}" }},
     {{ id = "user@{domain}", active = true, roles = ["user"] }},
 ]
 {policies}

@@ -1,60 +1,67 @@
-//! E2E test: Passkey registration and authentication via API endpoints.
+//! E2E test: passkey surface contracts over HTTP.
 //!
-//! Tests WebAuthn/Passkey flows:
-//! 1. Request passkey registration (get credential options)  
-//! 2. Verify passkey credentials
+//! The WebAuthn ceremony itself needs a browser authenticator (covered
+//! by the lib-level softauth tests in `src/passkey.rs`); this tier pins
+//! the wire contract: endpoints reachable, bodyless requests refused
+//! with 400 (never 404/500), and the admin SPA served at its real path.
 
-/// Test that the passkey registration endpoint is reachable.
+/// The passkey registration/login entry point is reachable and refuses
+/// a bodyless request with 400 — never 404 (route missing) or 500.
 #[tokio::test]
 async fn test_passkey_registration_request() {
     let base_url = super::shared_server().await;
 
-    let client = reqwest::Client::new();
-
-    // Endpoint should be reachable — returns 400 if body is wrong, not 404
-    let resp = client
+    let resp = reqwest::Client::new()
         .post(format!(
             "{}/api/v1/auth/passkey/request",
             base_url.trim_end_matches('/')
         ))
         .header("Host", "localhost")
         .send()
-        .await;
+        .await
+        .expect("passkey request");
 
-    assert!(resp.is_ok(), "Passkey request endpoint should be reachable");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "a bodyless passkey request is a validation error, not a crash"
+    );
 }
 
-/// Test that passkey verification without body returns an error.
-#[ignore]
+/// Same contract for the verify half. G-158: this test used to be
+/// `#[ignore]`d and asserted only `is_ok()`.
 #[tokio::test]
 async fn test_passkey_verify_requires_body() {
     let base_url = super::shared_server().await;
 
-    let client = reqwest::Client::new();
-
-    // Verify without body should return an error (not 500)
-    let resp = client
+    let resp = reqwest::Client::new()
         .post(format!(
             "{}/api/v1/auth/passkey/verify",
             base_url.trim_end_matches('/')
         ))
         .header("Host", "localhost")
         .send()
-        .await;
+        .await
+        .expect("passkey verify request");
 
-    assert!(resp.is_ok());
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "a bodyless passkey verify is a validation error, not a crash"
+    );
 }
 
-/// Test the admin page loads (passkeys are managed from admin).
+/// The admin console SPA is served at /admin (the old test fetched
+/// /admin.html, which never existed).
 #[tokio::test]
 async fn test_admin_page_accessible() {
     let base_url = super::shared_server().await;
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{}/admin.html", base_url.trim_end_matches('/')))
+    let resp = reqwest::Client::new()
+        .get(format!("{}/admin", base_url.trim_end_matches('/')))
         .send()
-        .await;
+        .await
+        .expect("admin page request");
 
-    assert!(resp.is_ok(), "Admin page should load");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK, "admin SPA serves");
 }

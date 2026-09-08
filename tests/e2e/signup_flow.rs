@@ -1,100 +1,70 @@
-//! E2E test: Sign-up flow.
+//! E2E test: signup surface contracts over HTTP.
 //!
-//! Tests the user registration experience:
-//! 1. Navigate to signup page
-//! 2. Submit registration form with valid data  
-//! 3. Verify confirmation/redirect
+//! Janux has ONE hosted SPA at `/login` that runs both signin and
+//! signup ceremonies (strict mode: signup provisions only a NEW
+//! username). G-158: the old tests here fetched a nonexistent
+//! `/signup` page and an `#[ignore]`d "form fields" probe asserted
+//! password-era markup the SPA never had — both removed; browser-driven
+//! UI coverage is tracked in gaps.md.
 
-/// Test that the signup page loads correctly.
+use crate::fixtures::TestApiClient;
+
+/// The hosted SPA serves at /login — the single entry for signin AND
+/// signup ceremonies.
 #[tokio::test]
-async fn test_signup_page_accessible() {
+async fn test_login_page_accessible() {
     let base_url = super::shared_server().await;
 
-    let client = reqwest::Client::new();
-
-    // Verify server is healthy first
     assert!(
-        crate::fixtures::TestApiClient::is_server_healthy(&base_url).await,
+        TestApiClient::is_server_healthy(&base_url).await,
         "Server must be running"
     );
 
-    let resp = client
-        .get(format!("{}/signup", base_url.trim_end_matches('/')))
-        .send()
-        .await;
-
-    assert!(resp.is_ok(), "Signup page should load");
-
-    if let Ok(response) = resp {
-        assert!(
-            response.status().is_success(),
-            "Signup page should return 200"
-        );
-    }
-}
-
-/// Verify the signup form contains expected elements.
-#[ignore]
-#[tokio::test]
-async fn test_signup_form_has_required_fields() {
-    let base_url = super::shared_server().await;
-
-    let client = reqwest::Client::new();
-    let body = client
-        .get(format!("{}/signup", base_url.trim_end_matches('/')))
+    let resp = reqwest::Client::new()
+        .get(format!("{}/login", base_url.trim_end_matches('/')))
         .send()
         .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-
-    // Should have signup text and email field
-    assert!(
-        body.to_lowercase().contains("sign up")
-            || body.contains("SignUp")
-            || body.contains("Sign-Up")
-    );
+        .expect("login page request");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
 }
 
-/// Test that the API health endpoint is healthy before running signup tests.
+/// Health contract before the signup-surface probes run.
 #[tokio::test]
 async fn test_verify_server_healthy() {
     let base_url = super::shared_server().await;
 
-    assert!(crate::fixtures::TestApiClient::is_server_healthy(&base_url).await);
+    assert!(TestApiClient::is_server_healthy(&base_url).await);
 }
 
-/// Test OIDC flow - authorization request endpoint.
+/// Signup provisioning happens through the factor ceremony API, not a
+/// page (and needs a configured mail provider, which the e2e config does
+/// not carry). What IS pinned here: the old "GET /authorize should work
+/// even without parameters" claim, corrected to its real contract — a
+/// parameterless authorize answers with a 302 to the hosted error page
+/// carrying `error=invalid_request`, never 500 and never a silent 200.
 #[tokio::test]
-async fn test_oidc_authorize_endpoint_available() {
+async fn test_signup_ceremony_and_authorize_contract() {
     let base_url = super::shared_server().await;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("client");
 
-    let client = reqwest::Client::new();
-
-    // GET authorize should work (even without parameters)
     let resp = client
         .get(format!("{}/authorize", base_url.trim_end_matches('/')))
+        .header("Host", "localhost")
         .send()
-        .await;
-
-    // Should not return a connection error
-    assert!(resp.is_ok());
-}
-
-/// Test that the OIDC token endpoint accepts POST requests.
-#[tokio::test]
-async fn test_oidc_token_endpoint_available() {
-    let base_url = super::shared_server().await;
-
-    let client = reqwest::Client::new();
-
-    // POST to token without valid params should return an error response (not 404)
-    let resp = client
-        .post(format!("{}/token", base_url.trim_end_matches('/')))
-        .form(&[("grant_type", "authorization_code"), ("client_id", "test")])
-        .send()
-        .await;
-
-    assert!(resp.is_ok());
+        .await
+        .expect("authorize request");
+    assert_eq!(resp.status(), reqwest::StatusCode::FOUND);
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        location.contains("error=invalid_request"),
+        "the error redirect must carry the RFC 6749 code: {location}"
+    );
 }

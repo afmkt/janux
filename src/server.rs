@@ -315,6 +315,14 @@ pub struct JanuxConfig {
     /// directly.
     #[serde(default)]
     pub trust_forwarded_headers: bool,
+    /// TEST HARNESS ONLY (G-136 enabler): widen every per-IP rate-limit
+    /// quota (auth 6/min, OIDC public 12/min, admin 12/min, SCIM 60/min)
+    /// to absurdity. The conformance suite drives the whole protocol from
+    /// a single IP and would otherwise exhaust the quotas in seconds.
+    /// NEVER enable on a reachable host — the limiters are the primary
+    /// CPU-spend and enumeration brake on unauthenticated endpoints.
+    #[serde(default)]
+    pub disable_rate_limits: bool,
 }
 
 impl JanuxConfig {

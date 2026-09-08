@@ -33,6 +33,23 @@ impl TenantDTO {
         for d in self.domains.iter() {
             d.save(&mut tenant).await?;
         }
+        // G-136 enabler: a seeded tenant must be able to mint tokens from
+        // first boot — without a signing key every ceremony dies with
+        // "Fail to issue JWT" and the JWKS stays empty until an admin acts
+        // (which itself needs a session). Create one key per seeded domain;
+        // idempotent across restarts (stable key id, skipped when the row
+        // exists). Requires the process encryption key, which main.rs sets
+        // up before seeding. Fully qualified `Tenant::key`: the RefMut
+        // guard's 0-arg `key()` would shadow the lookup.
+        for d in self.domains.iter() {
+            let key_name = format!("seed-{}", d.id);
+            if crate::db::Tenant::key(&mut tenant, &key_name)
+                .await
+                .is_err()
+            {
+                tenant.key_create(&d.id, &key_name).await?;
+            }
+        }
         // Roles first: policy_create resolves the role by name and fails
         // when it does not exist yet. Seeding is the trust anchor, so
         // it runs as the unrestricted Bootstrap caller.

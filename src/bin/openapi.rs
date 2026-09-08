@@ -94,7 +94,7 @@ mod domain;
 mod pages;
 
 fn main() {
-    let api_router = router::api();
+    let api_router = router::api(false);
     let openapi = OpenApi::new("Secure Auth Microservice API", "1.0.0").merge_router(&api_router);
     let json_output = openapi
         .to_json()

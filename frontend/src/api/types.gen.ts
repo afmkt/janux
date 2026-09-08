@@ -201,6 +201,12 @@ export type OpenapiPasskeyVerifyRequest = {
     cookie?: string | null;
     credential: unknown;
     /**
+     * Requested session lifetime in seconds (G-90), clamped to the
+     * 15-minute ceiling — a caller may shorten its session, never
+     * lengthen it. Omitted → 15 minutes.
+     */
+    lifetime?: number | null;
+    /**
      * Flow handle from `passkey/request`: selects the cached
      * challenge. Required — without it no ceremony can be completed.
      */
@@ -278,6 +284,19 @@ export type OpenapiSocialAddProvider = {
     name: string;
 };
 
+/**
+ * The wire shape of `admin/provider/list` (G-147): `client_secret` is
+ * WRITE-ONLY. The raw model used to serialize straight to the response,
+ * handing every admin session (and anything logging responses) the
+ * stored secret — plaintext for legacy rows, ciphertext for newer ones.
+ */
+export type OpenapiSocialProviderEntry = {
+    client_id: string;
+    id: string;
+    issuer_url: string;
+    scopes: Array<string>;
+};
+
 export type OpenapiSocialRedeemRequest = {
     code: string;
     /**
@@ -290,14 +309,6 @@ export type OpenapiSocialRedeemRequest = {
 
 export type OpenapiSocialRemoveProvider = {
     name: string;
-};
-
-export type OpenapiSocialSocialProvider = {
-    client_id: string;
-    client_secret: string;
-    id: string;
-    issuer_url: string;
-    scopes?: Array<string>;
 };
 
 export type OpenapiTotpAllTotpRequest = {
@@ -337,6 +348,12 @@ export type OpenapiTotpTotpEntry = {
 export type OpenapiTotpVerifyTotpRequest = {
     code: string;
     cookie?: string | null;
+    /**
+     * Requested session lifetime in seconds (G-90), clamped to the
+     * 15-minute ceiling — a caller may shorten its session, never
+     * lengthen it. Omitted → 15 minutes.
+     */
+    lifetime?: number | null;
     name?: string | null;
     token?: string | null;
     user: string;
@@ -424,8 +441,8 @@ export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiRoleRoleEntry__ = {
     ok: boolean;
 };
 
-export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiSocialSocialProvider__ = {
-    data: OpenapiUtilsPage_openapiSocialSocialProvider_;
+export type OpenapiUtilsApiResponse_openapiUtilsPage_openapiSocialProviderEntry__ = {
+    data: OpenapiUtilsPage_openapiSocialProviderEntry_;
     ok: boolean;
 };
 
@@ -493,8 +510,8 @@ export type OpenapiUtilsPage_openapiRoleRoleEntry_ = {
  * Pagination envelope for list endpoints. `next_offset` is `Some` only when
  * more rows follow this page, so clients can loop without a total count.
  */
-export type OpenapiUtilsPage_openapiSocialSocialProvider_ = {
-    items: Array<OpenapiSocialSocialProvider>;
+export type OpenapiUtilsPage_openapiSocialProviderEntry_ = {
+    items: Array<OpenapiSocialProviderEntry>;
     limit: number;
     next_offset?: number | null;
     offset: number;
@@ -1060,9 +1077,9 @@ export type OpenapiSocialAllProvidersError = OpenapiSocialAllProvidersErrors[key
 
 export type OpenapiSocialAllProvidersResponses = {
     /**
-     * Success
+     * Success — client_secret is write-only and never returned (G-147)
      */
-    200: OpenapiUtilsApiResponse_openapiUtilsPage_openapiSocialSocialProvider__;
+    200: OpenapiUtilsApiResponse_openapiUtilsPage_openapiSocialProviderEntry__;
 };
 
 export type OpenapiSocialAllProvidersResponse = OpenapiSocialAllProvidersResponses[keyof OpenapiSocialAllProvidersResponses];

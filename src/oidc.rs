@@ -427,12 +427,15 @@ fn roles_for_machine_scopes(scopes: &[String]) -> std::collections::HashSet<Stri
 /// default). A client can therefore never confer more than its
 /// registration consents to, and a confidential client without the
 /// `scim` scope gets `invalid_scope` instead of a provisioning token.
+#[allow(clippy::too_many_arguments)]
 async fn handle_client_credentials(
     tenant: &mut crate::db::Tenant,
     client: &OAuth2Client,
     issuer: &str,
     domain: &str,
     requested_scope: Option<&str>,
+    // G-90: requested lifetime in seconds (see `TokenRequest.lifetime`).
+    lifetime: Option<i64>,
     res: &mut Response,
 ) {
     if client.token_endpoint_auth_method == "none" {
@@ -514,12 +517,19 @@ async fn handle_client_credentials(
         mfa: std::collections::HashSet::new(),
         roles,
     };
+    // G-90: a machine client may request a SHORTER principal lifetime;
+    // the 90-day constant is the ceiling (the G-123 kill-chain marker
+    // TTL is keyed to it, so requesting less is always safe).
+    let lifetime_min = crate::utils::clamped_token_lifetime_minutes(
+        lifetime,
+        CLIENT_CREDENTIALS_TOKEN_LIFETIME_MINUTES,
+    );
     match jwt_authenticate(
         issuer,
         &client.uuid.to_string(),
         &data,
         &key,
-        CLIENT_CREDENTIALS_TOKEN_LIFETIME_MINUTES,
+        lifetime_min,
         JwtOidcParams {
             client_id: client.id.clone(),
             nonce: None,
@@ -535,7 +545,7 @@ async fn handle_client_credentials(
             res.render(Json(TokenResponse {
                 access_token,
                 token_type: "Bearer".into(),
-                expires_in: (CLIENT_CREDENTIALS_TOKEN_LIFETIME_MINUTES as u64) * 60,
+                expires_in: (lifetime_min as u64) * 60,
                 scope: Some(effective.join(" ")),
                 id_token: None,
                 refresh_token: None,
@@ -561,6 +571,9 @@ async fn mint_token_response(
     nonce: Option<String>,
     auth_time: Option<usize>,
     mfa: std::collections::HashSet<String>,
+    // G-90: access-token lifetime in minutes, already clamped by the
+    // caller (`clamped_token_lifetime_minutes`).
+    access_minutes: i32,
 ) -> Result<TokenResponse, String> {
     let now = Timestamp::now().as_second();
     let auth_time = auth_time.unwrap_or(now as usize);
@@ -585,7 +598,7 @@ async fn mint_token_response(
         user_id,
         &at_data,
         &key,
-        60,
+        access_minutes,
         JwtOidcParams {
             client_id: client.id.clone(),
             nonce: nonce.clone(),
@@ -643,8 +656,7 @@ async fn mint_token_response(
         None
     };
 
-    let at_hash = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(&sha2::Sha256::digest(access_token.as_bytes())[..16]);
+    let at_hash = crate::jwt::compute_at_hash(&access_token);
     let at_entry = serde_json::json!({
         "type": "access",
         "iss": issuer,
@@ -657,7 +669,7 @@ async fn mint_token_response(
         "amr": &amr,
         "acr": &acr,
         "iat": now,
-        "exp": now + 3600,
+        "exp": now + i64::from(access_minutes) * 60,
     });
     OIDC_TOKEN_CACHE
         .insert(format!("token:access:{access_token}"), at_entry)
@@ -677,7 +689,7 @@ async fn mint_token_response(
     Ok(TokenResponse {
         access_token,
         token_type: "Bearer".into(),
-        expires_in: 3600,
+        expires_in: (access_minutes as u64) * 60,
         scope: if scope.is_empty() { None } else { Some(scope) },
         id_token,
         refresh_token,
@@ -810,6 +822,7 @@ pub async fn well_known(req: &mut Request, depot: &mut Depot, res: &mut Response
         "grant_types_supported": [
             "authorization_code",
             "refresh_token",
+            "client_credentials",
             "urn:ietf:params:oauth:grant-type:device_code"
         ],
         "subject_types_supported": ["public"],
@@ -1105,7 +1118,16 @@ async fn authorize_flow(
 
     drop(tenant);
 
-    let session = crate::utils::validate_jwt(req, depot).await;
+    // G-141: this used to run the policy engine (`validate_jwt`) and then
+    // ignore its verdict — and the engine is the wrong tool here anyway:
+    // `/authorize` is a public ceremony route with NO policy rows, so the
+    // default-deny engine returns `can_access == false` for every session.
+    // What actually matters is the binding the ceremony endpoints already
+    // enforce elsewhere: `validate_session` requires the token's
+    // `data.domain` to equal the request domain, so a sibling-domain
+    // session can no longer drive this domain's authorize flow (and no
+    // verdict is computed to be ignored).
+    let session = crate::utils::validate_session(req, depot).await;
 
     let state_h = depot
         .obtain_mut::<crate::server::ServerState>()
@@ -1273,7 +1295,9 @@ fn continuation_tenant<'a>(
     )
 )]
 pub async fn authorize_resume(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let verify = match crate::utils::validate_jwt(req, depot).await {
+    // G-141: domain-bound session validation (see `authorize`) — a
+    // sibling-domain token is not a session for this domain's flow.
+    let verify = match crate::utils::validate_session(req, depot).await {
         Some(v) => v,
         None => {
             render_redirect_json(
@@ -1471,7 +1495,8 @@ pub async fn authorize_resume(req: &mut Request, depot: &mut Depot, res: &mut Re
     )
 )]
 pub async fn consent_info(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let verify = match crate::utils::validate_jwt(req, depot).await {
+    // G-141: domain-bound session validation (see `authorize`).
+    let verify = match crate::utils::validate_session(req, depot).await {
         Some(v) => v,
         None => {
             res.status_code(StatusCode::UNAUTHORIZED);
@@ -1543,7 +1568,8 @@ pub struct ConsentDecision {
     )
 )]
 pub async fn consent_submit(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let verify = match crate::utils::validate_jwt(req, depot).await {
+    // G-141: domain-bound session validation (see `authorize`).
+    let verify = match crate::utils::validate_session(req, depot).await {
         Some(v) => v,
         None => {
             render_redirect_json(
@@ -1727,6 +1753,15 @@ pub struct TokenRequest {
     pub scope: Option<String>,
     #[serde(rename = "refresh_token")]
     pub refresh_token: Option<String>,
+    /// Requested ACCESS-token lifetime in seconds (G-90). Clamped into
+    /// `[60, ceiling]` where the ceiling is the grant's compile-time
+    /// maximum (60 min for user access tokens, 90 days for
+    /// client_credentials): a client may shorten its tokens, never
+    /// lengthen them past policy. Omitted → the ceiling (legacy
+    /// behavior). ID tokens (15 min authentication assertions) and
+    /// refresh-token family windows (30 days) are NOT affected.
+    #[serde(default)]
+    pub lifetime: Option<i64>,
     #[serde(rename = "device_code")]
     pub device_code: Option<String>,
 }
@@ -1767,6 +1802,7 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                 scope: map.get("scope").cloned(),
                 refresh_token: map.get("refresh_token").cloned(),
                 device_code: map.get("device_code").cloned(),
+                lifetime: map.get("lifetime").and_then(|s| s.parse::<i64>().ok()),
             }
         }
         Err(_) => match crate::utils::extract::<TokenRequest>(req, None).await {
@@ -2075,6 +2111,9 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                         None,
                         Some(auth_time),
                         mfa,
+                        // G-90: device exchanges honor the same clamped
+                        // `lifetime` parameter as the code grant.
+                        crate::utils::clamped_token_lifetime_minutes(params.lifetime, 60),
                     )
                     .await
                     {
@@ -2096,6 +2135,7 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                 &issuer,
                 domain,
                 params.scope.as_deref(),
+                params.lifetime,
                 res,
             )
             .await
@@ -2397,6 +2437,33 @@ async fn handle_auth_code(
     {
         Some(e) => e,
         None => {
+            // G-142 (RFC 6749 §4.1.2's SHOULD-half): a one-shot miss means
+            // the code expired OR is being replayed. When the persistent
+            // grant row matches the presented code's hash, tokens were
+            // already issued from this code — revoke them: poison the
+            // refresh family (derived from the grant jti at exchange) so
+            // the durable chain dies, and mark the grant revoked (which
+            // also withdraws the consent it carries). The ≤60-min access
+            // token expires on its own. Replay is logged as the
+            // compromise signal it is.
+            let code_hash = hex::encode(sha2::Sha256::digest(code.as_bytes()));
+            if let Ok(Some(grant)) = tenant.auth_grant_by_code_hash(&code_hash).await {
+                // The family was created at exchange (≤ grant.expires_at),
+                // so expires_at + family lifetime bounds every marker the
+                // chain could need.
+                let marker_end = grant.expires_at.as_second() + OIDC_REFRESH_FAMILY_LIFETIME;
+                let exp =
+                    jiff::Timestamp::from_second(marker_end).unwrap_or_else(|_| Timestamp::now());
+                let _ = crate::jwt::InvalidJwt::global()
+                    .invalid_raw(&refresh_family_marker(&grant.jti), exp)
+                    .await;
+                let _ = tenant.auth_grant_revoke_jti(&grant.jti).await;
+                tracing::warn!(
+                    grant_jti = %grant.jti,
+                    client_id = %grant.client_id,
+                    "authorization code replay detected — issued refresh family poisoned"
+                );
+            }
             token_error(
                 res,
                 StatusCode::BAD_REQUEST,
@@ -2528,6 +2595,10 @@ async fn handle_auth_code(
     };
     let amr = amr_values(&mfa);
     let acr = acr_value(&mfa);
+    // G-90: the RP may request a shorter access token; 60 min is the
+    // ceiling. The ID token stays a 15-min authentication assertion and
+    // the refresh family stays bound to its 30-day window.
+    let access_minutes = crate::utils::clamped_token_lifetime_minutes(params.lifetime, 60);
 
     let at_data = OidcAccessTokenData {
         scope: scope.clone(),
@@ -2539,7 +2610,7 @@ async fn handle_auth_code(
         &user_id,
         &at_data,
         &key,
-        60,
+        access_minutes,
         JwtOidcParams {
             client_id: client.id.clone(),
             nonce: None,
@@ -2593,7 +2664,12 @@ async fn handle_auth_code(
     };
 
     let refresh_token = if scope.split_whitespace().any(|s| s == "offline_access") {
-        let family = uuid::Uuid::new_v4().to_string();
+        // G-142: the family derives from the grant jti (instead of a fresh
+        // random UUID) so a code REPLAY can find and poison the exact
+        // refresh chain the code produced — the persistent AuthGrant row
+        // (lookup by code_hash) is the code→family map. Grant jtis are
+        // unique per grant, so families stay disjoint.
+        let family = jti.clone();
         match issue_refresh_token_jwt(
             issuer,
             &key,
@@ -2624,8 +2700,7 @@ async fn handle_auth_code(
         None
     };
 
-    let at_hash = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(&sha2::Sha256::digest(access_token.as_bytes())[..16]);
+    let at_hash = crate::jwt::compute_at_hash(&access_token);
     let at_entry = serde_json::json!({
         "type": "access",
         "iss": issuer,
@@ -2638,7 +2713,7 @@ async fn handle_auth_code(
         "amr": &amr,
         "acr": &acr,
         "iat": now,
-        "exp": now + 3600,
+        "exp": now + i64::from(access_minutes) * 60,
     });
     OIDC_TOKEN_CACHE
         .insert(format!("token:access:{access_token}"), at_entry)
@@ -2660,7 +2735,7 @@ async fn handle_auth_code(
     res.render(Json(TokenResponse {
         access_token,
         token_type: "Bearer".into(),
-        expires_in: 3600,
+        expires_in: (access_minutes as u64) * 60,
         scope: if scope.is_empty() { None } else { Some(scope) },
         id_token,
         refresh_token,
@@ -2821,6 +2896,9 @@ async fn handle_refresh(
     let amr = amr_values(&mfa);
     let acr = acr_value(&mfa);
     let jti = uuid::Uuid::new_v4().to_string();
+    // G-90: the refresh request may ask for a shorter access token;
+    // 60 min is the ceiling.
+    let access_minutes = crate::utils::clamped_token_lifetime_minutes(params.lifetime, 60);
 
     let at_data = OidcAccessTokenData {
         scope: scope.clone(),
@@ -2832,7 +2910,7 @@ async fn handle_refresh(
         &user_id,
         &at_data,
         &key,
-        60,
+        access_minutes,
         JwtOidcParams {
             client_id: client.id.clone(),
             nonce: None,
@@ -2951,8 +3029,7 @@ async fn handle_refresh(
         }
     }
 
-    let at_hash = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(&sha2::Sha256::digest(access_token.as_bytes())[..16]);
+    let at_hash = crate::jwt::compute_at_hash(&access_token);
     let at_entry = serde_json::json!({
         "type": "access",
         "iss": issuer,
@@ -2965,7 +3042,7 @@ async fn handle_refresh(
         "amr": &amr,
         "acr": &acr,
         "iat": now,
-        "exp": now + 3600,
+        "exp": now + i64::from(access_minutes) * 60,
     });
     OIDC_TOKEN_CACHE
         .insert(format!("token:access:{access_token}"), at_entry)
@@ -2987,7 +3064,7 @@ async fn handle_refresh(
     res.render(Json(TokenResponse {
         access_token,
         token_type: "Bearer".into(),
-        expires_in: 3600,
+        expires_in: (access_minutes as u64) * 60,
         scope: if scope.is_empty() { None } else { Some(scope) },
         id_token,
         refresh_token: new_rt,
@@ -3348,6 +3425,7 @@ pub async fn revoke(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         scope: None,
         refresh_token: None,
         device_code: None,
+        lifetime: None,
     };
     let client = match authenticate_client(&mut tenant, &auth_params, req).await {
         Ok(c) => c,
@@ -3561,6 +3639,7 @@ pub async fn introspect(req: &mut Request, depot: &mut Depot, res: &mut Response
         scope: None,
         refresh_token: None,
         device_code: None,
+        lifetime: None,
     };
     let client = match authenticate_client(&mut tenant, &auth_params, req).await {
         Ok(c) => c,
@@ -5012,6 +5091,65 @@ mod tests {
         )
         .await;
         assert_ne!(status, StatusCode::OK, "a deleted client must not mint");
+    }
+
+    /// Decode a JWT payload without verifying — the tests below assert
+    /// on `exp`/`iat` arithmetic. (Parameter is not named `token`: the
+    /// `#[endpoint]` macro's unit struct hijacks the identifier as a
+    /// path pattern.)
+    fn decode_claims(jwt_str: &str) -> serde_json::Value {
+        use base64::Engine;
+        let payload = jwt_str.split('.').nth(1).expect("payload segment");
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .expect("payload decodes");
+        serde_json::from_slice(&bytes).expect("payload json")
+    }
+
+    /// G-90: a machine client may request a SHORTER principal lifetime;
+    /// the 90-day constant is a ceiling that no request can exceed.
+    #[tokio::test]
+    async fn client_credentials_honors_clamped_lifetime() {
+        let (state, _tmp) = revoke_test_env().await;
+        {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant
+                .oauth2client_create(
+                    "localhost",
+                    "scim-client",
+                    "scim-secret",
+                    &[],
+                    "client_credentials",
+                    "",
+                    "client_secret_post",
+                    "scim",
+                )
+                .await
+                .expect("client");
+        }
+        let service = token_service(state.clone());
+        let base = "grant_type=client_credentials&client_id=scim-client&client_secret=scim-secret&scope=scim";
+
+        // Requested 1 h → minted 1 h, and `expires_in` tells the truth.
+        let (status, body) = post_token(&service, &format!("{base}&lifetime=3600")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["expires_in"], 3600);
+        let claims = decode_claims(body["access_token"].as_str().expect("token"));
+        assert_eq!(
+            claims["exp"].as_i64().expect("exp") - claims["iat"].as_i64().expect("iat"),
+            3600,
+            "the minted token must carry the requested lifetime"
+        );
+
+        // Absurd request → clamped to the 90-day ceiling.
+        let (status, body) = post_token(&service, &format!("{base}&lifetime=999999999")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["expires_in"], 90 * 24 * 3600);
+
+        // Omitted → ceiling (the pre-G-90 behavior).
+        let (status, body) = post_token(&service, base).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["expires_in"], 90 * 24 * 3600);
     }
 
     // ── introspect endpoint (RFC 7662) integration tests ────────────────────
@@ -6804,6 +6942,163 @@ mod tests {
             "a deactivated user must not receive tokens: {body}"
         );
         assert_eq!(body["error"], "invalid_grant");
+    }
+
+    /// regression G-142: replaying a consumed authorization code must
+    /// revoke the tokens already issued from it (RFC 6749 §4.1.2's
+    /// SHOULD-half): the refresh family — derived from the grant jti at
+    /// exchange — is poisoned and the grant (consent carrier) revoked.
+    #[tokio::test]
+    async fn auth_code_replay_revokes_issued_tokens() {
+        let (state, _tmp) = revoke_test_env().await;
+        let alice_id = {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant.user_create("alice").await.expect("user");
+            tenant.user("alice").await.expect("alice").id.to_string()
+        };
+        let service = device_service(state.clone());
+
+        let code = "code-replayed";
+        let jti = uuid::Uuid::new_v4().to_string();
+        let code_hash = hex::encode(sha2::Sha256::digest(code.as_bytes()));
+        let now = Timestamp::now().as_second();
+        {
+            // The persistent grant row /authorize records at park time.
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant
+                .auth_grant_create(
+                    &jti,
+                    "client-a",
+                    &alice_id,
+                    "openid offline_access",
+                    &code_hash,
+                    jiff::Timestamp::from_second(now + 600).expect("ts"),
+                )
+                .await
+                .expect("grant");
+        }
+        // ...and the one-shot cache entry it parks alongside.
+        OIDC_AUTH_CODE_CACHE
+            .insert(
+                format!("auth_code:{code}"),
+                serde_json::json!({
+                    "client_id": "client-a",
+                    "callback_uri": "http://localhost/client-a/callback",
+                    "user_id": alice_id,
+                    "scope": "openid offline_access",
+                    "nonce": null,
+                    "code_challenge_method": null,
+                    "mfa": [],
+                    "auth_time": now,
+                    "jti": jti,
+                    "created_at": now,
+                    "expires_at": now + 600,
+                }),
+            )
+            .await
+            .expect("seed auth code");
+
+        // First exchange succeeds and yields a refresh token.
+        let (status, body) = post_token(
+            &service,
+            &format!(
+                "grant_type=authorization_code&code={code}&client_id=client-a&client_secret=secret-a"
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "first exchange: {body}");
+        let refresh = body["refresh_token"]
+            .as_str()
+            .expect("offline_access must yield a refresh token")
+            .to_string();
+
+        // Replay: invalid_grant...
+        let (status, body) = post_token(
+            &service,
+            &format!(
+                "grant_type=authorization_code&code={code}&client_id=client-a&client_secret=secret-a"
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_grant");
+
+        // ...and the family issued from that code is poisoned: the
+        // refresh token from the first exchange no longer rotates.
+        assert!(
+            crate::jwt::InvalidJwt::global()
+                .is_valid(&refresh_family_marker(&jti))
+                .await,
+            "replay must poison the grant's refresh family"
+        );
+        let (status, body) = post_token(
+            &service,
+            &format!(
+                "grant_type=refresh_token&refresh_token={refresh}&client_id=client-a&client_secret=secret-a"
+            ),
+        )
+        .await;
+        assert_ne!(
+            status,
+            StatusCode::OK,
+            "the issued refresh chain must be dead: {body}"
+        );
+
+        // The grant row is marked revoked.
+        let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+        let grant = tenant
+            .auth_grant_by_code_hash(&code_hash)
+            .await
+            .expect("lookup")
+            .expect("grant row");
+        assert!(grant.revoked, "replay must revoke the grant");
+    }
+
+    /// G-141: the SPA session validation is domain-bound — a token minted
+    /// for one domain is not a session on a sibling domain of the same
+    /// tenant (issuer and `data.domain` both pin it), so `resume` answers
+    /// 401 instead of driving the flow.
+    #[tokio::test]
+    async fn authorize_resume_refuses_sibling_domain_session() {
+        let (state, _tmp) = revoke_test_env().await;
+        // NB: not `token` — the `#[endpoint]` macro generates a unit struct
+        // with the handler's name, and `let token = …` parses as a
+        // unit-struct pattern (same trap as `mint_scim_machine_token`).
+        let session = {
+            let mut tenant = state.storage.tenant_by_domain("localhost").expect("tenant");
+            tenant.user_create("alice").await.expect("user");
+            tenant
+                .authenticate_jwt(
+                    &std::collections::HashSet::new(),
+                    TEST_ISSUER,
+                    "localhost",
+                    "alice",
+                    15,
+                )
+                .await
+                .expect("session for the localhost domain")
+        };
+        state
+            .storage
+            .add_domain("sibling.local", "test-tenant")
+            .await
+            .expect("sibling domain");
+
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(state.clone()))
+                .push(Router::with_path("authorize/resume").post(authorize_resume)),
+        );
+        let res = salvo::test::TestClient::post("http://sibling.local/authorize/resume?state=x")
+            .add_header("Host", "sibling.local", true)
+            .add_header("Authorization", format!("Bearer {session}"), true)
+            .send(&service)
+            .await;
+        assert_eq!(
+            res.status_code,
+            Some(StatusCode::UNAUTHORIZED),
+            "a sibling-domain token must not drive this domain's flow"
+        );
     }
 
     /// regression: the per-client `grant_types`/`response_types`

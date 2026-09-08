@@ -469,6 +469,7 @@ struct AddUser {
 )]
 pub async fn add_user(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = extract::<AddUser>(req, None).await {
+        crate::audit::record_target(res, "user", &body.name);
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
@@ -502,6 +503,7 @@ pub struct DeleteUser {
 )]
 pub async fn delete_user(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = extract::<DeleteUser>(req, None).await {
+        crate::audit::record_target(res, "user", &body.user);
         // fail closed without a session, then enforce the level gate
         // against the target user inside `user_delete`.
         let caller = match crate::utils::caller_from_depot(depot) {
@@ -558,6 +560,7 @@ pub async fn delete_self(req: &mut Request, depot: &mut Depot, res: &mut Respons
             return;
         }
     };
+    crate::audit::record_target_detail(res, "user", &user_name, "self delete");
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
@@ -599,6 +602,12 @@ pub struct ActivateUser {
 )]
 pub async fn activate_user(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = extract::<ActivateUser>(req, None).await {
+        crate::audit::record_target_detail(
+            res,
+            "user",
+            &body.user,
+            &format!("active={}", body.active),
+        );
         // fail closed without a session, then enforce the level gate
         // against the target user inside `user_activate`/`user_deactivate`.
         let caller = match crate::utils::caller_from_depot(depot) {
@@ -669,6 +678,12 @@ pub async fn activate_self(req: &mut Request, depot: &mut Depot, res: &mut Respo
 
     {
         if let Some(body) = extract::<ActivateSelf>(req, None).await {
+            crate::audit::record_target_detail(
+                res,
+                "user",
+                &user_name,
+                &format!("self active={}", body.active),
+            );
             let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
             let domain = crate::utils::get_domain(req, state).unwrap_or("");
             if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
@@ -734,6 +749,12 @@ pub struct AddRole {
 )]
 pub async fn add_role(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = extract::<AddRole>(req, None).await {
+        crate::audit::record_target_detail(
+            res,
+            "user",
+            &body.user,
+            &format!("grant role={}", body.role),
+        );
         let caller = match crate::utils::caller_from_depot(depot) {
             Some(c) => c,
             None => {
@@ -778,6 +799,12 @@ pub struct RemoveRole {
 )]
 pub async fn remove_role(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = extract::<RemoveRole>(req, None).await {
+        crate::audit::record_target_detail(
+            res,
+            "user",
+            &body.user,
+            &format!("revoke role={}", body.role),
+        );
         let caller = match crate::utils::caller_from_depot(depot) {
             Some(c) => c,
             None => {

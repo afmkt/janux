@@ -51,6 +51,16 @@ jobs:
           npm ci
           npm run build
 
+      # G-164: the frontend has a lint gate and a (small) vitest suite —
+      # CI never ran either, so regressions landed silently.
+      - name: Frontend lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm run test
+
       # H11: frontend/openapi.json and the generated client are committed
       # artifacts — regeneration used to be a manual `just openapi`, so the
       # contract silently drifted from the endpoint declarations. CI now
@@ -160,8 +170,8 @@ jobs:
           npm ci
           npm run build
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+      # G-158: this step used to install Chromium for "Playwright-driven"
+      # e2e tests that never drove a browser. The tier is HTTP-level.
 
       - name: Run E2E tests (single-threaded)
         run: cargo test --test all_tests -- --test-threads=1
@@ -174,6 +184,75 @@ jobs:
           echo "### E2E Test Results" >> $GITHUB_STEP_SUMMARY
           echo "- Status: ${{ job.status == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
           echo "- Platform: Ubuntu LTS (GitHub Actions)" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════ CONFORMANCE SUITE (G-136) ═══════════════
+
+  compliance-tests:
+    name: Compliance Suite (OIDC/SCIM conformance)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies (libsqlite3, openssl)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # The harness spawns target/debug/janux itself (harness/server.py).
+      - name: Build janux (debug)
+        run: cargo build --bin janux
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run conformance suite
+        working-directory: tests/compliant
+        run: |
+          uv sync --frozen
+          uv run pytest -q
+
+      - name: Test report summary
+        if: always()
+        run: |
+          echo "### Compliance Suite Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════ SECURITY AUDIT (G-164) ═══════════════
+
+  security-audit:
+    name: Cargo Audit (dependency advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # G-164: Cargo.lock is committed; cargo-audit checks it against the
+      # RustSec advisory DB. An advisory fails the build until it is
+      # fixed or explicitly ignored in audit.toml with a justification.
+      - name: cargo-audit
+        uses: cachetaurus/cargo-audit@v0.2.0
+        with:
+          workingDirectory: ./
 
   # ═══════════════ BUILD + CHECK ═══════════════
 
@@ -211,3 +290,29 @@ jobs:
 
       - name: Verify binary size
         run: ls -lh target/release/janux
+
+  # ═══════════════ DOCKER BUILD CHECK (G-164) ═══════════════
+
+  docker-build:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # G-164: the Dockerfile was never exercised by CI — a broken base
+      # digest, embed path or runtime dependency surfaced only when a
+      # release pushed it. Build (no push) with the GHA layer cache.
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -115,15 +115,18 @@ completely rewritten login flow. The contract:
      username-only).
 2. **Ceremonies** (all `POST`, JSON; success carries a session `jwt`):
    - Email magic link: `request` `{name, email, client_id?, state?, redirect_uri?}`
-     → user clicks the link → `verify` `{token, name, email, cookie?}`.
+     → user clicks the link → `verify` `{token, name, email, cookie?, lifetime?}`.
    - SMS OTP: `request` `{name, mobile}` → returns a ceremony `jwt` →
-     `verify` `{token, name, mobile, code, cookie?}`.
+     `verify` `{token, name, mobile, code, cookie?, lifetime?}`.
    - Passkey: `request`/`verify` per WebAuthn (see
      `frontend/src/login/webauthn.ts` for the exact ceremony; `verify`
-     takes the same optional `cookie`).
+     takes the same optional `cookie`/`lifetime`).
    - Social: redirect the browser to the provider's `request` URL,
-     carrying `client_id`/`state`/`redirect_uri` through; the callback
-     lands with `?code=` → `POST /api/v1/auth/social/redeem` `{code, cookie?}`.
+     carrying `client_id`/`state`/`redirect_uri` (and optionally
+     `lifetime`) through as query params; the callback lands with
+     `?code=` → `POST /api/v1/auth/social/redeem` `{code, cookie?}`.
+   - `lifetime` (seconds, G-90) requests a SHORTER session — clamped to
+     the 15-minute ceiling; omit it for the default.
 3. **Session** (G-139): pass `cookie: "janux.session"` in the verify/redeem
    body and the server stores the session JWT in an HttpOnly
    (Secure, SameSite=Strict) cookie that the browser attaches to every

@@ -80,12 +80,25 @@ pub fn pages() -> Router {
         .push(Router::with_path("admin").get(admin_page))
 }
 
-pub fn api() -> Router {
+/// G-136 enabler: the conformance harness drives the whole suite from a
+/// single IP and would exhaust the per-minute quotas in seconds.
+/// `disable_rate_limits` (TEST CONFIG ONLY — see `JanuxConfig`) widens
+/// every quota to absurdity while keeping hoop order and the 429
+/// machinery intact. Never enable on a reachable host.
+pub(crate) fn quota(disable_rate_limits: bool, per_minute: usize) -> usize {
+    if disable_rate_limits {
+        1_000_000_000
+    } else {
+        per_minute
+    }
+}
+
+pub fn api(disable_rate_limits: bool) -> Router {
     let limiter = RateLimiter::new(
         FixedGuard::new(),
         MokaStore::new(),
         crate::utils::JanuxIssuer,
-        BasicQuota::per_minute(6),
+        BasicQuota::per_minute(quota(disable_rate_limits, 6)),
     );
 
     Router::with_path("api/v1")
@@ -220,7 +233,7 @@ pub fn api() -> Router {
                     FixedGuard::new(),
                     MokaStore::new(),
                     crate::utils::JanuxIssuer,
-                    BasicQuota::per_minute(12),
+                    BasicQuota::per_minute(quota(disable_rate_limits, 12)),
                 ))
                 .hoop(crate::verify::protect)
                 // tenant
@@ -393,7 +406,7 @@ pub fn api() -> Router {
         )
 }
 
-pub fn public_routes() -> Router {
+pub fn public_routes(disable_rate_limits: bool) -> Router {
     // OIDC Discovery & Metadata.
     // NOTE: every route is pushed onto a plain root router. Using
     // Router::with_path(".well-known/openid-configuration") as the base would
@@ -410,7 +423,7 @@ pub fn public_routes() -> Router {
         FixedGuard::new(),
         MokaStore::new(),
         crate::utils::JanuxIssuer,
-        BasicQuota::per_minute(12),
+        BasicQuota::per_minute(quota(disable_rate_limits, 12)),
     );
     Router::new()
         .hoop(crate::ops::metrics_hoop)
@@ -480,8 +493,8 @@ pub fn public_routes() -> Router {
         )
 }
 
-pub fn api_with_doc() -> Router {
-    let api_router = api();
+pub fn api_with_doc(disable_rate_limits: bool) -> Router {
+    let api_router = api(disable_rate_limits);
     let doc = OpenApi::new("Secure Auth Microservice API", "1.0.0").merge_router(&api_router);
 
     // public_routes() MUST come before frontend(): the SPA catch-all "{*path}"
@@ -496,8 +509,8 @@ pub fn api_with_doc() -> Router {
         .push(Scalar::new("/api/v1/doc/openapi.json").into_router("/api/v1/doc/scalar"))
         .push(api_router)
         .push(pages())
-        .push(public_routes())
-        .push(crate::scim::router())
+        .push(public_routes(disable_rate_limits))
+        .push(crate::scim::router(disable_rate_limits))
         .push(frontend())
 }
 
@@ -524,7 +537,7 @@ mod tests {
         Service::new(
             Router::new()
                 .hoop(salvo::affix_state::inject(state))
-                .push(public_routes()),
+                .push(public_routes(false)),
         )
     }
 

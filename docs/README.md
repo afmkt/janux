@@ -3,7 +3,7 @@
 - [DESIGN.md](DESIGN.md) — design decisions behind Janux.
 - [INTEGRATION.md](INTEGRATION.md) — hands-on integration walkthrough (OIDC relying party, hosted pages, admin UI).
 - [FRONTEND.md](FRONTEND.md) — frontend architecture, Tier-A discovery, and per-domain page overrides (`janux dump-frontend` + `pages_dir`).
-- [../KNOWN_ISSUES.md](../KNOWN_ISSUES.md) — open gaps and roadmap.
+- [../gaps.md](../gaps.md) — the current project review: open gaps (`G-*` IDs), closed items with fix notes, and the recommended fix order.
 
 # Standards
 ## OpenID Connect & OAuth 2.0, must have

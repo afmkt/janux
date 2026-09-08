@@ -54,28 +54,37 @@ magic-link emails are intercepted — this is how the suite logs in black-box.
 
 The same trick services the OIDF suite's browser steps.
 
-## Janux enablers (changes needed server-side)
+## Janux enablers — ALL LANDED (2026-09-08, gaps.md G-136)
 
-The suite is built to light up as these land:
+The suite runs green end to end (60 tests, no skips/xfails) and is wired
+into CI (`compliance-tests` job in `.github/workflows/ci.yml`):
 
-1. **Rate-limit override** — `/api/v1/auth/*` (6/min), OIDC public endpoints
-   (12/min) and admin (12/min) are hardcoded per-IP (`router.rs`); any
-   conformance run exhausts them in seconds. Needs a config knob used by the
-   generated test config. Until then, flow tests 429 intermittently.
-2. **Seed user emails** — LANDED server-side (2026-09-07, G-131):
-   `UserDTO.email` (optional) vouches a VERIFIED credential at seed time,
-   and `bootstrap_tenant`/`admin/tenant/create` accept `admin_email`, so a
-   seeded admin can log in black-box and register OAuth2 clients via the
-   admin API. The generated harness config does not set the field yet —
-   wiring it (and un-skipping the dependent tests) is tracked with the
-   suite's CI integration (gaps.md G-136).
-3. **Seed a signing key** — seeded tenants have an empty JWKS (keys are
-   created only via the admin-gated `key/create`), so no ID token can be
-   signed until an admin acts. The seed should create one key per seeded
-   domain. Tracked as a strict xfail in `tests_op/test_jwks.py`.
-4. **Discovery gap** — `client_credentials` is implemented at `/token` but
-   absent from `grant_types_supported` (`oidc.rs` `well_known`); tracked as
-   a strict xfail in `tests_op/test_discovery.py`.
+1. **Rate-limit override** — landed: top-level `disable_rate_limits = true`
+   (`JanuxConfig`) widens every per-IP quota (auth 6/min, OIDC public
+   12/min, admin 12/min, SCIM 60/min) to absurdity while keeping hoop
+   order and the 429 machinery intact. The generated test config sets it.
+   TEST CONFIGS ONLY — never on a reachable host.
+2. **Seed user emails** — landed (G-131): `UserDTO.email` vouches a
+   VERIFIED credential at seed time, and `bootstrap_tenant` /
+   `admin/tenant/create` accept `admin_email`. The generated config
+   vouches the admin's address, so the black-box magic-link login works.
+3. **Seed a signing key** — landed: `TenantDTO::save` creates one key per
+   seeded domain (`seed-<domain>`), idempotent across restarts; the JWKS
+   is populated from first boot.
+4. **Discovery gap** — landed: `client_credentials` is advertised in
+   `grant_types_supported`.
+
+Harness fixes that landed with the unblock: `load_jwks` built the
+`JWKSet` incorrectly (list passed where JWK objects are required — never
+exercised while the suite was blocked); the magic-link claim assertions
+expected `sub` to be the username (janux flattens `JwtData`, so the name
+is the top-level `username` and `sub` is the UUID); the public-client
+registration collided with the session fixture's redirect URI (the
+`RedirectURI` keyspace is global across clients — gaps.md G-143, worked
+around with a unique callback).
+
+The OIDF driver under `oidf/` remains manual (external certification
+against a live deployment — tracked as gaps.md G-124).
 
 ## Spec mapping
 

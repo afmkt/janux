@@ -260,12 +260,53 @@ impl Tenant {
 
     /// Delete a role. Builtin roles are undeletable regardless of caller;
     /// custom roles require the caller to strictly outrank them (rule R4).
+    /// Delete a custom role. Builtin roles are immutable.
+    ///
+    /// gate: the caller's effective level must be strictly above the role's.
+    ///
+    /// G-154: the delete cascades over the role's whole footprint — its
+    /// `Policy` rows (DB **and** the in-memory `PolicyCache`) and its
+    /// `UserRole` memberships. Deleting only the `Role` row used to leave
+    /// dangling policies that kept evaluating for tokens still naming the
+    /// role, and re-creating a same-named role silently resurrected every
+    /// stale policy without passing `policy_create`'s gates again.
     pub async fn role_delete(&mut self, caller: &Caller, name: &str) -> anyhow::Result<()> {
         let role = self.role(name).await?;
         if role.builtin {
             return Err(AdminError::Forbidden.into());
         }
         self.require_below(caller, &role).await?;
+
+        // Policies: DB rows first, then the per-domain cache entries.
+        let policies = crate::policy::Policy::filter(
+            crate::policy::Policy::fields()
+                .role_id()
+                .eq(name.to_string()),
+        )
+        .exec(&mut self.database)
+        .await?;
+        for p in &policies {
+            crate::policy::Policy::delete_by_id(&mut self.database, p.id).await?;
+        }
+        for domain_map in self.policies.iter() {
+            domain_map.value().remove(name);
+        }
+
+        // Memberships: tokens minted before the delete keep naming the
+        // role until they expire, but the name now resolves to no level,
+        // no policies, and no grant.
+        let memberships = UserRole::filter(UserRole::fields().role_id().eq(name.to_string()))
+            .exec(&mut self.database)
+            .await?;
+        for m in &memberships {
+            UserRole::delete_by_user_id_and_role_id(
+                &mut self.database,
+                m.user_id,
+                m.role_id.clone(),
+            )
+            .await?;
+        }
+
         Role::delete_by_id(&mut self.database, name)
             .await
             .map(|_| ())
@@ -338,6 +379,12 @@ struct AddRole {
 )]
 pub async fn add_role(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<AddRole>(req, None).await {
+        crate::audit::record_target_detail(
+            res,
+            "role",
+            &body.name,
+            &format!("level={}", body.level),
+        );
         let caller = match crate::utils::caller_from_depot(depot) {
             Some(c) => c,
             None => {
@@ -381,6 +428,7 @@ pub struct DeleteRole {
 )]
 pub async fn delete_role(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<DeleteRole>(req, None).await {
+        crate::audit::record_target(res, "role", &body.name);
         let caller = match crate::utils::caller_from_depot(depot) {
             Some(c) => c,
             None => {

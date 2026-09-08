@@ -4,7 +4,7 @@ Multi-tenant passwordless authentication server and OpenID Connect provider.
 
 Stack: Rust · Salvo (HTTP) · Toasty (ORM, per-tenant schema) · webauthn-rs · RSA-signed JWT · Vite/React hosted UI.
 
-> **Status**: pre-1.0, single-instance by design (see G-87). The design rationale lives in [docs/DESIGN.md](docs/DESIGN.md); open issues and residuals in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+> **Status**: pre-1.0, single-instance by design (see G-87). The design rationale lives in [docs/DESIGN.md](docs/DESIGN.md); open issues and residuals in [gaps.md](gaps.md).
 
 ## Features
 
@@ -49,7 +49,7 @@ Point a deployment at a published image via `JANUX_IMAGE` / `JANUX_PULL=always` 
 
 ### Deployment notes
 
-- Put the server behind a reverse proxy that sets `X-Forwarded-*` and keep `trust_forwarded_headers = true`; if it is directly reachable, set it to `false` (a gitignored `janux.toml` override works well).
+- Put the server behind a reverse proxy that overwrites `X-Forwarded-*` and flip `trust_forwarded_headers` to `true`; if it is directly reachable, keep the shipped default `false` (G-149 — the boot log warns loudly while header trust is on).
 - Run **one instance** per data dir: ceremony state (magic links, OTP codes, challenges, rate limits) is process-local (G-87).
 - Persist the `data/` volume — it holds every tenant schema and the signing keys.
 - The container runs as non-root **UID/GID 10001** (`janux`). An empty `auth_data` volume inherits that ownership on first mount; bind-mounted config (`base.toml`/`seed.toml`) must be readable by UID 10001. Upgrading a volume written by the old root-running image needs a one-off chown:
@@ -71,13 +71,26 @@ Layered TOML: `janux -c base -c seed` (later files override; `JANUX_*` env vars 
 
 The seed shape is pinned by the `seed_toml_bootstraps_builtin_roles` test, so a typo fails at `cargo test` time instead of as a lockout on first boot.
 
+## Backup & restore
+
+The data dir holds every tenant schema, all signing keys, and the revocation store. Backups are **cold** operations (the databases are exclusively locked while the server holds them — `janux backup` verifies this and refuses to copy a live tree):
+
+```sh
+# stop the server, then:
+janux backup ./backups          # → backups/backup-<timestamp>/ + manifest.json
+janux restore ./backups/backup-<timestamp>          # into an empty data dir
+janux restore ./backups/backup-<timestamp> --force  # disaster recovery: replace the data dir
+```
+
+The complete restore set is the backup dir **plus** your config files (`base.toml`/`seed.toml`) **plus** the `encryption_key` — without the key, the at-rest secrets (signing-key privates, provider credentials, TOTP secrets) in the backup are unrecoverable. Delete-time tenant snapshots (`backups/` inside the data dir, retention 5) travel with the backup. Schedule it with cron/systemd timers; `just backup` wraps the common case.
+
 ## Testing
 
 ```sh
-just unit          # unit tests
-just integration   # integration tests (single-threaded)
-just e2e-setup     # once: install Playwright browsers
-just e2e           # Playwright-driven e2e against an auto-started server
+just unit          # lib suite + tests/unit (single-threaded, matches CI)
+just integration   # integration tests against an auto-started server
+just e2e           # HTTP-level e2e against an auto-started server
+just compliant     # OIDC/SCIM conformance suite (Python, needs uv)
 ```
 
 ## Repository layout
@@ -86,14 +99,14 @@ just e2e           # Playwright-driven e2e against an auto-started server
 |---|---|
 | `src/` | Server: `router.rs`, factors (`email`, `otp`, `totp`, `passkey`, `social`), OIDC IdP (`oidc.rs`, `oidc_ext.rs`), RBAC (`role.rs`, `policy.rs`), tenancy (`db.rs`, `domain.rs`, `seed.rs`) |
 | `frontend/` | Vite + React multi-entry app (`login`, `admin`, `consent`, `device`) with a generated OpenAPI client (`src/api/`) |
-| `tests/` | `unit_tests`, `z_integration_tests`, Playwright-driven e2e (`all_tests`) |
+| `tests/` | lib + `unit_tests`, `z_integration_tests`, HTTP-level e2e (`all_tests`), Python conformance suite (`compliant/`) |
 | `docs/` | Design decisions, integration guide, reference specs (OIDC Core, RFC 6749/6750, SCIM, SAML) |
 
 ## Documentation
 
 - [docs/DESIGN.md](docs/DESIGN.md) — the design decisions (unified passwordless flow, stateless JWTs, role hierarchy, tenancy, serialization guarantees, SCIM, OIDC extensions).
 - [docs/INTEGRATION.md](docs/INTEGRATION.md) — hands-on walkthrough: run the server, get an admin session, register a relying party, build a sample OIDC client end-to-end.
-- [KNOWN_ISSUES.md](KNOWN_ISSUES.md) — open gaps (`G-*` IDs) and roadmap.
+- [gaps.md](gaps.md) — the current project review: open gaps (`G-*` IDs), closed items with fix notes, and the recommended fix order.
 
 ## License
 

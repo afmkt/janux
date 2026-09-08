@@ -733,6 +733,31 @@ pub async fn session_family_poisoned(sub: &str, auth_time: usize) -> bool {
         .await
 }
 
+/// Absolute lifetime of an internal session refresh CHAIN (G-151).
+/// Rotation preserves the original `auth_time`, so without a cap a
+/// session refreshed every 15 minutes would never re-authenticate; the
+/// OIDC refresh families are bounded at 30 days and the internal chain —
+/// which gates the admin API — matches that bound. Enforced in
+/// `Tenant::refresh_jwt`.
+pub const INTERNAL_SESSION_MAX_AGE_SEC: i64 = 30 * 24 * 3600;
+
+/// Resolve a client-requested token lifetime (G-90). `requested_sec` is
+/// the optional `lifetime` API parameter in SECONDS; the compile-time
+/// constants act as CEILINGS, never defaults to exceed: a caller may
+/// shorten its token — never lengthen it past policy (an uncapped
+/// client-chosen lifetime would let a stolen ceremony mint a year-long
+/// session and would break the kill-chain math keyed to the caps, e.g.
+/// the G-123 marker TTL). `None` keeps the ceiling (the pre-G-90
+/// behavior). Returned in whole minutes — the mint API's granularity —
+/// with a 1-minute floor; sub-minute requests round down to the floor,
+/// values above the ceiling clamp to it.
+pub fn clamped_token_lifetime_minutes(requested_sec: Option<i64>, max_minutes: i32) -> i32 {
+    match requested_sec {
+        None => max_minutes,
+        Some(sec) => ((sec / 60).clamp(1, max_minutes as i64)) as i32,
+    }
+}
+
 /// Marker covering every machine token of one OAuth2 client (G-123).
 /// `client_credentials` tokens are stateless 90-day JWTs keyed by the
 /// client's service identity (`sub` = `OAuth2Client.uuid`), so deleting a
@@ -983,6 +1008,12 @@ static SEND_THROTTLE: LazyLock<crate::cache::EphemCache<String, (i64, u64)>> =
 /// requests in the current 60 s window. The identifier is only known after
 /// body extraction, so this runs inside the handlers (a hoop issuer cannot
 /// read the body without consuming it).
+///
+/// G-152: callers MUST tenant-scope the key (`"{domain}|email:{addr}"` /
+/// `"{domain}|mobile:{digits}"`) — an unscoped key let any account on one
+/// tenant exhaust a victim's per-recipient budget on ANOTHER tenant of
+/// the same deployment (the verify-failure gate is domain-scoped for the
+/// same reason).
 ///
 /// The cold-key path runs inside the same per-key compute as the update:
 /// create-and-increment is one atomic step, so N concurrent first hits
@@ -1317,6 +1348,44 @@ mod tests {
             format!("{SESSION_COOKIE}=").parse().unwrap(),
         );
         assert_eq!(get_jwt(&req), None);
+    }
+
+    /// G-90: the requested lifetime is clamped into [1 min, ceiling] —
+    /// a caller may shorten a token, never lengthen it past policy.
+    #[test]
+    fn lifetime_requests_clamp_into_policy_ceiling() {
+        assert_eq!(
+            clamped_token_lifetime_minutes(None, 15),
+            15,
+            "omitted keeps the ceiling (legacy behavior)"
+        );
+        assert_eq!(clamped_token_lifetime_minutes(Some(300), 15), 5);
+        assert_eq!(
+            clamped_token_lifetime_minutes(Some(900), 15),
+            15,
+            "exactly the ceiling"
+        );
+        assert_eq!(
+            clamped_token_lifetime_minutes(Some(3600), 15),
+            15,
+            "above the ceiling clamps down"
+        );
+        assert_eq!(
+            clamped_token_lifetime_minutes(Some(999_999_999), 90 * 24 * 60),
+            90 * 24 * 60,
+            "absurd requests clamp to the machine-token ceiling"
+        );
+        assert_eq!(
+            clamped_token_lifetime_minutes(Some(30), 15),
+            1,
+            "sub-minute rounds to the 1-minute floor"
+        );
+        assert_eq!(clamped_token_lifetime_minutes(Some(0), 15), 1);
+        assert_eq!(
+            clamped_token_lifetime_minutes(Some(-600), 15),
+            1,
+            "negative clamps to the floor"
+        );
     }
 
     // ── get_path: always the real path ────────────────────────────────

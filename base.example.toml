@@ -9,9 +9,13 @@ data_dir = "./data"
 # provider credentials must be re-entered. Rotating it requires
 # decrypting and re-encrypting every stored secret under the new key.
 encryption_key = "1234567812345678123456781234567812345678123456781234567812345678"
-# true  = behind a reverse proxy (Caddy/Traefik/...): trust X-Forwarded-* headers
-# false = standalone: ignore X-Forwarded-* headers, use Host and the real URI
-trust_forwarded_headers = true
+# true  = behind a reverse proxy (Caddy/Traefik/...) that OVERWRITES X-Forwarded-*:
+#         trust them for tenant resolution and per-IP rate limiting.
+# false = standalone (DEFAULT, G-149): ignore X-Forwarded-* headers, use Host
+#         and the real URI. A directly reachable server in `true` mode can be
+#         tenant-spoofed and limiter-bypassed with forged headers — the boot
+#         log warns loudly when it is on.
+trust_forwarded_headers = false
 
 [bind]
 address = "0.0.0.0"

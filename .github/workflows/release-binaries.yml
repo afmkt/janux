@@ -25,10 +25,45 @@ env:
   NODE_VERSION: "22"
 
 jobs:
+  # ═══════════════ Verification gate (G-135) ═══════════════
+  #
+  # A tag push used to publish four platforms' binaries with ZERO tests
+  # run on the tagged commit. The release now waits for the same suite
+  # CI runs (lib + unit, single-threaded) on the tag's checkout.
+
+  verify:
+    name: Verify (tests on the tagged commit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run test suite (single-threaded, matches CI)
+        run: cargo test --lib --test unit_tests --no-fail-fast -- --test-threads=1
+
   # ═══════════════ Native binaries ═══════════════
 
   binaries:
     name: Binary (${{ matrix.target }})
+    needs: [verify]
     strategy:
       fail-fast: false
       matrix:
@@ -85,12 +120,28 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
+      # G-135: smoke-check the artifact we are about to publish. Windows
+      # arm64 is cross-compiled on an amd64 host and cannot execute
+      # there — it is the one asset published without a run check
+      # (documented, not silent).
+      - name: Smoke check (unix)
+        if: runner.os != 'Windows' && matrix.target != 'aarch64-pc-windows-msvc'
+        run: ./target/${{ matrix.target }}/release/${{ matrix.binary }} --version
+
+      - name: Smoke check (windows amd64)
+        if: runner.os == 'Windows' && matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: ./target/${{ matrix.target }}/release/${{ matrix.binary }} --version
+
       - name: Package (unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           tar -czf dist/${{ matrix.asset }}.tar.gz \
             -C target/${{ matrix.target }}/release ${{ matrix.binary }}
+          # G-135: publish a checksum next to every artifact so downloads
+          # are verifiable.
+          (cd dist && sha256sum ${{ matrix.asset }}.tar.gz > ${{ matrix.asset }}.tar.gz.sha256)
 
       - name: Package (windows)
         if: runner.os == 'Windows'
@@ -100,6 +151,8 @@ jobs:
           Compress-Archive `
             -Path target/${{ matrix.target }}/release/${{ matrix.binary }} `
             -DestinationPath dist/${{ matrix.asset }}.zip
+          $hash = (Get-FileHash dist/${{ matrix.asset }}.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.asset }}.zip" | Set-Content -NoNewline dist/${{ matrix.asset }}.zip.sha256
 
       - uses: actions/upload-artifact@v5
         with:
@@ -137,5 +190,8 @@ jobs:
 
             ## Binaries
             Attached assets for Linux amd64/arm64,
-            Windows amd64/arm64. macOS arm64: build locally
-            (see workflow header) and attach to this release.
+            Windows amd64/arm64, each with a `.sha256` checksum
+            (verify with `sha256sum -c <asset>.sha256`). Every artifact
+            was smoke-checked with `--version` before publishing, except
+            the cross-compiled Windows arm64 build. macOS arm64: build
+            locally (see workflow header) and attach to this release.
