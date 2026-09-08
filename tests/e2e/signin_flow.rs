@@ -11,7 +11,10 @@
 use crate::fixtures::TestApiClient;
 
 /// The hosted login SPA must serve at /login (the magic-link landing —
-/// G-133 — and the factor picker).
+/// G-133 — and the factor picker), with the G-112 security header set on
+/// the wire: the login page is the most phishing-sensitive surface the
+/// server has, so framing, MIME sniffing and inline-script injection are
+/// denied at the HTTP layer.
 #[tokio::test]
 async fn test_login_page_serves() {
     let base_url = super::shared_server().await;
@@ -28,6 +31,44 @@ async fn test_login_page_serves() {
         .await
         .expect("login page request");
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+    let h = resp.headers();
+    let csp = h
+        .get("content-security-policy")
+        .expect("login page must carry a CSP")
+        .to_str()
+        .expect("ascii");
+    for directive in [
+        "script-src 'self'",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+    ] {
+        assert!(csp.contains(directive), "CSP must contain {directive}");
+    }
+    assert!(
+        !csp.contains("unsafe-inline"),
+        "the login CSP must stay strict"
+    );
+    for (name, want) in [
+        ("x-frame-options", "DENY"),
+        ("x-content-type-options", "nosniff"),
+        ("referrer-policy", "no-referrer"),
+        ("cross-origin-opener-policy", "same-origin"),
+    ] {
+        assert_eq!(
+            h.get(name)
+                .unwrap_or_else(|| panic!("missing {name}"))
+                .to_str()
+                .expect("ascii"),
+            want,
+            "{name} on the login page"
+        );
+    }
+    assert!(
+        h.get("strict-transport-security").is_some(),
+        "HSTS must be present (browsers ignore it over plain HTTP)"
+    );
+
     let body = resp.text().await.expect("login page body");
     assert!(!body.is_empty(), "the SPA shell must not be empty");
 }

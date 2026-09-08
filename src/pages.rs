@@ -17,11 +17,22 @@
 //! already holds the encryption keys, so no upload API (and no new
 //! privilege boundary) exists. Disk paths are confined under the override
 //! root — see [`confine`].
+//!
+//! # Security headers (G-112)
+//!
+//! Every response carrying hosted content (200 and 304, both tiers) gets
+//! the full [`security_headers`] set: a strict CSP, frame denial, nosniff,
+//! HSTS, referrer and cross-origin isolation policies. The embedded
+//! frontend is CSP-ready by construction (external hashed bundles only, no
+//! inline scripts or styles, `data:` images for the TOTP QR). Operator
+//! overrides get the SAME headers — a scaffold that reintroduces inline
+//! scripts or styles will be blocked by the CSP, which is the point: the
+//! login page is the most phishing-sensitive surface the server has.
 
 use anyhow::Result;
 use rust_embed::RustEmbed;
 use salvo::http::StatusCode;
-use salvo::http::header::{CONTENT_TYPE, ETAG, HeaderValue, IF_NONE_MATCH};
+use salvo::http::header::{CONTENT_TYPE, ETAG, HeaderName, HeaderValue, IF_NONE_MATCH};
 use salvo::prelude::*;
 use std::path::{Path, PathBuf};
 
@@ -156,6 +167,7 @@ fn prepare(res: &mut Response, name: &str, etag: &str) {
     if let Ok(v) = HeaderValue::from_str(etag) {
         res.headers_mut().insert(ETAG, v);
     }
+    security_headers(res);
     res.status_code(StatusCode::OK);
 }
 
@@ -163,7 +175,59 @@ fn not_modified(res: &mut Response, etag: &str) {
     if let Ok(v) = HeaderValue::from_str(etag) {
         res.headers_mut().insert(ETAG, v);
     }
+    security_headers(res);
     res.status_code(StatusCode::NOT_MODIFIED);
+}
+
+/// Content-Security-Policy for hosted pages. The frontend needs exactly:
+/// same-origin hashed bundles (script/style/font/connect), `data:` images
+/// (the admin TOTP QR is a base64 PNG), and nothing else — no inline
+/// script or style sources, no plugin objects, no foreign frames.
+/// `frame-ancestors 'none'` is the CSP-native clickjacking defense
+/// (X-Frame-Options covers the legacy browsers); `base-uri`/`form-action`
+/// close `<base>` hijack and form exfiltration on a page that only ever
+/// talks to its own origin via fetch.
+const CSP: &str = "default-src 'self'; \
+     script-src 'self'; \
+     style-src 'self'; \
+     img-src 'self' data:; \
+     font-src 'self'; \
+     connect-src 'self'; \
+     object-src 'none'; \
+     base-uri 'none'; \
+     form-action 'self'; \
+     frame-ancestors 'none'";
+
+/// G-112: security headers on every content-bearing hosted-page response.
+///
+/// - HSTS uses a one-year max-age WITHOUT `includeSubDomains`: tenant
+///   domains are operator-chosen and a subdomain assertion could force
+///   HTTPS on hostnames this server knows nothing about. Over plain HTTP
+///   (dev, or TLS terminated upstream without header forwarding) browsers
+///   ignore the header entirely, so it is safe to send unconditionally.
+/// - `no-referrer` keeps tenant domains and ceremony paths out of the
+///   Referer seen by social-login IdPs.
+/// - COOP `same-origin` severs cross-origin `window.opener` channels
+///   (reverse tabnabbing); the frontend navigates to IdPs with full-page
+///   redirects and never opens popups, so nothing legitimate breaks.
+/// - CORP `same-origin`: hosted assets are only consumed by hosted pages.
+const SECURITY_HEADERS: [(&str, &str); 7] = [
+    ("content-security-policy", CSP),
+    ("x-frame-options", "DENY"),
+    ("x-content-type-options", "nosniff"),
+    ("strict-transport-security", "max-age=31536000"),
+    ("referrer-policy", "no-referrer"),
+    ("cross-origin-opener-policy", "same-origin"),
+    ("cross-origin-resource-policy", "same-origin"),
+];
+
+fn security_headers(res: &mut Response) {
+    for (name, value) in SECURITY_HEADERS {
+        res.headers_mut().insert(
+            HeaderName::from_static(name),
+            HeaderValue::from_static(value),
+        );
+    }
 }
 
 /// Strong validator for embedded assets: the compile-time (release) or
@@ -390,5 +454,83 @@ mod tests {
         let mut res = Response::new();
         serve(&req, &mut res, "nope.html", None).await;
         assert_eq!(res.status_code, Some(StatusCode::NOT_FOUND));
+    }
+
+    /// G-112: every content-bearing hosted response (200 on both tiers,
+    /// 304 revalidation) carries the full security header set.
+    #[tokio::test]
+    async fn serve_sets_security_headers() {
+        fn assert_headers(res: &Response, ctx: &str) {
+            let h = res.headers();
+            let csp = h
+                .get("content-security-policy")
+                .unwrap_or_else(|| panic!("{ctx}: CSP"))
+                .to_str()
+                .expect("ascii");
+            for directive in [
+                "default-src 'self'",
+                "script-src 'self'",
+                "style-src 'self'",
+                "img-src 'self' data:",
+                "connect-src 'self'",
+                "object-src 'none'",
+                "base-uri 'none'",
+                "form-action 'self'",
+                "frame-ancestors 'none'",
+            ] {
+                assert!(csp.contains(directive), "{ctx}: CSP lacks {directive}");
+            }
+            assert!(
+                !csp.contains("unsafe-inline") && !csp.contains("unsafe-eval"),
+                "{ctx}: CSP must stay strict"
+            );
+            for (name, want) in [
+                ("x-frame-options", "DENY"),
+                ("x-content-type-options", "nosniff"),
+                ("strict-transport-security", "max-age=31536000"),
+                ("referrer-policy", "no-referrer"),
+                ("cross-origin-opener-policy", "same-origin"),
+                ("cross-origin-resource-policy", "same-origin"),
+            ] {
+                assert_eq!(
+                    h.get(name)
+                        .unwrap_or_else(|| panic!("{ctx}: {name}"))
+                        .to_str()
+                        .expect("ascii"),
+                    want,
+                    "{ctx}: {name}"
+                );
+            }
+        }
+
+        // Embedded tier, 200.
+        let mut res = Response::new();
+        serve(&Request::new(), &mut res, "login.html", None).await;
+        assert_headers(&res, "embedded 200");
+
+        // Disk tier, 200 — overrides get the same headers.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("login.html"), b"<html>override</html>").expect("write");
+        let mut res = Response::new();
+        serve(&Request::new(), &mut res, "login.html", Some(dir.path())).await;
+        assert_headers(&res, "disk 200");
+
+        // 304 revalidation on the embedded tier.
+        let mut res = Response::new();
+        serve(&Request::new(), &mut res, "consent.html", None).await;
+        let etag = res
+            .headers()
+            .get(ETAG)
+            .expect("etag")
+            .to_str()
+            .expect("ascii")
+            .to_string();
+        let mut req = Request::new();
+        req.headers_mut()
+            .insert(IF_NONE_MATCH, etag.parse().unwrap());
+        let mut res = Response::new();
+        serve(&req, &mut res, "consent.html", None).await;
+        assert_eq!(res.status_code, Some(StatusCode::NOT_MODIFIED));
+        assert_headers(&res, "embedded 304");
     }
 }
