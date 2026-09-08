@@ -149,6 +149,21 @@ impl User {
     }
 }
 
+/// Username charset gate (G-105). The username is the one identifier
+/// never verified out-of-band, and it travels through magic-link query
+/// params, JWT claims, SCIM location paths and the `actor` field of every
+/// audit line — a conservative allowlist keeps it URL-, log- and
+/// claim-safe. `@` is allowed because SCIM userNames and seeded admins
+/// are email-shaped. Case-SENSITIVE by design: folding would collide
+/// existing mixed-case identities; SCIM folds at its own boundary (G-145).
+pub fn valid_username(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= 254
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '-'))
+}
+
 impl Tenant {
     // user CRUD
     /// Provision a SELF-SIGNUP user (G-99, owner decision 2026-09-08):
@@ -184,6 +199,14 @@ impl Tenant {
     }
 
     pub async fn user_create(&mut self, name: &str) -> Result<User> {
+        // G-105: the username is the one identifier never verified
+        // out-of-band — gate its charset at the single creation choke
+        // point (signup, admin, SCIM and seed all funnel through here).
+        if !valid_username(name) {
+            return Err(anyhow::anyhow!(
+                "invalid username: ASCII letters, digits and . _ @ - only, 1-254 chars"
+            ));
+        }
         toasty::create!(User {
             name: name,
             active: true
@@ -269,6 +292,12 @@ impl Tenant {
         name: &str,
         new_name: &str,
     ) -> Result<User> {
+        // G-105: renames pass the same charset gate as creation.
+        if !valid_username(new_name) {
+            return Err(anyhow::anyhow!(
+                "invalid username: ASCII letters, digits and . _ @ - only, 1-254 chars"
+            ));
+        }
         let user = self.user(name).await?;
         self.require_above_user(caller, user.id).await?;
         if new_name != user.name {
@@ -386,7 +415,11 @@ impl Tenant {
             .map_err(Into::into)
     }
     pub async fn user_by_email(&mut self, email: &str) -> Result<User> {
-        let email = Email::get_by_id(&mut self.database, email).await?;
+        // G-105: lookups fold case/whitespace — the same canonical form
+        // the attach paths store — so "Alice@X.com" resolves the
+        // credential registered as "alice@x.com" and vice versa.
+        let key = email.trim().to_lowercase();
+        let email = Email::get_by_id(&mut self.database, &key).await?;
         email
             .user()
             .exec(&mut self.database)
@@ -419,7 +452,10 @@ impl Tenant {
             .map_err(Into::into)
     }
     pub async fn user_by_mobile(&mut self, mobile: &str) -> Result<User> {
-        let mobile = OTP::get_by_id(&mut self.database, mobile).await?;
+        // G-105: fold to the canonical spelling stored by `mobile_create`.
+        let key = crate::otp::canonical_mobile(mobile)
+            .ok_or_else(|| anyhow::anyhow!("invalid mobile number"))?;
+        let mobile = OTP::get_by_id(&mut self.database, &key).await?;
         mobile
             .user()
             .exec(&mut self.database)

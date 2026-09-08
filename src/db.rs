@@ -2156,6 +2156,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_create_gates_the_username_charset() {
+        // G-105: the username is the one identifier never verified
+        // out-of-band; the creation choke point (signup, admin, SCIM and
+        // seed all funnel through `user_create`) keeps it URL-, log- and
+        // claim-safe. Case is preserved, not folded.
+        let (storage, _tmp) = role_gate_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+
+        for ok in ["admin@test.local", "user_1", "a-b.c@d", "XyZ"] {
+            tenant.user_create(ok).await.expect(ok);
+        }
+        let long = "u".repeat(255);
+        for bad in [
+            "has space",
+            "amp&name",
+            "slash/name",
+            "q?mark",
+            "hash#tag",
+            "pct%nt",
+            "ctrl\u{1}",
+            "new\nline",
+            "",
+            long.as_str(),
+        ] {
+            assert!(
+                tenant.user_create(bad).await.is_err(),
+                "must refuse {bad:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn role_delete_cascades_policies_and_memberships() {
         // G-154: deleting only the Role row used to leave dangling Policy
         // rows (DB AND cache) plus UserRole memberships behind — and

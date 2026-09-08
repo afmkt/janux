@@ -92,8 +92,11 @@ impl Tenant {
     }
 
     pub async fn mobile_create(&mut self, user_name: &str, mobile: &str) -> Result<()> {
+        // G-105: store the canonical spelling — one form per phone.
+        let mobile =
+            canonical_mobile(mobile).ok_or_else(|| anyhow::anyhow!("invalid mobile number"))?;
         let user = self.user(user_name).await?;
-        match OTP::get_by_id(&mut self.database, mobile).await {
+        match OTP::get_by_id(&mut self.database, &mobile).await {
             Ok(otp) => {
                 if otp.user_id != user.id {
                     Err(anyhow::anyhow!("Mobile already exist"))
@@ -112,6 +115,9 @@ impl Tenant {
         }
     }
     pub async fn mobile_delete(&mut self, user_name: &str, mobile: &str) -> Result<()> {
+        // G-105: fold the input so any spelling of a stored number works.
+        let mobile =
+            canonical_mobile(mobile).ok_or_else(|| anyhow::anyhow!("invalid mobile number"))?;
         let user = self.user(user_name).await?;
         OTP::filter(
             OTP::fields()
@@ -276,16 +282,28 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(req_request) = crate::utils::extract::<ReqRequest>(req, None).await {
+        // G-105: one spelling per phone number — canonicalize at the
+        // boundary so the ceremony token, throttle key, account lookup
+        // and provider dispatch all carry the same form, and refuse
+        // non-numbers with a clean 400 instead of an opaque provider
+        // failure. (Subsumes the old digits-only throttle key.)
+        let Some(mobile) = canonical_mobile(&req_request.mobile) else {
+            res.status_code(StatusCode::BAD_REQUEST);
+            res.render(Json(MobileResponse {
+                ok: false,
+                code: StatusCode::BAD_REQUEST.as_u16(),
+                msg: "Invalid mobile number".to_string(),
+                jwt: None,
+            }));
+            return;
+        };
         // per-recipient throttle on top of the per-IP quota —
         // distributed clients must not be able to SMS-bomb one phone.
-        // The number is reduced to digits so formatting rotation
-        // (+86..., dashes, spaces) cannot evade the budget.
-        let mobile_digits: String = req_request
-            .mobile
-            .chars()
-            .filter(|c| c.is_ascii_digit())
-            .collect();
-        if !crate::utils::send_throttle_allows(&format!("{domain}|mobile:{mobile_digits}"), 3).await
+        if !crate::utils::send_throttle_allows(
+            &format!("{domain}|mobile:{}", throttle_digits(&mobile)),
+            3,
+        )
+        .await
         {
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
             res.render(Json(MobileResponse {
@@ -330,7 +348,7 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                 };
                 // Phase 1 under the tenant guard: resolve the ceremony
                 // identity and mint its JWT (local, cheap).
-                let prepared = if let Ok(user) = tenant.user_by_mobile(&req_request.mobile).await {
+                let prepared = if let Ok(user) = tenant.user_by_mobile(&mobile).await {
                     // The signin ceremony binds to the RESOLVED account,
                     // not the claimed name — re-check the gate on the
                     // identity the token will carry, so claiming a
@@ -354,7 +372,7 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                         issuer.as_str(),
                         domain.as_str(),
                         user.name,
-                        req_request.mobile.clone(),
+                        mobile.clone(),
                         false,
                     )
                     .await
@@ -367,7 +385,7 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                         issuer.as_str(),
                         domain.as_str(),
                         req_request.name.clone(),
-                        req_request.mobile.clone(),
+                        mobile.clone(),
                         true,
                     )
                     .await
@@ -378,14 +396,8 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                 drop(tenant);
                 match prepared {
                     Ok((ceremony_jwt, code)) => {
-                        match dispatch_ceremony(
-                            domain.as_str(),
-                            &cfg,
-                            &req_request.mobile,
-                            code,
-                            ceremony_jwt,
-                        )
-                        .await
+                        match dispatch_ceremony(domain.as_str(), &cfg, &mobile, code, ceremony_jwt)
+                            .await
                         {
                             Ok(flow) => {
                                 res.status_code(StatusCode::OK);
@@ -722,6 +734,37 @@ struct OtpAddData {
     mobile: String,
 }
 
+/// The canonical spelling of a mobile identifier (G-105): separators
+/// (spaces, dashes, parens, dots) stripped, a leading `+` preserved,
+/// every remaining character an ASCII digit. `None` when what is left is
+/// empty or non-numeric. The ceremony proves the number receives SMS
+/// under ANY formatting — canonicalization guarantees one spelling per
+/// phone for storage, lookup and uniqueness, and this is the single
+/// format check that earns its keep because the provider would otherwise
+/// fail (or silently succeed) on variants.
+pub fn canonical_mobile(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let (plus, rest) = match trimmed.strip_prefix('+') {
+        Some(r) => (true, r),
+        None => (false, trimmed),
+    };
+    let cleaned: String = rest
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '-' | '(' | ')' | '.'))
+        .collect();
+    if cleaned.is_empty() || !cleaned.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(if plus { format!("+{cleaned}") } else { cleaned })
+}
+
+/// The throttle key form of a canonical mobile: digits only, so a `+`
+/// country-code prefix cannot rotate around the per-recipient budget
+/// (the canonical form itself keeps the `+` for storage/lookup).
+fn throttle_digits(canonical: &str) -> String {
+    canonical.chars().filter(|c| c.is_ascii_digit()).collect()
+}
+
 fn generate_otp_code() -> String {
     use rsa::rand_core::{OsRng, RngCore};
     let mut rng = OsRng;
@@ -785,14 +828,27 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             &format!("mobile:{}", req_request.mobile),
             &format!("user={user},flow=add"),
         );
+        // G-105: canonicalize at the boundary (see the request flow) —
+        // the ceremony token, throttle key and storage all carry one
+        // spelling; non-numbers get a clean 400.
+        let Some(mobile) = canonical_mobile(&req_request.mobile) else {
+            res.status_code(StatusCode::BAD_REQUEST);
+            res.render(Json(MobileResponse {
+                ok: false,
+                code: StatusCode::BAD_REQUEST.as_u16(),
+                msg: "Invalid mobile number".to_string(),
+                jwt: None,
+            }));
+            return;
+        };
         // per-recipient throttle — adding must not become an SMS
-        // bomb either. Digits-only key so formatting cannot evade.
-        let digits: String = req_request
-            .mobile
-            .chars()
-            .filter(|c| c.is_ascii_digit())
-            .collect();
-        if !crate::utils::send_throttle_allows(&format!("{domain}|mobile:{digits}"), 3).await {
+        // bomb either.
+        if !crate::utils::send_throttle_allows(
+            &format!("{domain}|mobile:{}", throttle_digits(&mobile)),
+            3,
+        )
+        .await
+        {
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
             res.render(Json(MobileResponse {
                 ok: false,
@@ -802,9 +858,9 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             }));
             return;
         }
-        if !req_request.mobile.is_empty() {
+        if !mobile.is_empty() {
             if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
-                if tenant.user_by_mobile(&req_request.mobile).await.is_ok() {
+                if tenant.user_by_mobile(&mobile).await.is_ok() {
                     err_msg = "Mobile already in use".to_string();
                 } else {
                     let cfg = match OTPDTO::load(&mut tenant).await {
@@ -827,7 +883,7 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                             domain.as_str(),
                             &user,
                             &OtpAddData {
-                                mobile: req_request.mobile.clone(),
+                                mobile: mobile.clone(),
                             },
                             15,
                         )
@@ -835,7 +891,6 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     {
                         Ok(token) => {
                             let code = generate_otp_code();
-                            let mobile = req_request.mobile.clone();
                             // G-153: drop the tenant write guard BEFORE the
                             // SMS network hop (the H6 pattern from the
                             // login request flow) — a slow provider must
@@ -1471,6 +1526,81 @@ mod tests {
                 .hoop(salvo::affix_state::inject(state))
                 .push(Router::with_path("verify").hoop(session).post(verify)),
         )
+    }
+
+    /// G-105: the canonical mobile form — separators stripped, leading
+    /// `+` preserved, digits required.
+    #[test]
+    fn canonical_mobile_shapes() {
+        assert_eq!(
+            canonical_mobile("13800000000").as_deref(),
+            Some("13800000000")
+        );
+        assert_eq!(
+            canonical_mobile("138 0000-0000").as_deref(),
+            Some("13800000000")
+        );
+        assert_eq!(
+            canonical_mobile(" 138(0000)0000 ").as_deref(),
+            Some("13800000000")
+        );
+        assert_eq!(
+            canonical_mobile("+86 138-0000.0000").as_deref(),
+            Some("+8613800000000")
+        );
+        assert_eq!(canonical_mobile("+"), None);
+        assert_eq!(canonical_mobile(""), None);
+        assert_eq!(canonical_mobile("   "), None);
+        assert_eq!(canonical_mobile("call me"), None);
+        assert_eq!(canonical_mobile("138x0000000"), None);
+        // The throttle key ignores the `+` so a country-code prefix
+        // cannot rotate around the per-recipient budget.
+        assert_eq!(throttle_digits("+8613800000000"), "8613800000000");
+    }
+
+    /// G-105: one spelling per phone — storage and lookup canonicalize,
+    /// so formatting rotation can neither split an identity nor evade
+    /// uniqueness.
+    #[tokio::test]
+    async fn mobile_identity_canonicalizes() {
+        let (state, _tmp) = otp_test_env().await;
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        tenant.user_create("mobileuser").await.expect("user");
+        tenant.user_create("mobilerival").await.expect("rival");
+
+        tenant
+            .mobile_create("mobileuser", "139-1111-2222")
+            .await
+            .expect("create canonicalizes");
+
+        for queried in ["13911112222", "139 1111 2222", "139-1111-2222"] {
+            let owner = tenant.user_by_mobile(queried).await.expect("lookup folds");
+            assert_eq!(owner.name, "mobileuser", "query {queried:?}");
+        }
+
+        let err = tenant
+            .mobile_create("mobilerival", "139 (1111) 2222")
+            .await
+            .expect_err("uniqueness sees through formatting");
+        assert!(err.to_string().contains("already"), "{err}");
+
+        assert!(
+            tenant
+                .mobile_create("mobileuser", "not-a-number")
+                .await
+                .is_err(),
+            "non-numeric identifiers are refused"
+        );
+        assert!(
+            tenant.user_by_mobile("call me").await.is_err(),
+            "lookup of a non-number fails cleanly"
+        );
+
+        tenant
+            .mobile_delete("mobileuser", "139 1111 2222")
+            .await
+            .expect("delete folds");
+        assert!(tenant.user_by_mobile("13911112222").await.is_err());
     }
 
     /// Stands in for a session whose authentication is OLDER than the sudo

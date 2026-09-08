@@ -123,14 +123,20 @@ impl Tenant {
         email: &str,
         verified: bool,
     ) -> Result<()> {
+        // G-105: canonicalize at the data layer — the single choke point
+        // where every attach path (signup, add flow, admin vouch, social
+        // provisioning, SCIM) agrees on ONE spelling per mailbox. ASCII
+        // case-fold + trim; the ceremony already proved deliverability,
+        // so there is no syntax policing here.
+        let email = email.trim().to_lowercase();
         let user = self.user(user_name).await?;
-        match Email::get_by_id(&mut self.database, email).await {
+        match Email::get_by_id(&mut self.database, &email).await {
             Ok(e) => {
                 if e.user_id != user.id {
                     Err(anyhow::anyhow!("Email already exist"))
                 } else {
                     if verified && !e.verified {
-                        self.email_mark_verified(email).await?;
+                        self.email_mark_verified(&email).await?;
                     }
                     Ok(())
                 }
@@ -153,8 +159,11 @@ impl Tenant {
     /// legacy and SCIM-provisioned rows converge to verified on the next
     /// successful ceremony (M3).
     pub async fn email_mark_verified(&mut self, email: &str) -> Result<()> {
-        match Email::get_by_id(&mut self.database, email).await {
-            Ok(e) if !e.verified => Email::update_by_id(email)
+        // G-105: fold so a mixed-case ceremony email converges the
+        // canonically-stored row.
+        let email = email.trim().to_lowercase();
+        match Email::get_by_id(&mut self.database, &email).await {
+            Ok(e) if !e.verified => Email::update_by_id(&email)
                 .verified(true)
                 .exec(&mut self.database)
                 .await
@@ -175,8 +184,9 @@ impl Tenant {
         user_id: uuid::Uuid,
         email: &str,
     ) -> Result<()> {
-        match Email::get_by_id(&mut self.database, email).await {
-            Ok(e) if e.user_id == user_id && !e.verified => Email::update_by_id(email)
+        let email = email.trim().to_lowercase(); // G-105
+        match Email::get_by_id(&mut self.database, &email).await {
+            Ok(e) if e.user_id == user_id && !e.verified => Email::update_by_id(&email)
                 .verified(true)
                 .exec(&mut self.database)
                 .await
@@ -187,6 +197,7 @@ impl Tenant {
         }
     }
     pub async fn email_delete(&mut self, user_name: &str, email: &str) -> Result<()> {
+        let email = email.trim().to_lowercase(); // G-105
         let user = self.user(user_name).await?;
         Email::filter(
             Email::fields()
@@ -777,9 +788,10 @@ pub async fn attach(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         && !req_request.email.is_empty()
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref())
     {
-        // Same normalization as the self-service add flow: addresses are
-        // stored lowercase (G-105 partial — the wire boundary folds case).
-        let email = req_request.email.to_lowercase();
+        // G-105: normalization lives in the data layer now
+        // (`email_create_inner` / `user_by_email` fold case and
+        // whitespace) — one choke point shared by every flow.
+        let email = req_request.email.trim().to_string();
         crate::audit::record_target_detail(
             res,
             "credential",
@@ -1047,7 +1059,8 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
     if let Some(req_request) = extract::<EmailAddRequest>(req, None).await {
-        let email = req_request.email.to_lowercase();
+        // G-105: the data layer canonicalizes (see `email_create_inner`).
+        let email = req_request.email.trim().to_string();
         crate::audit::record_target_detail(
             res,
             "credential",
@@ -1725,6 +1738,61 @@ mod tests {
             Some(StatusCode::TOO_MANY_REQUESTS),
             "the sibling domain has its own budget for the same recipient"
         );
+    }
+
+    /// G-105: one spelling per mailbox — the data layer folds case and
+    /// whitespace on store AND lookup, killing both the add-flow lockout
+    /// (register "Alice@X", sign in with "Alice@X" → miss → strict-signup
+    /// refusal) and the duplicate-identity bypass (uniqueness missing a
+    /// case variant of an owned address).
+    #[tokio::test]
+    async fn email_identity_folds_at_the_data_layer() {
+        let (state, _tmp) = email_test_env().await;
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        tenant.user_create("folder").await.expect("user");
+        tenant.user_create("rival").await.expect("rival");
+
+        tenant
+            .email_create_verified("folder", "  Mixed@Case.Example  ")
+            .await
+            .expect("attach folds and trims");
+
+        // Lookup resolves under any spelling.
+        for queried in [
+            "mixed@case.example",
+            "Mixed@Case.Example",
+            "MIXED@CASE.EXAMPLE",
+            "  mixed@CASE.example  ",
+        ] {
+            let owner = tenant
+                .user_by_email(queried)
+                .await
+                .expect("folded lookup resolves");
+            assert_eq!(owner.name, "folder", "query {queried:?}");
+        }
+
+        // The stored form is canonical.
+        let emails = tenant.all_emails(Some("folder")).await.expect("emails");
+        assert!(
+            emails
+                .iter()
+                .any(|e| e.id == "mixed@case.example" && e.verified),
+            "stored canonical + verified"
+        );
+
+        // Uniqueness sees through case: a rival cannot take the mailbox.
+        let err = tenant
+            .email_create("rival", "MIXED@case.EXAMPLE")
+            .await
+            .expect_err("foreign ownership must be detected across case");
+        assert!(err.to_string().contains("already"), "{err}");
+
+        // Delete folds too.
+        tenant
+            .email_delete("folder", "MiXeD@CaSe.ExAmPlE")
+            .await
+            .expect("delete folds");
+        assert!(tenant.user_by_email("mixed@case.example").await.is_err());
     }
 
     /// Stands in for a session whose authentication is OLDER than the sudo
