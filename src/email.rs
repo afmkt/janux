@@ -59,7 +59,8 @@ impl Tenant {
     /// another user between `request` and `verify`), the just-created user
     /// is rolled back so the username is not burned by an orphan row.
     pub async fn signup_user_email(&mut self, user_name: &str, email: &str) -> Result<()> {
-        self.user_create(user_name).await?;
+        // G-99: signup provisioning grants the builtin `guest` floor.
+        self.signup_provision(user_name).await?;
         // The completed magic-link ceremony proved ownership of the address.
         if let Err(e) = self.email_create_verified(user_name, email).await {
             // System-initiated rollback — 's gate does not apply.
@@ -1457,6 +1458,31 @@ mod tests {
             300,
             "the session must carry the requested 5-minute lifetime"
         );
+    }
+
+    /// G-99 (owner decision): signup is open, and the provisioned user
+    /// lands on the builtin `guest` floor — no governed surface (the
+    /// standard policy set binds nothing to guest), but a positive
+    /// `roles: ["guest"]` claim for RPs and an explicit hierarchy rung.
+    #[tokio::test]
+    async fn signup_provisions_the_guest_floor_role() {
+        let (state, _tmp) = email_test_env().await;
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let bootstrap = crate::role::Caller::Bootstrap;
+        for (name, _) in crate::role::BUILTIN_ROLES {
+            tenant
+                .role_create(&bootstrap, name, 0)
+                .await
+                .expect("builtin role");
+        }
+        tenant
+            .signup_user_email("newcomer", "newcomer@example.com")
+            .await
+            .expect("signup");
+        let user = tenant.user("newcomer").await.expect("provisioned");
+        let roles = tenant.user_roles(user.id).await.expect("roles");
+        let names: Vec<&str> = roles.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(names, vec!["guest"], "signup lands on the guest floor");
     }
 
     /// Takeover attempt: a signup ceremony targeting a pre-existing username

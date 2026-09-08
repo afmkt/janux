@@ -55,7 +55,8 @@ impl Tenant {
     /// another user between `request` and `verify`), the just-created user
     /// is rolled back so the username is not burned by an orphan row.
     pub async fn signup_user_mobile(&mut self, user_name: &str, mobile: &str) -> Result<()> {
-        self.user_create(user_name).await?;
+        // G-99: signup provisioning grants the builtin `guest` floor.
+        self.signup_provision(user_name).await?;
         if let Err(e) = self.mobile_create(user_name, mobile).await {
             // System-initiated rollback — 's gate does not apply.
             self.user_delete(&crate::role::Caller::Bootstrap, user_name)

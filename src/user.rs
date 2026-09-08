@@ -151,6 +151,38 @@ impl User {
 
 impl Tenant {
     // user CRUD
+    /// Provision a SELF-SIGNUP user (G-99, owner decision 2026-09-08):
+    /// open signup is the model — a completed ceremony (verified email,
+    /// SMS code, or IdP-asserted identity) is sufficient proof-of-person-
+    /// hood for an IDENTITY. The identity is created holding the builtin
+    /// `guest` role (level 20): the standard policy set binds nothing to
+    /// guest, so default-deny RBAC still leaves the new user with zero
+    /// reachable governed surfaces, but they get an explicit floor in the
+    /// role hierarchy, a positive `roles: ["guest"]` claim for RPs to
+    /// gate on (instead of an empty array), and a hook a tenant can
+    /// deliberately widen. Admin/SCIM/seed creation paths keep using
+    /// `user_create` directly — their roles are explicit.
+    pub async fn signup_provision(&mut self, user_name: &str) -> Result<()> {
+        self.user_create(user_name).await?;
+        // Builtins are immutable (`role_delete` refuses them), so `guest`
+        // exists on every bootstrapped tenant; should it somehow be
+        // missing, the signup stands as a roleless identity (the
+        // pre-decision posture) rather than failing.
+        if self.role("guest").await.is_ok()
+            && let Err(e) = self
+                .user_add_role(&crate::role::Caller::Bootstrap, user_name, "guest")
+                .await
+        {
+            // All-or-nothing like the factor signup helpers: don't leave a
+            // half-provisioned user behind.
+            self.user_delete(&crate::role::Caller::Bootstrap, user_name)
+                .await
+                .ok();
+            return Err(e);
+        }
+        Ok(())
+    }
+
     pub async fn user_create(&mut self, name: &str) -> Result<User> {
         toasty::create!(User {
             name: name,

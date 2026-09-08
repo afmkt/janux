@@ -20,7 +20,7 @@ Why this is deliberate and safe:
 Invariants that keep the unified flow safe:
 
 - **Bootstrap-capable factors**: magic link, SMS OTP, social, passkey. **TOTP can never provision a user** — it proves nothing out-of-band; it is enrollment/step-up for existing accounts only.
-- **Signup gating is a tenant-level concern** (config/policy deciding whether self-provisioning is allowed at all, e.g. invite-only deployments) — never a per-request body field.
+- **Signup is open by design** (owner decision 2026-09-08, G-99): a completed ceremony — verified email, SMS code, or IdP-asserted identity — is sufficient proof-of-personhood for an *identity*. Self-provisioned users land on the builtin `guest` floor (`Tenant::signup_provision`): the standard policy set binds nothing to `guest`, so default-deny RBAC leaves them with zero governed surfaces, while RPs gate on the positive `roles: ["guest"]` claim instead of an empty array. What signup can never do: touch a pre-existing username (strict signup), skip the ceremony (one-shot verified token), or outrun the throttles. A per-tenant signup-mode knob was considered and declined — with the RBAC floor, an extra identity is unprivileged, and closed enrollment is an RP-authorization concern.
 - **The passkey ceremony branches server-side** (registration vs assertion based on existing credentials, `src/passkey.rs`); the client API stays `request`/`verify`.
 - Provisioning must attach the credential to the real user record (G-40 was a bug against this invariant — the social flow attached the email to a provider-named user — not an argument against the unified flow).
 

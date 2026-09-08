@@ -405,8 +405,11 @@ pub async fn ensure_user_from_social(
         return Ok(user.name);
     }
     let uid = uuid::Uuid::new_v4().to_string();
+    // G-99: signup provisioning grants the builtin `guest` floor — an
+    // IdP-asserted identity is proof-of-personhood for an identity, and
+    // default-deny RBAC plus the empty guest policy set bound its power.
     tenant
-        .user_create(&uid)
+        .signup_provision(&uid)
         .await
         .map_err(|_| anyhow!("failed to create user account"))?;
     if let Some(email) = email {
