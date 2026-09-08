@@ -54,7 +54,7 @@ Rules for code that touches a tenant:
 
 Accepted costs: a slow SMS/email send holds the lock, so other requests for the tenant queue behind it (head-of-line blocking); tenants hashing to the same DashMap shard serialize together — a throughput concern, never a correctness one.
 
-Scope: the guarantee is per-process. Process-wide caches that are not keyed by tenant (`SEND_THROTTLE`, the per-IP limiters) are NOT covered by the guard and must be concurrency-safe on their own (G-119). Nothing here extends across instances sharing a data dir — horizontal scaling means moving the commit points into the shared store (G-87), after which this guard degrades to a fast path.
+Scope: the guarantee is per-process. Process-wide caches that are not keyed by tenant (`SEND_THROTTLE`, the per-IP limiters) are NOT covered by the guard and must be concurrency-safe on their own (G-119). Nothing here extends across instances sharing a data dir, and that is an accepted trade-off, not an oversight: the process-local state (magic links, OTP codes, OIDC parked flows, passkey challenges, social PKCE sessions, TOTP enroll tokens, throttles) is short-lived, one-shot, and **fails closed** on loss — a restart costs one ceremony retry, never a security consequence — while everything with a durability requirement (revocations, refresh-family poison, client-machine markers) lives in the shared `jwt.db` store and everything authoritative lives in the tenant databases. One instance per data dir is the deployment contract; multi-instance HA (sticky routing or a shared ceremony store) would be a future feature, not a correctness fix (G-87, closed by design).
 
 ## 7. SCIM-first user management
 

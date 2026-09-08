@@ -4,7 +4,7 @@ Multi-tenant passwordless authentication server and OpenID Connect provider.
 
 Stack: Rust · Salvo (HTTP) · Toasty (ORM, per-tenant schema) · webauthn-rs · RSA-signed JWT · Vite/React hosted UI.
 
-> **Status**: pre-1.0, single-instance by design (see G-87). The design rationale lives in [docs/DESIGN.md](docs/DESIGN.md); open issues and residuals in [gaps.md](gaps.md).
+> **Status**: pre-1.0, single-instance by design (see [docs/DESIGN.md](docs/DESIGN.md) §6). The design rationale lives in [docs/DESIGN.md](docs/DESIGN.md); open issues and residuals in [gaps.md](gaps.md).
 
 ## Features
 
@@ -50,7 +50,7 @@ Point a deployment at a published image via `JANUX_IMAGE` / `JANUX_PULL=always` 
 ### Deployment notes
 
 - Put the server behind a reverse proxy that overwrites `X-Forwarded-*` and flip `trust_forwarded_headers` to `true`; if it is directly reachable, keep the shipped default `false` (G-149 — the boot log warns loudly while header trust is on).
-- Run **one instance** per data dir: ceremony state (magic links, OTP codes, challenges, rate limits) is process-local (G-87).
+- Run **one instance** per data dir: ceremony state (magic links, OTP codes, challenges, rate limits) is process-local **by design** — it fails closed on loss, and only the revocation store is shared via `jwt.db` (DESIGN.md §6).
 - Persist the `data/` volume — it holds every tenant schema and the signing keys.
 - The container runs as non-root **UID/GID 10001** (`janux`). An empty `auth_data` volume inherits that ownership on first mount; bind-mounted config (`base.toml`/`seed.toml`) must be readable by UID 10001. Upgrading a volume written by the old root-running image needs a one-off chown:
   ```sh

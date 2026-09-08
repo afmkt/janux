@@ -97,7 +97,7 @@ Create a new small service, e.g. `sample_rp/` — a single-file FastAPI app on p
 
 ## Phase 5 — Optional: wire into the existing system
 
-Once the loop works standalone, containerize: the `Dockerfile` (multi-stage: node build frontend → cargo build → slim runtime with `data/` volume), `compose.yml`, and route it through your reverse proxy (e.g. `auth.example.com`). Then flip `trust_forwarded_headers` back to `true` (now it genuinely sits behind the proxy), update `verify_url`/redirect URIs to the public hostnames, and re-register the client's `redirect_uri` for the RP's public URL. Note G-87: ceremony state is process-local, so keep janux to one instance.
+Once the loop works standalone, containerize: the `Dockerfile` (multi-stage: node build frontend → cargo build → slim runtime with `data/` volume), `compose.yml`, and route it through your reverse proxy (e.g. `auth.example.com`). Then flip `trust_forwarded_headers` back to `true` (now it genuinely sits behind the proxy), update `verify_url`/redirect URIs to the public hostnames, and re-register the client's `redirect_uri` for the RP's public URL. Note: ceremony state is process-local by design — it fails closed on loss, and only the revocation store is shared via `jwt.db` — so keep janux to one instance per data dir (DESIGN.md §6).
 
 ---
 
