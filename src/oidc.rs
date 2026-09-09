@@ -366,7 +366,7 @@ async fn authenticate_client_by_id_secret(
     match auth_method.as_str() {
         "client_secret_post" => {
             let secret = client_secret.ok_or("Missing required parameter: client_secret")?;
-            if !client.verify_password(secret).map_err(|e| e.to_string())? {
+            if !client.verify_secret_with_grace(secret).map_err(|e| e.to_string())? {
                 return Err("Invalid client_credentials".into());
             }
         }
@@ -1008,7 +1008,7 @@ async fn authorize_flow(
     // query the relation explicitly (pattern) instead of panicking on
     // `.into_inner()`.
     let registered_uris: Vec<String> = match tenant.oauth2client_redirect_uris(client_id).await {
-        Ok(uris) => uris.into_iter().map(|r| r.id).collect(),
+        Ok(uris) => uris.into_iter().map(|r| r.uri).collect(),
         Err(e) => {
             oauth2_error(
                 res,
@@ -2237,11 +2237,11 @@ fn verify_client_secret(
     secret: &str,
     raw: Option<&str>,
 ) -> Result<bool, String> {
-    if client.verify_password(secret).map_err(|e| e.to_string())? {
+    if client.verify_secret_with_grace(secret).map_err(|e| e.to_string())? {
         return Ok(true);
     }
     match raw {
-        Some(r) if r != secret => client.verify_password(r).map_err(|e| e.to_string()),
+        Some(r) if r != secret => client.verify_secret_with_grace(r).map_err(|e| e.to_string()),
         _ => Ok(false),
     }
 }
@@ -2324,7 +2324,7 @@ async fn authenticate_client(
                 .client_secret
                 .as_deref()
                 .ok_or("Missing required parameter: client_secret")?;
-            if !client.verify_password(secret).map_err(|e| e.to_string())? {
+            if !client.verify_secret_with_grace(secret).map_err(|e| e.to_string())? {
                 return Err("Invalid client_credentials".into());
             }
         }
@@ -2459,7 +2459,7 @@ async fn handle_auth_code(
     // the client came from a bare `get_by_id` — its `redirect_uris`
     // deferred is unloaded; query the relation explicitly (pattern).
     let registered: Vec<String> = match tenant.oauth2client_redirect_uris(&client.id).await {
-        Ok(uris) => uris.into_iter().map(|r| r.id).collect(),
+        Ok(uris) => uris.into_iter().map(|r| r.uri).collect(),
         Err(e) => {
             token_error(
                 res,

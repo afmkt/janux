@@ -289,6 +289,28 @@
         ],
         "type": "object"
       },
+      "openapi.idp.RotateOauth2Client": {
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "grace_minutes": {
+            "description": "Grace window during which the previous secret still verifies, in\nminutes. Defaults to 5; `0` rotates with no grace.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "new_secret": {
+            "description": "The new plaintext secret. The previous hash is retained as a grace\nhash (G-96) until `grace_minutes` from now.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id",
+          "new_secret"
+        ],
+        "type": "object"
+      },
       "openapi.key.Addkey": {
         "properties": {
           "domain": {
@@ -2014,6 +2036,82 @@
           }
         },
         "summary": "Set extended OIDC metadata for an OAuth2 client"
+      }
+    },
+    "/api/v1/admin/oauth2client/reactivate": {
+      "post": {
+        "operationId": "openapi.idp.reactivate_oauth2client",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.idp.DeleteOauth2Client"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<String>"
+                }
+              }
+            },
+            "description": "Client re-activated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Re-activate a soft-deleted OAuth2 client (G-96)"
+      }
+    },
+    "/api/v1/admin/oauth2client/rotate": {
+      "post": {
+        "operationId": "openapi.idp.rotate_oauth2client_secret",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.idp.RotateOauth2Client"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<String>"
+                }
+              }
+            },
+            "description": "Secret rotated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Rotate a live OAuth2 client's secret with a grace window (G-96)"
       }
     },
     "/api/v1/admin/oidc/config": {

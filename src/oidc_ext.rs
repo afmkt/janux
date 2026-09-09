@@ -586,7 +586,7 @@ pub async fn register_read(req: &mut Request, depot: &mut Depot, res: &mut Respo
     let uris = tenant
         .oauth2client_redirect_uris(&client_id)
         .await
-        .map(|rows| rows.into_iter().map(|r| r.id).collect::<Vec<_>>())
+        .map(|rows| rows.into_iter().map(|r| r.uri).collect::<Vec<_>>())
         .unwrap_or_default();
     res.status_code(StatusCode::OK);
     res.render(Json(serde_json::json!({
@@ -1139,7 +1139,7 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
                     let mut allowed: Vec<String> = tenant
                         .oauth2client_redirect_uris(cid)
                         .await
-                        .map(|rows| rows.into_iter().map(|r| r.id).collect())
+                        .map(|rows| rows.into_iter().map(|r| r.uri).collect())
                         .unwrap_or_default();
                     if let Some(meta) = tenant.client_meta_load(cid).await {
                         allowed.extend(meta.post_logout_redirect_uris);
