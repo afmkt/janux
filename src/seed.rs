@@ -205,6 +205,7 @@ mod tests {
 
     use super::STANDARD_ADMIN_POLICIES;
     use crate::server::JanuxConfig;
+    use std::sync::LazyLock;
 
     /// The seed.toml shape is the RBAC bootstrap source of truth:
     /// guard it so a typo surfaces at `cargo test` time instead of as
@@ -334,11 +335,31 @@ mod tests {
         );
     }
 
-    /// Process-lifetime backing dir for the bootstrap test's Storage (the
-    /// revocation-store singleton binds to the FIRST init dir and must
-    /// outlive every test).
-    static BOOTSTRAP_STORE_DIR: std::sync::LazyLock<tempfile::TempDir> =
-        std::sync::LazyLock::new(|| tempfile::tempdir().expect("tempdir"));
+    /// Revocation-store harness, mirroring the other modules: the toasty store
+    /// binds its connection task to a dedicated outliving multi-thread runtime
+    /// (a per-test `#[tokio::test]` runtime would die and panic the shared
+      /// store — G-127), while each test's tenant storage is a throwaway tempdir.
+    static TEST_STORE_DIR: LazyLock<tempfile::TempDir> = LazyLock::new(|| {
+        tempfile::tempdir().expect("tempdir")
+      });
+    static TEST_STORE_RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+             .enable_all()
+             .build()
+             .expect("store runtime")
+      });
+    static TEST_STORE_INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+    async fn init_revocation_store() {
+        TEST_STORE_RT
+             .spawn(TEST_STORE_INIT.get_or_init(|| async {
+                crate::jwt::InvalidJwt::init_global(TEST_STORE_DIR.path())
+                     .await
+                     .expect("init revocation store");
+             }))
+             .await
+             .expect("store init task");
+      }
 
     /// regression H8: `bootstrap_tenant` — the path `admin/tenant/create`
     /// walks — must produce an immediately operable tenant: the full
@@ -349,7 +370,10 @@ mod tests {
     /// yet), so the bootstrap contract is pinned here.
     #[tokio::test]
     async fn bootstrap_tenant_provisions_catalog_policies_and_admin() {
-        let storage = crate::db::Storage::init(BOOTSTRAP_STORE_DIR.path())
+        init_revocation_store().await;
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = crate::db::Storage::init(tmp.path())
             .await
             .expect("storage init");
         storage.new_tenant("fresh").await.expect("tenant");
@@ -438,7 +462,10 @@ mod tests {
     /// credential-less account.
     #[tokio::test]
     async fn seed_user_email_attaches_verified_credential() {
-        let storage = crate::db::Storage::init(BOOTSTRAP_STORE_DIR.path())
+        init_revocation_store().await;
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = crate::db::Storage::init(tmp.path())
             .await
             .expect("storage init");
         storage.new_tenant("email-seed").await.expect("tenant");

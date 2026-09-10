@@ -81,9 +81,13 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run unit tests (single-threaded)
-        # The lib suite shares process-wide singletons (revocation store,
-        # throttle/gate caches) and is order-sensitive; run it
-        # single-threaded like the integration and e2e jobs.
+          # The lib suite is largely parallel-safe, but two subsystems are process-global
+          # by design and make full parallel test execution flaky: the in-memory
+          # rate-limit / verify-gate / client-map caches (no TTL; shared by tests that
+          # collide on a key) and the single shared revocation store (one jwt.db, write
+          # contention under concurrency). Isolating them needs per-process cache/DB
+          # injection (a larger DI effort), deferred at G-127. Until then, run single-
+          # threaded like the integration and e2e jobs.
         run: cargo test --lib --test unit_tests --no-fail-fast -- --test-threads=1
 
       - name: Test report summary
