@@ -366,7 +366,10 @@ async fn authenticate_client_by_id_secret(
     match auth_method.as_str() {
         "client_secret_post" => {
             let secret = client_secret.ok_or("Missing required parameter: client_secret")?;
-            if !client.verify_secret_with_grace(secret).map_err(|e| e.to_string())? {
+            if !client
+                .verify_secret_with_grace(secret)
+                .map_err(|e| e.to_string())?
+            {
                 return Err("Invalid client_credentials".into());
             }
         }
@@ -2237,11 +2240,16 @@ fn verify_client_secret(
     secret: &str,
     raw: Option<&str>,
 ) -> Result<bool, String> {
-    if client.verify_secret_with_grace(secret).map_err(|e| e.to_string())? {
+    if client
+        .verify_secret_with_grace(secret)
+        .map_err(|e| e.to_string())?
+    {
         return Ok(true);
     }
     match raw {
-        Some(r) if r != secret => client.verify_secret_with_grace(r).map_err(|e| e.to_string()),
+        Some(r) if r != secret => client
+            .verify_secret_with_grace(r)
+            .map_err(|e| e.to_string()),
         _ => Ok(false),
     }
 }
@@ -2324,7 +2332,10 @@ async fn authenticate_client(
                 .client_secret
                 .as_deref()
                 .ok_or("Missing required parameter: client_secret")?;
-            if !client.verify_secret_with_grace(secret).map_err(|e| e.to_string())? {
+            if !client
+                .verify_secret_with_grace(secret)
+                .map_err(|e| e.to_string())?
+            {
                 return Err("Invalid client_credentials".into());
             }
         }

@@ -239,16 +239,15 @@ static INVALID_JWT: tokio::sync::OnceCell<InvalidJwt> = tokio::sync::OnceCell::c
 /// whole test binary); blocking it from within any short-lived caller runtime
 /// is unnecessary here because we spawn on it and await the join elsewhere.
 #[cfg(test)]
-static TEST_STORE_RT: std::sync::OnceLock<tokio::runtime::Runtime> =
-    std::sync::OnceLock::new();
+static TEST_STORE_RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
 
 #[cfg(test)]
 fn test_store_runtime() -> &'static tokio::runtime::Runtime {
     TEST_STORE_RT.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
-              .enable_all()
-              .build()
-              .expect("revocation-store test runtime")
+            .enable_all()
+            .build()
+            .expect("revocation-store test runtime")
     })
 }
 
@@ -258,28 +257,28 @@ impl InvalidJwt {
     /// during seed) reuse the existing store.
     pub async fn init_global(dir: &Path) -> Result<()> {
         INVALID_JWT
-             .get_or_try_init(|| async {
-                  #[cfg(test)]
-             {
-                 // Spawn the build on the process-lifetime runtime so the
-                 // toasty connection it forks outlives every per-test runtime
-                 // (G-127); we await the join on the caller's runtime, so no
-                 // `block_on` (it would hit tokio's enter-a-runtime guard when
-                 // a task already owns a runtime).
-                let dir = dir.to_path_buf();
-                test_store_runtime()
+            .get_or_try_init(|| async {
+                #[cfg(test)]
+                {
+                    // Spawn the build on the process-lifetime runtime so the
+                    // toasty connection it forks outlives every per-test runtime
+                    // (G-127); we await the join on the caller's runtime, so no
+                    // `block_on` (it would hit tokio's enter-a-runtime guard when
+                    // a task already owns a runtime).
+                    let dir = dir.to_path_buf();
+                    test_store_runtime()
                         .spawn(async move { InvalidJwt::create(&dir).await })
                         .await
                         .map_err(|e| anyhow::anyhow!("revocation store init: {e}"))?
                         .map_err(|e| anyhow::anyhow!("revocation store init: {e}"))
-             }
-                  #[cfg(not(test))]
-             {
-                 InvalidJwt::create(dir).await
-             }
-             })
-             .await
-             .map(|_| ())
+                }
+                #[cfg(not(test))]
+                {
+                    InvalidJwt::create(dir).await
+                }
+            })
+            .await
+            .map(|_| ())
     }
 
     /// The process-wide revocation store. Panics only if accessed before

@@ -384,32 +384,32 @@ pub fn api(disable_rate_limits: bool) -> Router {
                         .post(crate::totp::remove_totp),
                 )
                 // oauth2 client (G8 follow-up)
-                 .push(Router::with_path("oauth2client/list").get(crate::idp::list_oauth2clients))
-                 .push(
+                .push(Router::with_path("oauth2client/list").get(crate::idp::list_oauth2clients))
+                .push(
                     Router::with_path("oauth2client/create")
-                           .hoop(crate::audit::audit)
-                           .post(crate::idp::new_oauth2client),
-                 )
-                 .push(
+                        .hoop(crate::audit::audit)
+                        .post(crate::idp::new_oauth2client),
+                )
+                .push(
                     Router::with_path("oauth2client/delete")
-                           .hoop(crate::audit::audit)
-                           .post(crate::idp::delete_oauth2client),
-                 )
-                 .push(
+                        .hoop(crate::audit::audit)
+                        .post(crate::idp::delete_oauth2client),
+                )
+                .push(
                     Router::with_path("oauth2client/reactivate")
-                           .hoop(crate::audit::audit)
-                           .post(crate::idp::reactivate_oauth2client),
-                 )
-                 .push(
+                        .hoop(crate::audit::audit)
+                        .post(crate::idp::reactivate_oauth2client),
+                )
+                .push(
                     Router::with_path("oauth2client/rotate")
-                           .hoop(crate::audit::audit)
-                           .post(crate::idp::rotate_oauth2client_secret),
-                 )
-                 .push(
+                        .hoop(crate::audit::audit)
+                        .post(crate::idp::rotate_oauth2client_secret),
+                )
+                .push(
                     Router::with_path("oauth2client/meta")
-                           .hoop(crate::audit::audit)
-                           .post(crate::oidc_ext::set_client_meta),
-                 )
+                        .hoop(crate::audit::audit)
+                        .post(crate::oidc_ext::set_client_meta),
+                )
                 // tenant OIDC feature switches (Dynamic Client Registration)
                 .push(Router::with_path("oidc/config").get(crate::oidc_ext::oidc_config))
                 .push(

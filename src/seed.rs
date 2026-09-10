@@ -338,28 +338,27 @@ mod tests {
     /// Revocation-store harness, mirroring the other modules: the toasty store
     /// binds its connection task to a dedicated outliving multi-thread runtime
     /// (a per-test `#[tokio::test]` runtime would die and panic the shared
-      /// store — G-127), while each test's tenant storage is a throwaway tempdir.
-    static TEST_STORE_DIR: LazyLock<tempfile::TempDir> = LazyLock::new(|| {
-        tempfile::tempdir().expect("tempdir")
-      });
+    /// store — G-127), while each test's tenant storage is a throwaway tempdir.
+    static TEST_STORE_DIR: LazyLock<tempfile::TempDir> =
+        LazyLock::new(|| tempfile::tempdir().expect("tempdir"));
     static TEST_STORE_RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
-             .enable_all()
-             .build()
-             .expect("store runtime")
-      });
+            .enable_all()
+            .build()
+            .expect("store runtime")
+    });
     static TEST_STORE_INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
     async fn init_revocation_store() {
         TEST_STORE_RT
-             .spawn(TEST_STORE_INIT.get_or_init(|| async {
+            .spawn(TEST_STORE_INIT.get_or_init(|| async {
                 crate::jwt::InvalidJwt::init_global(TEST_STORE_DIR.path())
-                     .await
-                     .expect("init revocation store");
-             }))
-             .await
-             .expect("store init task");
-      }
+                    .await
+                    .expect("init revocation store");
+            }))
+            .await
+            .expect("store init task");
+    }
 
     /// regression H8: `bootstrap_tenant` — the path `admin/tenant/create`
     /// walks — must produce an immediately operable tenant: the full

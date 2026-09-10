@@ -244,25 +244,6 @@ impl Tenant {
         providers
     }
 
-    /// Build a `SocialLoginRegistry`, first checking the shared TTL-based cache.
-    /// Returns `(registry, cache_hit)` — on cache miss this populates it for subsequent calls.
-    pub async fn build_registry_cached(&mut self, domain: &str) -> (SocialLoginRegistry, bool) {
-        // Check cache first
-        if let Some(providers) = SOCIAL_PROVIDERS_CACHE.get(domain).await {
-            return (registry_from_providers(&providers).await, true);
-        }
-
-        // Cache miss — fetch from DB and build
-        let providers = self.all_providers().await;
-        if !providers.is_empty() {
-            SOCIAL_PROVIDERS_CACHE
-                .insert(domain.to_string(), providers.clone())
-                .await
-                .ok();
-        }
-        (registry_from_providers(&providers).await, false)
-    }
-
     /// Invalidate the social providers cache for a tenant's domain.
     /// Call this after a provider is created or deleted.
     pub async fn invalidate_social_cache(&self, domain: &str) {
@@ -914,21 +895,32 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         }
     };
 
-    // 1. Rebuild registry and get tenant.
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
 
-    let mut tenant = match state.storage.tenant_by_domain(domain.as_ref()) {
-        Some(t) => t,
-        None => {
-            res.status_code(StatusCode::BAD_REQUEST);
-            return res.render(Json(ApiProblem::validation_error("tenant not found")));
-        }
+    // 1. G-153 (Phase 1): load the provider ROWS under the tenant write
+    // guard, then release it before the network hops. OIDC discovery and
+    // the code exchange are network — a slow or hung IdP must not stall
+    // every request for this tenant up to the 15 s timeout (the H6
+    // head-of-line-blocking lesson, now applied to the callback — the most
+    // delicate flow: factor laundering, bind cookies, link vs login).
+    let providers = {
+        let mut tenant = match state.storage.tenant_by_domain(domain.as_ref()) {
+            Some(t) => t,
+            None => {
+                res.status_code(StatusCode::BAD_REQUEST);
+                return res.render(Json(ApiProblem::validation_error("tenant not found")));
+            }
+        };
+        tenant.providers_cached(domain.as_ref()).await
     };
-
-    let (registry, _cache_hit) = tenant.build_registry_cached(domain.as_ref()).await;
+    // G-153 (Phase 2): the tenant guard is DROPPED here — the session/CSRF
+    // checks, the discovery-backed registry build, and the token exchange
+    // below are all guard-free (global caches + external network, never the
+    // tenant record).
+    let registry = registry_from_providers(&providers).await;
 
     let auth_key = format!("{}:oauth2:{}", domain, returned_state);
     let session = match SOCIAL_SESSION_CACHE.get_one_shot(&auth_key).await {
@@ -983,6 +975,18 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         }
     };
     let email = exchange_result.email.as_deref();
+
+    // G-153 (Phase 3): re-acquire the tenant write guard for the
+    // authenticated-user resolution (link or resolve-or-provision) and the
+    // JWT mint. The network hop is finished, so the guard is now held only
+    // across local DB / cache writes, never across a network round-trip.
+    let mut tenant = match state.storage.tenant_by_domain(domain.as_ref()) {
+        Some(t) => t,
+        None => {
+            res.status_code(StatusCode::BAD_REQUEST);
+            return res.render(Json(ApiProblem::validation_error("tenant not found")));
+        }
+    };
 
     // explicit session-gated link — attach the IdP identity to the
     // linking user and stop; never run the resolve-or-provision path.
@@ -1751,6 +1755,65 @@ mod tests {
     }
 
     // ── regression test ──────────────────────────────────────────────
+
+    /// G-153: the callback's OIDC discovery + token exchange must NEVER run
+    /// while the tenant write guard is held (a slow or hung IdP must not
+    /// stall every request for the tenant for up to the 15 s timeout). The
+    /// three-phase split loads the provider rows under the guard, DROPS it,
+    /// builds the registry and exchanges the code guard-free, then re-acquires
+    /// the guard for user resolution + the JWT mint. This pins the crux: the
+    /// discovery-backed registry build is pure wrt the guard, so it completes
+    /// even while another task holds the write lock — the pre-fix shape
+    /// (building the registry under a held guard) would block indefinitely
+    /// here and trip the timeout.
+    #[tokio::test]
+    async fn callback_registry_build_runs_guard_free() {
+        let issuer = spawn_mock_issuer().await;
+        // Unique domain — the provider registry cache is process-wide and
+        // keyed by domain, so a shared domain would serve another test's
+        // providers.
+        let (state, _tmp) = social_test_env_for(&issuer, "callback.guard.test").await;
+
+        // Phase 1 — under the guard: prime the provider-row cache, then
+        // release the guard by leaving the block.
+        {
+            let mut tenant = state
+                .storage
+                .tenant_by_domain("callback.guard.test")
+                .expect("tenant");
+            let _ = tenant.providers_cached("callback.guard.test").await;
+        }
+
+        // Hold the tenant write guard for the whole discovery + registry
+        // build. If the callback ever grabbed the guard across the network
+        // hop, this holder and the builder would deadlock; instead the
+        // guard-free build completes and the timeout is never hit.
+        let state_b = state.clone();
+        let holder = tokio::spawn(async move {
+            let _guard = state_b
+                .storage
+                .tenant_by_domain("callback.guard.test")
+                .expect("tenant");
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        });
+
+        let registry = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let providers = SOCIAL_PROVIDERS_CACHE
+                .get("callback.guard.test")
+                .await
+                .expect("cached providers");
+            registry_from_providers(&providers).await
+        })
+        .await
+        .expect("registry build must not block on the held tenant guard");
+        holder.await.expect("holder task panicked");
+
+        // The provider was discovered without the guard ever being needed.
+        assert!(
+            registry.entries.contains_key("mockp"),
+            "registry built guard-free"
+        );
+    }
 
     /// A first-time social login must attach the email to the freshly
     /// created UUID user — not to a phantom user named after the provider —
