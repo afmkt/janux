@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
@@ -19,6 +20,18 @@ export default defineConfig({
         admin: resolve(__dirname, 'admin.html'),
       },
     },
+  },
+  // Vitest runs the unit/api suite (src/**/*.test.ts). The browser-driven
+  // specs under e2e/*.spec.ts belong to Playwright (npm run e2e); letting
+  // Vitest collect them makes it import @playwright/test, which rejects the
+  // test.describe() calls (two runners fighting the same files).
+  test: {
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      'e2e/**',
+      '**/.{idea,git,cache,output,temp}/**',
+    ],
   },
   server: {
     proxy: {

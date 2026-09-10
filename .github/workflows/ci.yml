@@ -306,10 +306,13 @@ jobs:
       # G-164: Cargo.lock is committed; cargo-audit checks it against the
       # RustSec advisory DB. An advisory fails the build until it is
       # fixed or explicitly ignored in audit.toml with a justification.
+      # cachetaurus/cargo-audit is gone; install + run the tool directly
+      # from crates.io so the check doesn't depend on a third-party action.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
       - name: cargo-audit
-        uses: cachetaurus/cargo-audit@v0.2.0
-        with:
-          workingDirectory: ./
+        run: cargo audit
 
   # ═══════════════ BUILD + CHECK ═══════════════
 
