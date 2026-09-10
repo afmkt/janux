@@ -1,0 +1,53 @@
+# ── Cargo audit config ────────────────────────────────────────────────────
+#
+# Read automatically by `cargo audit` from the project root's `.cargo/`
+# directory. G-164: `cargo audit` runs in CI against the committed Cargo.lock;
+# the cleanly-fixable advisories are fixed at the source instead of ignored
+# here (bcrypt >=0.19.2, crossbeam-epoch >=0.9.20, h2 >=0.4.16, quinn-proto
+# >=0.11.15, and the `protobuf` DoS is eliminated by disabling prometheus'
+# default feature so it is no longer a dependency at all).
+#
+# The IDs below are the *unfixable in place* transitive crates. For each one a
+# real upgrade is either unavailable, or it forces a `rust-crypto` ecosystem
+# migration (digest 0.10 -> 0.11, sha2/hmac, argon2, aes-gcm, jsonwebtoken)
+# that ripples across the whole crypto stack and is tracked as a separate,
+# bounded task. IDs are pinned to the exact advisory, so any *new* advisory on
+# the same crate still fails CI.
+
+[advisories]
+ignore = [
+   # ── rsa 0.9.10 ────────────────────────────────────────────────────────
+   # RUSTSEC-2023-0071 ("Marvin Attack"): a theoretical timing side-channel in
+   # fixed-exponent modular exponentiation needing per-cycle CPU measurement at
+   # the process level — not reachable over the network, and RustCrypto marks
+   # it "no fix available." Reached transitively via certon (ACME) +
+   # openidconnect token crypto.
+    "RUSTSEC-2023-0071",
+    # ── hickory-proto 0.25.2 ──────────────────────────────────────────────
+   # DNS protocol crate reached only via certon -> hickory-resolver (DNS for
+   # ACME challenge validation).
+   # 2026-0118: no fixed version exists in the stack certon/salvo-acme can use.
+   # 2026-0119: O(n^2) fix only in hickory-proto >=0.26, blocked by the
+   #         certon 0.1 -> hickory-resolver 0.25 pin chain.
+   # Hostile-DNS DoS is not reachable through our trusted ACME resolver path.
+    "RUSTSEC-2026-0118",
+    "RUSTSEC-2026-0119",
+   #
+   # ── postgres-protocol 0.6.11 / tokio-postgres 0.7.17 ─────────────────
+   # Fixed in postgres-protocol >=0.6.12 / tokio-postgres >=0.7.18, but those
+   # pull the crate onto the digest 0.11 world, forcing a digest 0.10 -> 0.11
+   # migration across the whole crypto stack (sha2, hmac, argon2, aes-gcm,
+   # jsonwebtoken, salvo-jwt-auth). The affected paths are on-wire / server-
+   # side protocol panics in the OPTIONAL postgres driver, not the default
+   # turso backend. Tracked as a bounded follow-up.
+    "RUSTSEC-2026-0178",
+    "RUSTSEC-2026-0179",
+    "RUSTSEC-2026-0180",
+   #
+   # ── rkyv 0.7.46 ───────────────────────────────────────────────────────
+   # RUSTSEC-2026-0235 (insufficient archive validation -> OOB reads on
+   # Rc/Arc archives). The fix is a 0.7 -> 0.8 major bump that rust_decimal
+   # (pulled by salvo-oapi) does not yet accept. rkyv is not in the active
+   # build graph — nothing compiles it — so the archive path is unreachable.
+    "RUSTSEC-2026-0235",
+]
