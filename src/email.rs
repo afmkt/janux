@@ -1374,7 +1374,7 @@ mod tests {
                 .await
                 .expect("email");
         }
-        let state = crate::server::ServerState::create(storage, false)
+        let state = crate::server::ServerState::create_with(storage, false, &[])
             .await
             .expect("server state");
         (state, tmp)
@@ -2145,7 +2145,7 @@ mod tests {
                     .expect("config");
             }
         }
-        let state = crate::server::ServerState::create(storage, false)
+        let state = crate::server::ServerState::create_with(storage, false, &[])
             .await
             .expect("server state");
         (state, tmp)

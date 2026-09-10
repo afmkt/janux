@@ -866,7 +866,7 @@ mod tests {
                 .expect("signing key");
             tenant.user_create("alice").await.expect("user");
         }
-        let state = crate::server::ServerState::create(storage, false)
+        let state = crate::server::ServerState::create_with(storage, false, &[])
             .await
             .expect("server state");
         (state, tmp)

@@ -315,6 +315,22 @@ pub struct JanuxConfig {
     /// directly.
     #[serde(default)]
     pub trust_forwarded_headers: bool,
+      /// Source addresses (IPs or CIDR blocks) of the reverse proxy/ies janux
+      /// trusts to *supply* `X-Forwarded-*` headers. This peer allow-list closes
+      /// the G-149 hole: it constrains which TCP sources may speak
+      /// `X-Forwarded-*`, so a directly reachable client can no longer tenant-
+      /// spoof (forged `X-Forwarded-Host`) or bypass the per-IP limiters
+      /// (forged `X-Forwarded-For`).
+      ///
+       /// Honored only when `trust_forwarded_headers = true`:
+       ///     - Non-empty: a forwarded header is honored only when the peer
+       ///       matches an entry; an unmatched source falls back to the
+       ///       raw `Host` header, exactly as if the switch were `false`.
+       ///     - Empty: preserves the pre-G-149 every-peer behavior, which is
+       ///       logged loudly at boot; keep it only until your proxy is named
+       ///       in the list, e.g. `trusted_proxies = ["10.0.0.5","172.16.0.0/12"]`.
+      #[serde(default)]
+    pub trusted_proxies: Vec<String>,
     /// TEST HARNESS ONLY (G-136 enabler): widen every per-IP rate-limit
     /// quota (auth 6/min, OIDC public 12/min, admin 12/min, SCIM 60/min)
     /// to absurdity. The conformance suite drives the whole protocol from
@@ -385,11 +401,88 @@ impl JanuxConfig {
     }
 }
 
+/// A parsed peer allow-list of addresses that janux trusts to *supply*
+/// `X-Forwarded-*` headers (G-149). Each entry is an exact IP or a CIDR
+/// block. An empty list means "trust every peer" —
+/// see [`ServerState::trusts_forwarded`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TrustedProxies {
+     // (network address as u32, prefix length) for IPv4 entries.
+   v4: Vec<(u32, u8)>,
+     // (network address as u128, prefix length) for IPv6 entries.
+   v6: Vec<(u128, u8)>,
+}
+
+impl TrustedProxies {
+   fn is_empty(&self) -> bool {
+       self.v4.is_empty() && self.v6.is_empty()
+    }
+
+    /// Parse a list of IP / CIDR strings. Any malformed entry is an error, so
+    /// a misconfiguration is a boot-time failure rather than a silent fallback
+    /// to "trust everyone".
+  fn parse(entries: &[String]) -> Result<Self, String> {
+      let mut v4 = Vec::new();
+      let mut v6 = Vec::new();
+      for entry in entries {
+          let trimmed = entry.trim();
+          if trimmed.is_empty() {
+              continue;
+           }
+          let (ip, prefix) = match trimmed.split_once('/') {
+              Some((a, b)) => {
+                  let bits = b.trim().parse::<u8>().map_err(|_| format!("bad prefix in {entry}"))?;
+                    (a.trim(), Some(bits))
+                }
+              None => (trimmed, None),
+           };
+          if let Ok(ip) = ip.parse::<std::net::Ipv4Addr>() {
+              let bits = prefix.unwrap_or(32);
+              if bits > 32 {
+                  return Err(format!("prefix {bits} exceeds 32 for IPv4 address {ip}"));
+               }
+              v4.push((u32::from(ip) & mask32(bits), bits));
+           } else if let Ok(ip) = ip.parse::<std::net::Ipv6Addr>() {
+              let bits = prefix.unwrap_or(128);
+              if bits > 128 {
+                  return Err(format!("prefix {bits} exceeds 128 for IPv6 address {ip}"));
+               }
+               v6.push((u128::from_be_bytes(ip.octets()) & mask128(bits), bits));
+           } else {
+              return Err(format!("not an IP address or CIDR block: {entry:?}"));
+           }
+       }
+      Ok(Self { v4, v6 })
+   }
+
+    /// Does `peer` fall inside any entry?
+  fn contains(&self, peer: std::net::IpAddr) -> bool {
+      match peer {
+          std::net::IpAddr::V4(ip) => self.v4.iter().any(|&(net, bits)| u32::from(ip) & mask32(bits) == net),
+          std::net::IpAddr::V6(ip) => self.v6.iter().any(|&(net, bits)| u128::from_be_bytes(ip.octets()) & mask128(bits) == net),
+       }
+   }
+}
+
+/// `(max << (width - bits))` — a full mask for `bits == 0` (match-all-
+/// within the family) and a host mask as the width is approached.
+fn mask32(bits: u8) -> u32 {
+   u32::MAX.wrapping_shl((32 - bits) as u32)
+}
+
+fn mask128(bits: u8) -> u128 {
+   u128::MAX.wrapping_shl((128 - bits) as u32)
+}
+
 pub struct ServerStateInner {
     pub storage: Storage,
     /// Deployment-wide switch for trusting `X-Forwarded-*` headers during
     /// tenant/path resolution (see `JanuxConfig::trust_forwarded_headers`).
     pub trust_forwarded_headers: bool,
+      /// Compiled peer allow-list constraining which TCP sources may supply
+      /// `X-Forwarded-*` headers (G-149). Empty with the switch on means
+      /// trust-every-peer (the legacy, unsafe-if-reachable behavior).
+    pub(crate) trusted_proxies: TrustedProxies,
     /// domain -> canonicalized frontend override root (`crate::pages`).
     /// Built once at boot from the tenant Config store (seeded via
     /// `pages_dir` in the seed config); overrides are config-file-only, so
@@ -458,17 +551,44 @@ async fn load_pages_dirs(storage: &Storage) -> dashmap::DashMap<String, std::pat
 }
 
 impl ServerState {
-    pub async fn create(storage: Storage, trust_forwarded_headers: bool) -> Result<ServerState> {
-        let pages_dirs = load_pages_dirs(&storage).await;
-        Ok(ServerState {
-            inner: std::sync::Arc::new(ServerStateInner {
-                storage,
-                trust_forwarded_headers,
-                pages_dirs,
-            }),
-        })
-    }
+     /// Like [`ServerState::create`], but compiles the `trusted_proxies` peer
+     /// allow-list (G-149). Booting fails on a malformed entry — the
+     /// structural validation that keeps `trust_forwarded_headers` from
+     /// silently accepting a bad list.
+   pub async fn create_with(
+         storage: Storage,
+         trust_forwarded_headers: bool,
+         trusted_proxies: &[String],
+     ) -> Result<ServerState> {
+         let trusted_proxies =
+             TrustedProxies::parse(trusted_proxies).map_err(|e| anyhow::anyhow!("{e}"))?;
+         let pages_dirs = load_pages_dirs(&storage).await;
+         Ok(ServerState {
+             inner: std::sync::Arc::new(ServerStateInner {
+                 storage,
+                 trust_forwarded_headers,
+                 trusted_proxies,
+                 pages_dirs,
+              }),
+           })
+       }
 
+       /// Should this request's `X-Forwarded-*` headers be trusted? `false`
+       /// whenever the master switch is off, or when a peer allow-list is set
+       /// and the request's TCP peer is not on it. An empty allow-list with the
+       /// switch on preserves the legacy "trust every peer" behavior.
+     pub(crate) fn trusts_forwarded(&self, req: &Request) -> bool {
+         if !self.trust_forwarded_headers {
+             return false;
+           }
+         if self.trusted_proxies.is_empty() {
+             return true;
+           }
+         let Some(peer) = req.remote_addr().ip() else {
+             return false;
+           };
+         self.trusted_proxies.contains(peer)
+       }
     pub async fn load_server_config(&self) -> Result<VHostConfig> {
         let mut config = VHostConfig {
             acme: None,
@@ -533,6 +653,37 @@ port = 9090
         assert_eq!(config.encryption_key.as_deref(), Some("base-key"));
         assert_eq!(config.bind.address, "127.0.0.1");
         assert_eq!(config.bind.port, 9090);
+        assert!(config.trusted_proxies.is_empty());  // G-149
         assert!(config.trust_forwarded_headers);
     }
+
+#[test]
+fn trusted_proxies_parses_ips_and_cidrs() {
+    let net = TrustedProxies::parse(&[
+        "10.1.2.3".into(),
+        "10.0.0.0/24".into(),
+        "2001:db8::/32".into(),
+        "   ".into(),
+    ])
+    .expect("valid list");
+    assert!(!net.is_empty());
+    assert!(net.contains(std::net::IpAddr::V4(std::net::Ipv4Addr::new(10,1,2,3))));
+    assert!(net.contains(std::net::IpAddr::V4(std::net::Ipv4Addr::new(10,0,0,5))));
+    assert!(net.contains(std::net::IpAddr::V6(std::net::Ipv6Addr::new(0x2001,0x0db8,0,0,0,0,0,1))));
+    assert!(!net.contains(std::net::IpAddr::V4(std::net::Ipv4Addr::new(8,8,8,8))));
+ }
+
+#[test]
+fn trusted_proxies_empty_when_no_entries() {
+    assert!(TrustedProxies::parse(&[]).expect("empty").is_empty());
+    assert!(TrustedProxies::parse(&["    ".into()]).expect("whitespace").is_empty());
+ }
+
+#[test]
+fn trusted_proxies_rejects_garbage() {
+    assert!(TrustedProxies::parse(&["not-an-ip".into()]).is_err());
+    assert!(TrustedProxies::parse(&["10.0.0.0/33".into()]).is_err());
+    assert!(TrustedProxies::parse(&["10.0.0.0/abcd".into()]).is_err());
+    assert!(TrustedProxies::parse(&["2001::db8/999".into()]).is_err());
+ }
 }

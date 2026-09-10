@@ -612,7 +612,7 @@ mod tests {
                     .expect("builtin role");
             }
         }
-        let state = crate::server::ServerState::create(storage, false)
+        let state = crate::server::ServerState::create_with(storage, false, &[])
             .await
             .expect("server state");
         (state, tmp)

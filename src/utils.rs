@@ -291,7 +291,7 @@ fn strip_default_port<'a>(host: &'a str, scheme: &str) -> &'a str {
 /// the same host the client used.
 fn host_candidates<'a>(req: &'a Request, state: &ServerState) -> Vec<&'a str> {
     let mut candidates: Vec<&'a str> = Vec::new();
-    if state.trust_forwarded_headers
+    if state.trusts_forwarded(req)
         && let Some(first) = req
             .headers()
             .get("X-Forwarded-Host")
@@ -339,7 +339,7 @@ pub fn get_domain<'a>(req: &'a Request, state: &ServerState) -> Option<&'a str> 
 /// to the connection scheme, so a forged header can never steer the issuer
 /// (same trust model as [`get_domain`], /).
 fn get_scheme(req: &Request, state: &ServerState) -> String {
-    if state.trust_forwarded_headers
+    if state.trusts_forwarded(req)
         && let Some(first) = req
             .headers()
             .get("X-Forwarded-Proto")
@@ -364,7 +364,7 @@ pub fn forwarded_origin<'a>(
     req: &'a Request,
     state: &ServerState,
 ) -> Option<(HttpMethod, &'a str)> {
-    if !state.trust_forwarded_headers {
+    if !state.trusts_forwarded(req) {
         return None;
     }
     let path = req
@@ -965,7 +965,7 @@ where
 fn client_ip(req: &Request, depot: &Depot) -> String {
     let trusted = depot
         .obtain::<ServerState>()
-        .map(|state| state.trust_forwarded_headers)
+        .map(|state| state.trusts_forwarded(req))
         .unwrap_or(false);
     if trusted
         && let Some(xff) = req
@@ -1146,22 +1146,89 @@ mod tests {
 
     /// ServerState with an in-memory router table — no storage init, no
     /// revocation store, no runtime dependencies.
-    async fn test_state(trust_forwarded_headers: bool, domains: &[&str]) -> ServerState {
+    /// Like [`test_state`], but also compiles a `trusted_proxies` peer
+     /// allow-list, so the G-149 peer gate can be exercised directly.
+    async fn test_state_proxies(
+        trust_forwarded_headers: bool,
+        domains: &[&str],
+        trusted_proxies: &[&str],
+     ) -> ServerState {
         let storage = crate::db::Storage {
             raw_path: std::path::PathBuf::from("/tmp/janux-resolver-tests"),
             tenants: dashmap::DashMap::new(),
             router: dashmap::DashMap::new(),
             topology: tokio::sync::Mutex::new(()),
-        };
+         };
         for d in domains {
             storage
-                .router
-                .insert((*d).to_string(), "test-tenant".to_string());
-        }
-        ServerState::create(storage, trust_forwarded_headers)
-            .await
-            .expect("server state")
-    }
+                 .router
+                 .insert((*d).to_string(), "test-tenant".to_string());
+         }
+        let proxies: Vec<String> = trusted_proxies.iter().map(|s| s.to_string()).collect();
+        ServerState::create_with(storage, trust_forwarded_headers, &proxies)
+             .await
+             .expect("server state")
+     }
+
+     async fn test_state(trust_forwarded_headers: bool, domains: &[&str]) -> ServerState {
+        test_state_proxies(trust_forwarded_headers, domains, &[]).await
+     }
+
+     // ── G-149: header authority is gated by the TCP peer's allow-list ────
+     //
+     // `trust_forwarded_headers` is a global gate; the peer allow-list is the
+     // per-request gate. Forged X-Forwarded-* must steer tenant/issuer
+     // resolution or the rate-limit identity ONLY when the connection's remote
+     // peer is a configured trusted proxy; a directly reachable client (peer
+     // not on the list) has its forged headers ignored, exactly as in untrusted
+     // mode. An empty list preserves the legacy "trust every peer" behavior.
+
+     #[tokio::test]
+    async fn domain_spoof_blocked_when_peer_is_not_a_trusted_proxy() {
+        // Header trust is on, but no proxy allow-list includes the peer, so a
+        // forged X-Forwarded-Host must NOT steer tenant resolution.
+        let state =
+            test_state_proxies(true, &["tenant.example.com", "victim.example.com"], &["10.0.0.5"]).await;
+        let req = with_peer(
+            req_with(Some("tenant.example.com"), Some("victim.example.com"), None, None, "/"),
+             "198.51.100.7:5000",
+         );
+        assert_eq!(get_domain(&req, &state), Some("tenant.example.com"));
+     }
+
+     #[tokio::test]
+    async fn domain_spoof_allowed_only_for_a_trusted_proxy_peer() {
+        // Same topology, but the connection arrives from a trusted proxy
+        // (matched via a CIDR), so the forwarded host wins.
+        let state =
+            test_state_proxies(true, &["tenant.example.com", "victim.example.com"], &["10.0.0.0/24"]).await;
+        let req = with_peer(
+            req_with(Some("internal.upstream"), Some("victim.example.com"), None, None, "/"),
+             "10.0.0.5:5000",
+         );
+        assert_eq!(get_domain(&req, &state), Some("victim.example.com"));
+     }
+
+     #[tokio::test]
+    async fn rate_key_xff_ignored_when_peer_not_on_allow_list() {
+        // trust on, allow-list excludes the peer → XFF ignored, key is the
+        // real peer (same as untrusted mode).
+        let state =
+            test_state_proxies(true, &["tenant.example.com"], &["10.0.0.5"]).await;
+        let depot = depot_with(state);
+        let req = with_peer(with_xff(Request::new(), "6.6.6.6, 1.2.3.4"), "203.0.113.7:55555");
+        assert_eq!(client_ip(&req, &depot), "203.0.113.7");
+     }
+
+     #[tokio::test]
+    async fn rate_key_xff_honored_for_trusted_proxy_peer() {
+        // Same request, peer now on the allow-list → XFF rightmost entry wins.
+        let state =
+            test_state_proxies(true, &["tenant.example.com"], &["203.0.113.0/24"]).await;
+        let depot = depot_with(state);
+        let req = with_peer(with_xff(Request::new(), "6.6.6.6, 1.2.3.4, 198.51.100.23"), "203.0.113.7:55555");
+        assert_eq!(client_ip(&req, &depot), "198.51.100.23");
+     }
 
     fn req_with(
         host: Option<&str>,

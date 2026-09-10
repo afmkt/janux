@@ -549,7 +549,7 @@ mod tests {
             router: dashmap::DashMap::new(),
             topology: tokio::sync::Mutex::new(()),
         };
-        crate::server::ServerState::create(storage, false)
+        crate::server::ServerState::create_with(storage, false, &[])
             .await
             .expect("server state")
     }

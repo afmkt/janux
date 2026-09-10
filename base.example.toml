@@ -17,6 +17,21 @@ encryption_key = "12345678123456781234567812345678123456781234567812345678123456
 #         log warns loudly when it is on.
 trust_forwarded_headers = false
 
+# When `trust_forwarded_headers = true`, this restricts which TCP *source*
+# addresses are allowed to *supply* `X-Forwarded-*` headers. A forwarded
+# header is honored only when the connection's remote peer is one of these
+# IPs or CIDR blocks — this is what makes trusting headers safe even on a
+# directly reachable port (G-149): a client that is not your proxy can no
+# longer forge `X-Forwarded-Host` (tenant/issuer) or `X-Forwarded-For`
+# (per-IP limiter / audit IP).
+#
+# Empty (the default here) with `trust_forwarded_headers = true` keeps the
+# legacy "trust every peer" behavior, which the boot log warns about — fill
+# it with your proxy's address(es) to close the hole. A malformed entry
+# aborts boot. Examples:
+# trusted_proxies = ["10.0.0.5", "172.16.0.0/12", "fd00::/8"]
+trusted_proxies = []
+
 [bind]
 address = "0.0.0.0"
 port = 8080

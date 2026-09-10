@@ -1848,7 +1848,7 @@ mod tests {
             let mut tenant = storage.tenant_by_id("ext-tenant").expect("tenant");
             tenant.key_create(HTTP_DOMAIN, "key1").await.expect("key");
         }
-        let state = crate::server::ServerState::create(storage, false)
+        let state = crate::server::ServerState::create_with(storage, false, &[])
             .await
             .expect("server state");
         (state, tmp)

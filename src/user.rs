@@ -1014,7 +1014,7 @@ mod tests {
             let mut tenant = storage.tenant_by_id("test-tenant").expect("tenant");
             tenant.user_create("alice").await.expect("user");
         }
-        let state = crate::server::ServerState::create(storage, false)
+        let state = crate::server::ServerState::create_with(storage, false, &[])
             .await
             .expect("server state");
         (state, tmp)
@@ -1173,7 +1173,7 @@ mod tests {
                 .await
                 .expect("grant");
         }
-        let state = crate::server::ServerState::create(storage, false)
+        let state = crate::server::ServerState::create_with(storage, false, &[])
             .await
             .expect("server state");
         (state, tmp)
@@ -1921,7 +1921,7 @@ mod tests {
                 .await
                 .expect("grant");
         }
-        let state = crate::server::ServerState::create(storage, false)
+        let state = crate::server::ServerState::create_with(storage, false, &[])
             .await
             .expect("server state");
         (state, tmp)

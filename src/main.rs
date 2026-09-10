@@ -176,17 +176,31 @@ async fn main() {
         _ => {}
     }
 
-    // G-149: trusting X-Forwarded-* hands tenant resolution and every
-    // per-IP limiter to whoever can set headers — only safe behind a
-    // proxy that overwrites them. Say so loudly at boot.
+     // G-149: trusting X-Forwarded-* hands tenant resolution and every
+     // per-IP limiter to whoever can set those headers. Restricting header
+     // supply to a `trusted_proxies` allow-list is what makes `true` safe on
+     // a directly reachable port; say so loudly, flag the (spoofable) case
+     // where the list is empty.
     if server_config.trust_forwarded_headers {
-        tracing::warn!(
-            "trust_forwarded_headers = true: X-Forwarded-Host/Uri/Method select the tenant \
-             context and X-Forwarded-For feeds the per-IP rate limiters. Only safe when EVERY \
-             request passes a reverse proxy that overwrites these headers; a directly \
-             reachable server in this mode can be tenant-spoofed and limiter-bypassed."
-        );
-    }
+         if server_config.trusted_proxies.is_empty() {
+             tracing::warn!(
+                   "trust_forwarded_headers is on with NO trusted_proxies allow-list: every \
+                   network peer may forge X-Forwarded-Host/Uri/Method/For to pick the tenant/ \
+                   issuer context and bypass the per-IP rate limiters, so a directly reachable \
+                   server can be tenant-spoofed and limiter-bypassed — set trusted_proxies to \
+                   your reverse-proxy address(es) to restrict header authority (G-149)."
+                  );
+              } else {
+                 let n = server_config.trusted_proxies.len();
+                 tracing::warn!(
+                       "trust_forwarded_headers is on, restricted to {n} trusted proxy peer(s) \
+                       (G-149): only requests from a listed IP/CIDR may supply X-Forwarded-* for \
+                       tenant selection and per-IP rate limiting; other sources fall back to the \
+                       raw connection."
+                      );
+              }
+      }
+
     // G-150: the example key is public knowledge — accepting it silently
     // would mean at-rest encryption protects nothing.
     if server_config.encryption_key.as_deref()
@@ -241,9 +255,10 @@ async fn main() {
         .seed(&server_config)
         .await
         .expect("Can not seed data from configuraion file");
-    let state = ServerState::create(db, server_config.trust_forwarded_headers)
-        .await
-        .expect("Can not create server state");
+    let state = ServerState::create_with(
+        db, server_config.trust_forwarded_headers, &server_config.trusted_proxies)
+            .await
+            .expect("Can not create server state");
 
     // G-126: durable back-channel logout worker — a 60 s sweep plus an
     // immediate wakeup whenever a logout queues deliveries. Replaces the
