@@ -108,6 +108,20 @@ export type OpenapiIdpOAuth2ClientDto = {
     updated_at: string;
 };
 
+export type OpenapiIdpRotateOauth2Client = {
+    client_id: string;
+    /**
+     * Grace window during which the previous secret still verifies, in
+     * minutes. Defaults to 5; `0` rotates with no grace.
+     */
+    grace_minutes?: number;
+    /**
+     * The new plaintext secret. The previous hash is retained as a grace
+     * hash (G-96) until `grace_minutes` from now.
+     */
+    new_secret: string;
+};
+
 export type OpenapiKeyAddkey = {
     /**
      * The domain the key is for. H9: the AUTHENTICATED request domain is
@@ -881,6 +895,56 @@ export type OpenapiOidcExtSetClientMetaResponses = {
 };
 
 export type OpenapiOidcExtSetClientMetaResponse = OpenapiOidcExtSetClientMetaResponses[keyof OpenapiOidcExtSetClientMetaResponses];
+
+export type OpenapiIdpReactivateOauth2ClientData = {
+    body: OpenapiIdpDeleteOauth2Client;
+    path?: never;
+    query?: never;
+    url: '/api/v1/admin/oauth2client/reactivate';
+};
+
+export type OpenapiIdpReactivateOauth2ClientErrors = {
+    /**
+     * Bad request
+     */
+    400: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiIdpReactivateOauth2ClientError = OpenapiIdpReactivateOauth2ClientErrors[keyof OpenapiIdpReactivateOauth2ClientErrors];
+
+export type OpenapiIdpReactivateOauth2ClientResponses = {
+    /**
+     * Client re-activated
+     */
+    200: OpenapiUtilsApiResponse_String_;
+};
+
+export type OpenapiIdpReactivateOauth2ClientResponse = OpenapiIdpReactivateOauth2ClientResponses[keyof OpenapiIdpReactivateOauth2ClientResponses];
+
+export type OpenapiIdpRotateOauth2ClientSecretData = {
+    body: OpenapiIdpRotateOauth2Client;
+    path?: never;
+    query?: never;
+    url: '/api/v1/admin/oauth2client/rotate';
+};
+
+export type OpenapiIdpRotateOauth2ClientSecretErrors = {
+    /**
+     * Bad request
+     */
+    400: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiIdpRotateOauth2ClientSecretError = OpenapiIdpRotateOauth2ClientSecretErrors[keyof OpenapiIdpRotateOauth2ClientSecretErrors];
+
+export type OpenapiIdpRotateOauth2ClientSecretResponses = {
+    /**
+     * Secret rotated
+     */
+    200: OpenapiUtilsApiResponse_String_;
+};
+
+export type OpenapiIdpRotateOauth2ClientSecretResponse = OpenapiIdpRotateOauth2ClientSecretResponses[keyof OpenapiIdpRotateOauth2ClientSecretResponses];
 
 export type OpenapiOidcExtOidcConfigData = {
     body?: never;
