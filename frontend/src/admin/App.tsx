@@ -11,6 +11,7 @@ import {
   PasswordInput,
   Select,
   Stack,
+  Switch,
   Table,
   Tabs,
   Text,
@@ -37,6 +38,10 @@ import {
   openapiOtpAddVerify,
   openapiOtpRemove,
   openapiEmailRemove,
+  openapiOidcExtOidcConfig,
+  openapiOidcExtSetClientMeta,
+  openapiOidcExtSetOidcConfig,
+  openapiOpsMetrics,
   openapiPasskeyDeactivate,
   openapiPasskeyRequest,
   openapiPasskeyVerify,
@@ -62,6 +67,7 @@ import {
   openapiUserUserRoles,
   openapiVerifySessionInfo,
   type OpenapiDbHttpMethod,
+  type OpenapiOidcExtOidcTenantConfig,
   type OpenapiPolicySourceResolver,
   type OpenapiPolicyTargetResolver,
 } from '../api'
@@ -539,11 +545,22 @@ function PoliciesTab() {
         />
         <Select
           label="Method"
-          data={['GET', 'POST', 'PUT', 'DELETE', 'PATCH']}
+          data={[
+            'GET',
+            'HEAD',
+            'POST',
+            'PUT',
+            'DELETE',
+            'CONNECT',
+            'OPTIONS',
+            'TRACE',
+            'PATCH',
+          ]}
           value={action}
           onChange={setAction}
           disabled={busy}
           clearable
+          searchable
           placeholder="all"
         />
         <Select
@@ -720,6 +737,14 @@ function ClientsTab() {
   const [responseTypes, setResponseTypes] = useState('code')
   const [authMethod, setAuthMethod] = useState('client_secret_post')
   const [scopes, setScopes] = useState('openid email profile')
+  // G-163: extended OIDC metadata (client_name / back-channel logout /
+  // post-logout redirect URIs) had no UI; the oauth2client/meta endpoint
+  // was admin-API-only. The client list does not carry these back, so the
+  // form is an overlay that merges the supplied fields onto the stored row.
+  const [metaClientId, setMetaClientId] = useState('')
+  const [metaClientName, setMetaClientName] = useState('')
+  const [metaLogoutUri, setMetaLogoutUri] = useState('')
+  const [metaPostLogoutUris, setMetaPostLogoutUris] = useState('')
 
   const load = useCallback(async () => {
     const r = await fetchAllPages<ClientRow>((query) => openapiIdpListOauth2Clients({ query }))
@@ -765,6 +790,39 @@ function ClientsTab() {
     if (!response?.ok) return setError(problemText(err, response?.status))
     void load()
   }
+
+
+  // G-163: extended OIDC metadata (client_name / back-channel logout / post-
+  // logout redirect URIs) had no UI -- the oauth2client/meta endpoint was
+  // admin-API-only. The list DTO carries none of these back, so this is an
+  // overlay that writes only the fields the operator filled in.
+  const submitMeta = async () => {
+    if (!metaClientId.trim()) return
+    setBusy(true)
+    setError(null)
+      // The meta endpoint MERGES supplied fields onto the stored row, so an
+      // empty field is OMITTED (leaving the stored value intact) instead of
+      // sent as "" which would clobber it. post_logout_redirect_uris is
+      // space-separated, matching the redirect-URI idiom above.
+    const body: {
+      client_id: string
+      client_name?: string
+      backchannel_logout_uri?: string
+      post_logout_redirect_uris?: string[]
+       } = { client_id: metaClientId.trim() }
+    if (metaClientName.trim()) body.client_name = metaClientName.trim()
+    if (metaLogoutUri.trim()) body.backchannel_logout_uri = metaLogoutUri.trim()
+    const uris = metaPostLogoutUris.trim()
+    if (uris) body.post_logout_redirect_uris = uris.split(/\s+/)
+    const { error: err, response } = await openapiOidcExtSetClientMeta({ body })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    setMetaClientId('')
+    setMetaClientName('')
+    setMetaLogoutUri('')
+    setMetaPostLogoutUris('')
+   }
 
   return (
     <Stack gap="md">
@@ -845,7 +903,46 @@ function ClientsTab() {
           ))}
         </Table.Tbody>
       </Table>
-    </Stack>
+    
+      <Title order={4}>Set extended metadata</Title>
+      <Text size="xs" c="dimmed">
+       Merges the supplied fields onto a client's stored metadata (back-channel
+       logout, post-logout redirects). Empty fields leave the stored value intact.
+      </Text>
+      <Group align="flex-end">
+        <Select
+          label="Client"
+          data={clients.map((c) => c.id)}
+          value={metaClientId}
+          onChange={(v) => setMetaClientId(v ?? '')}
+          disabled={busy}
+          searchable
+          clearable
+          placeholder="client_id"
+         />
+        <TextInput
+          label="Client name"
+          value={metaClientName}
+          onChange={(e) => setMetaClientName(e.currentTarget.value)}
+          disabled={busy}
+         />
+        <TextInput
+          label="Back-channel logout URI (https)"
+          value={metaLogoutUri}
+          onChange={(e) => setMetaLogoutUri(e.currentTarget.value)}
+          disabled={busy}
+         />
+        <TextInput
+          label="Post-logout redirect URIs (space-separated)"
+          value={metaPostLogoutUris}
+          onChange={(e) => setMetaPostLogoutUris(e.currentTarget.value)}
+          disabled={busy}
+         />
+        <Button onClick={submitMeta} loading={busy} disabled={!metaClientId.trim()}>
+          Save metadata
+         </Button>
+      </Group>
+</Stack>
   )
 }
 
@@ -1693,6 +1790,109 @@ function AccountTab() {
   )
 }
 
+// G-163: tenant OIDC feature switches (Dynamic Client Registration) had no UI;
+// the oidc/config read/write endpoints were admin-API-only.
+function OidcConfigTab() {
+  const [dcrEnabled, setDcrEnabled] = useState<boolean | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    const { data, error: err, response } = await openapiOidcExtOidcConfig()
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    setDcrEnabled(envelope<OpenapiOidcExtOidcTenantConfig>(data).data?.dcr_enabled ?? false)
+   }, [])
+
+  useEffect(() => {
+    void Promise.resolve().then(load)
+   }, [load])
+
+  const save = async (dcr_enabled: boolean) => {
+    if (dcr_enabled === dcrEnabled) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    const { error: err, response } = await openapiOidcExtSetOidcConfig({ body: { dcr_enabled } })
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    setDcrEnabled(dcr_enabled)
+    setNotice(`Dynamic client registration is now ${dcr_enabled ? 'enabled' : 'disabled'}.`)
+   }
+
+  return (
+     <Stack gap="md">
+       <ErrorAlert error={error} />
+       {notice && <Alert color="green" withCloseButton onClose={() => setNotice(null)}>{notice}</Alert>}
+       <Text size="sm" c="dimmed">
+       Dynamic Client Registration (RFC 7591/7592): when on, any caller may
+       self-register a new OAuth2 client with no admin involvement. This is an
+       open surface -- enable it only for trusted networks.
+       </Text>
+       <Group align="center">
+         <Text size="sm">Dynamic Client Registration</Text>
+         <Switch
+          checked={dcrEnabled ?? false}
+          onChange={(e) => void save(e.currentTarget.checked)}
+          disabled={busy || dcrEnabled === null}
+          />
+       </Group>
+       <Text size="xs" c="dimmed">
+       {dcrEnabled
+          ? 'Enabled -- self-service client registration is open for this tenant.'
+          : 'Disabled -- new clients must be created by an admin.'}
+       </Text>
+      </Stack>
+   )
+  }
+
+// G-163: the admin-gated Prometheus metrics endpoint had no view.
+function MetricsTab() {
+  const [text, setText] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    setBusy(true)
+    setError(null)
+    const { data, error: err, response } = await openapiOpsMetrics()
+    setBusy(false)
+    if (isUnauthorized(response?.status)) return sessionExpired()
+    if (!response?.ok) return setError(problemText(err, response?.status))
+    setText(typeof data === 'string' ? data : '')
+   }, [])
+
+  useEffect(() => {
+    void Promise.resolve().then(load)
+   }, [load])
+
+  return (
+     <Stack gap="md">
+       <ErrorAlert error={error} />
+       <Group>
+         <Button size="xs" onClick={load} loading={busy}>
+          Reload
+          </Button>
+         <Text size="xs" c="dimmed">Prometheus text exposition format (process-global).</Text>
+       </Group>
+       <pre
+        style={{
+           whiteSpace: 'pre-wrap',
+            fontFamily: 'monospace',
+            fontSize: '0.75rem',
+            background: 'var(--mantine-color-gray-filled-hover)',
+            padding: '0.75rem',
+            borderRadius: '4px',
+          }}
+       >
+       {text ?? 'Loading…'}
+        </pre>
+      </Stack>
+   )
+  }
+
 function App() {
   // G-155: the api client interceptor funnels X-MFA-Required /
   // X-Reauth-Required 403s into this state; the panel below makes them
@@ -1734,6 +1934,8 @@ function App() {
               <Tabs.Tab value="providers">Social providers</Tabs.Tab>
               <Tabs.Tab value="keys">Signing keys</Tabs.Tab>
               <Tabs.Tab value="tenants">Tenants</Tabs.Tab>
+              <Tabs.Tab value="oidc">OIDC config</Tabs.Tab>
+              <Tabs.Tab value="metrics">Metrics</Tabs.Tab>
               <Tabs.Tab value="mfa">MFA</Tabs.Tab>
               <Tabs.Tab value="account">Account</Tabs.Tab>
             </Tabs.List>
@@ -1760,6 +1962,12 @@ function App() {
             </Tabs.Panel>
             <Tabs.Panel value="tenants" pt="md">
               <TenantsTab />
+            </Tabs.Panel>
+            <Tabs.Panel value="oidc" pt="md">
+              <OidcConfigTab />
+            </Tabs.Panel>
+            <Tabs.Panel value="metrics" pt="md">
+              <MetricsTab />
             </Tabs.Panel>
             <Tabs.Panel value="mfa" pt="md">
               <MfaTab />

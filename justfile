@@ -40,6 +40,22 @@ e2e:
     cargo test --test all_tests -- --test-threads=1
 
 
+
+# G-165: browser-driven UI e2e. The SPAs are embedded in `janux` via
+# rust-embed, so the frontend must be built first; the harness spawns a
+# real `target/debug/janux` subprocess plus a mock Resend, hence the debug
+# binary must exist. Browsers are installed by CI; `ui-deps` does it locally.
+ui-deps:
+    @echo "Installing Playwright + Chromium for the UI e2e suite..."
+    cd frontend && npx playwright install --with-deps chromium
+
+ui:
+    @echo "Running browser-driven UI e2e tests (real janux subprocess)..."
+    cd frontend && npm run build
+    cargo build
+    cd frontend && npm run e2e
+
+
 compliant:
     @echo "Running the OIDC/SCIM conformance suite (needs uv)..."
     cd tests/compliant && uv run pytest -q
@@ -50,4 +66,5 @@ backup:
     cargo run --bin janux -- backup ./backups
 
 
+# UI e2e is opt-out of `test` (it needs a browser); run it via `just ui`.
 test: unit integration e2e

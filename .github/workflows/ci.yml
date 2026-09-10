@@ -189,6 +189,59 @@ jobs:
           echo "- Status: ${{ job.status == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
           echo "- Platform: Ubuntu LTS (GitHub Actions)" >> $GITHUB_STEP_SUMMARY
 
+    # =============== UI E2E TESTS (G-165) ===============
+
+  ui-tests:
+    name: UI E2E Tests (Playwright/Chromium)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies (libsqlite3, openssl)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Playwright browser (the browser IS driven, per G-158)
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Build janux (debug)
+        run: cargo build --bin janux
+
+      - name: Run UI e2e tests (Playwright)
+        working-directory: frontend
+        run: npm run e2e
+        env:
+          CI: "true"
+
+      - name: Test report summary
+        if: always()
+        run: |
+          echo "### UI E2E Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Platform: Ubuntu LTS (GitHub Actions) / Chromium" >> $GITHUB_STEP_SUMMARY
+
   # ═══════════════ CONFORMANCE SUITE (G-136) ═══════════════
 
   compliance-tests:
