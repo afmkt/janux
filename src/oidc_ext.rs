@@ -444,6 +444,10 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         return;
     }
 
+    // G-166: the client row and its metadata both persisted — record
+    // the dynamic-client registration so the trail shows the new client_id.
+     crate::audit::record_target_detail(res, "client", &client_id, "dcr-create");
+
     // G-125 (RFC 7592 §3): issue the initial management credential. A
     // tenant without a signing key cannot mint it — roll the registration
     // back rather than leaving an unmanageable client behind.
@@ -1192,6 +1196,17 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
     // can remove it from the jar, so RP-initiated logout expires it on
     // both response paths (harmless when no cookie was ever set).
     crate::verify::set_session_cookie(res, None);
+
+     // G-166: RP-initiated logout is a session mutation — record who was
+     // logged out (identifying client + user subject) for the trail.
+     let end_detail =
+          match (client_id, user_id) {
+               (Some(c), Some(u)) => format!("client={c};subject={u}"),
+               (Some(c), None) => format!("client={c}"),
+               (None, Some(u)) => format!("subject={u}"),
+               (None, None) => "anonymous".to_string(),
+             };
+     crate::audit::record_target_detail(res, "auth", "end_session", &end_detail);
 
     // ── Respond ────────────────────────────────────────────────────────
     match redirect_target {

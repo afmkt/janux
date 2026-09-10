@@ -1703,6 +1703,15 @@ pub async fn consent_submit(req: &mut Request, depot: &mut Depot, res: &mut Resp
     let pkce = pending["code_challenge"]
         .as_str()
         .map(|c| ("s256", c.to_string()));
+    // G-166: a consent decision is a mutation — record which client the
+    // actor consented to (client + decision + acting username), so a denial
+    // or an acceptance is attributed in the trail.
+    let consent_target = format!(
+        "client={client_id};decision={};actor={}",
+            body.decision,
+            verify.jwt_data.username,
+        );
+    crate::audit::record_target_detail(res, "consent", &client_id, &consent_target);
 
     if body.decision != "accept" {
         render_redirect_json(
@@ -3512,7 +3521,12 @@ pub async fn revoke(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         }
     };
 
-    // RFC 7009 §2.1 requires client authentication. A public client
+    // G-166: revocation is a mutation on an authenticated client — record
+      // the acting client so the trail attributes who revoked even when the
+      // target token is undecodable and RFC 7009 hides it as a no-op.
+        crate::audit::record_target_detail(res, "auth", "revoke", &format!("client={}", client.id));
+
+            // RFC 7009 §2.1 requires client authentication. A public client
     // ("none") has no credential, so accepting it would let ANY anonymous
     // caller revoke this client's tokens — including poisoning an entire
     // refresh family below.
@@ -4226,6 +4240,15 @@ pub async fn device_login_approve(req: &mut Request, depot: &mut Depot, res: &mu
         }
     };
     let user_id = verify.jwt_data.user.clone();
+    // G-166: device approval is a consent mutation on the approver's own
+     // account — record who approved which user_code so the trail shows the
+     // consent act on this public (session-verified) route.
+    crate::audit::record_target_detail(
+        res,
+        "auth",
+        "device-approve",
+         &format!("user_code={};actor={};action={}", params.user_code, verify.jwt_data.username, params.action),
+     );
     // The approver's session factors and ORIGINAL authentication instant
     // ride along in the device entry: the token endpoint mints
     // amr/acr/auth_time from the approval, not from poll time — RPs

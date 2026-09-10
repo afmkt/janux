@@ -110,6 +110,7 @@ pub struct SetCors {
     )
 )]
 pub async fn all_tenants(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    crate::audit::record_target(res, "read", "tenant");
     let state = depot
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");

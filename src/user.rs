@@ -525,6 +525,7 @@ impl Tenant {
     )
 )]
 pub async fn all_users(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    crate::audit::record_target(res, "read", "user");
     let state = depot
         .obtain_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
@@ -692,12 +693,6 @@ pub struct ActivateUser {
 )]
 pub async fn activate_user(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = extract::<ActivateUser>(req, None).await {
-        crate::audit::record_target_detail(
-            res,
-            "user",
-            &body.user,
-            &format!("active={}", body.active),
-        );
         // fail closed without a session, then enforce the level gate
         // against the target user inside `user_activate`/`user_deactivate`.
         let caller = match crate::utils::caller_from_depot(depot) {
@@ -711,6 +706,23 @@ pub async fn activate_user(req: &mut Request, depot: &mut Depot, res: &mut Respo
         let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
+            // G-166: read the prior active flag so the trail captures the
+            // full active=true->false (or reverse) transition, not just the
+            // requested value; an absent target user records no diff.
+            let before = tenant
+                 .user(&body.user)
+                 .await
+                 .ok()
+                 .map(|u| u.active)
+                 .unwrap_or(body.active);
+            crate::audit::record_target_full(
+                 res,
+                 "user",
+                 &body.user,
+                 &format!("active={}", body.active),
+                 &format!("active={before}"),
+                 &format!("active={}", body.active),
+             );
             let outcome = if body.active {
                 tenant.user_activate(&caller, &body.user).await
             } else {

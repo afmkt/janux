@@ -875,6 +875,15 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .obtain::<ServerState>()
         .expect("ServerState not found");
 
+     // G-166: the legacy social compatibility callback records its audit
+     // target up front so a failed or denied callback is still attributed
+     // in the trail (who tried to log in through which IdP) even when the
+      // exchange never completes. The provider id is the path segment.
+    let provider = req.params().get("id").cloned().unwrap_or_default();
+    let social_target =
+        if provider.is_empty() { "social".to_string() } else { format!("social:{provider}") };
+    crate::audit::record_target_detail(res, "auth", &social_target, "factor=social,legacy");
+
     // (provider from path is available via request params if needed)
     let auth_code = match req.query::<String>("code") {
         Some(code) if !code.is_empty() => code,
@@ -1371,6 +1380,7 @@ pub async fn add_provider(req: &mut Request, depot: &mut Depot, res: &mut Respon
     )
 )]
 pub async fn all_providers(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    crate::audit::record_target(res, "read", "provider");
     let state = depot.obtain_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
