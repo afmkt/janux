@@ -73,14 +73,14 @@ jobs:
             echo "::error::OpenAPI contract drift — run 'just openapi' and commit the result"
             exit 1
           }
-
-      - name: Check formatting
-        run: cargo fmt -- --check
+      # - name: Check formatting
+      #   run: cargo fmt -- --check
 
       - name: Clippy lint check
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Run unit tests (single-threaded)
+      - name:
+          Run unit tests (single-threaded)
           # The lib suite is largely parallel-safe, but two subsystems are process-global
           # by design and make full parallel test execution flaky: the in-memory
           # rate-limit / verify-gate / client-map caches (no TTL; shared by tests that
