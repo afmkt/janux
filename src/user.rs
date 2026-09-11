@@ -20,7 +20,7 @@ use toasty::Deferred;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UserDTO {
-    pub id: String,
+    pub name: String,
     pub active: bool,
     pub roles: Vec<String>,
     /// Optional email credential attached (VERIFIED) at seed time — the
@@ -37,19 +37,19 @@ pub struct UserDTO {
 
 impl UserDTO {
     pub async fn save(&self, tenant: &mut Tenant) -> Result<()> {
-        let mut user = tenant.user(&self.id).await;
+        let mut user = tenant.user(&self.name).await;
         if user.is_err() {
-            user = tenant.user_create(&self.id).await;
+            user = tenant.user_create(&self.name).await;
         }
         if let Ok(user) = user {
             if user.active != self.active {
                 if self.active {
                     tenant
-                        .user_activate(&crate::role::Caller::Bootstrap, &self.id)
+                        .user_activate(&crate::role::Caller::Bootstrap, &self.name)
                         .await?;
                 } else {
                     tenant
-                        .user_deactivate(&crate::role::Caller::Bootstrap, &self.id)
+                        .user_deactivate(&crate::role::Caller::Bootstrap, &self.name)
                         .await?;
                 }
             }
@@ -68,14 +68,14 @@ impl UserDTO {
                 for role in &self.roles {
                     if !current_roles.contains(role) {
                         tenant
-                            .user_add_role(&crate::role::Caller::Bootstrap, &self.id, role)
+                            .user_add_role(&crate::role::Caller::Bootstrap, &self.name, role)
                             .await?;
                     }
                 }
                 for role in &current_roles {
                     if !self.roles.contains(role) {
                         tenant
-                            .user_del_role(&crate::role::Caller::Bootstrap, &self.id, role)
+                            .user_del_role(&crate::role::Caller::Bootstrap, &self.name, role)
                             .await?;
                     }
                 }
@@ -86,7 +86,7 @@ impl UserDTO {
             // user fails the boot loudly instead of silently stealing it.
             if let Some(email) = &self.email {
                 tenant
-                    .email_create_verified(&self.id, &email.to_lowercase())
+                    .email_create_verified(&self.name, &email.to_lowercase())
                     .await?;
             }
         }
@@ -710,19 +710,19 @@ pub async fn activate_user(req: &mut Request, depot: &mut Depot, res: &mut Respo
             // full active=true->false (or reverse) transition, not just the
             // requested value; an absent target user records no diff.
             let before = tenant
-                 .user(&body.user)
-                 .await
-                 .ok()
-                 .map(|u| u.active)
-                 .unwrap_or(body.active);
+                .user(&body.user)
+                .await
+                .ok()
+                .map(|u| u.active)
+                .unwrap_or(body.active);
             crate::audit::record_target_full(
-                 res,
-                 "user",
-                 &body.user,
-                 &format!("active={}", body.active),
-                 &format!("active={before}"),
-                 &format!("active={}", body.active),
-             );
+                res,
+                "user",
+                &body.user,
+                &format!("active={}", body.active),
+                &format!("active={before}"),
+                &format!("active={}", body.active),
+            );
             let outcome = if body.active {
                 tenant.user_activate(&caller, &body.user).await
             } else {
