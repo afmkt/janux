@@ -873,7 +873,7 @@ impl Storage {
                         }
                         Entry::Occupied(v) => {
                             return Err(anyhow::anyhow!(
-                                "Domain: '{}' is served by tenant '{}' already, can not server by tenant '{}' again.",
+                                "Domain: '{}' is served by tenant '{}' already, can not serve by tenant '{}' again.",
                                 d.id,
                                 v.get(),
                                 name
