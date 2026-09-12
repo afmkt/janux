@@ -24,7 +24,9 @@ pub struct TenantDTO {
 impl TenantDTO {
     /// Does this tenant define any user holding the `root` role?
     pub fn has_root_user(&self) -> bool {
-        self.users.iter().any(|u| u.roles.contains(&"root".to_string()))
+        self.users
+            .iter()
+            .any(|u| u.roles.contains(&"root".to_string()))
     }
     /// The tenant's name (for error messages in the single-root check).
     pub fn tenant_name(&self) -> &str {
@@ -151,33 +153,30 @@ pub const STANDARD_ADMIN_POLICIES: &[(&str, &str)] = &[
 /// the one path allowed to establish the apex — so the level gate never
 /// applies to it; every later mutation inside the tenant goes through R1–R6.
 pub async fn bootstrap_tenant(
-     storage: &Storage,
-     tenant_name: &str,
-     domain: Option<&str>,
-     admin: Option<&str>,
-     admin_email: Option<&str>,
-     admin_mobile: Option<&str>,
+    storage: &Storage,
+    tenant_name: &str,
+    domain: Option<&str>,
+    admin: Option<&str>,
+    admin_email: Option<&str>,
+    admin_mobile: Option<&str>,
 ) -> Result<()> {
-     // Mutual exclusivity: the provisioning operator must choose exactly
-     // one out-of-band credential for the first admin.
-    match (admin_email, admin_mobile) {
-         (Some(_), Some(_)) => {
-            return Err(anyhow::anyhow!(
-                  "admin_email and admin_mobile are mutually exclusive"
-              ));
-         }
-         _ => {}
-     }
+    // Mutual exclusivity: the provisioning operator must choose exactly
+    // one out-of-band credential for the first admin.
+    if let (Some(_), Some(_)) = (admin_email, admin_mobile) {
+        return Err(anyhow::anyhow!(
+            "admin_email and admin_mobile are mutually exclusive"
+        ));
+    }
 
-     // Role catalog for runtime tenants excludes root: it is the
-     // platform-level, cross-tenant authority established by seed.toml.
+    // Role catalog for runtime tenants excludes root: it is the
+    // platform-level, cross-tenant authority established by seed.toml.
     {
         let mut tenant = storage
-              .tenant_by_id(tenant_name)
-              .ok_or_else(|| anyhow::anyhow!("Tenant '{}' not found", tenant_name))?;
-         for (name, _) in crate::role::BUILTIN_ROLES_TENANT {
+            .tenant_by_id(tenant_name)
+            .ok_or_else(|| anyhow::anyhow!("Tenant '{}' not found", tenant_name))?;
+        for (name, _) in crate::role::BUILTIN_ROLES_TENANT {
             tenant.role_create(&Caller::Bootstrap, name, 0).await?;
-         }
+        }
     }
 
     // Domain + standard admin policies (skipping root-bound rows that the
@@ -185,23 +184,23 @@ pub async fn bootstrap_tenant(
     if let Some(domain) = domain {
         storage.add_domain(domain, tenant_name).await?;
         let mut tenant = storage
-              .tenant_by_id(tenant_name)
-              .ok_or_else(|| anyhow::anyhow!("Tenant '{}' not found", tenant_name))?;
+            .tenant_by_id(tenant_name)
+            .ok_or_else(|| anyhow::anyhow!("Tenant '{}' not found", tenant_name))?;
         for (resource, role) in STANDARD_ADMIN_POLICIES.iter().filter(|(_, r)| *r != "root") {
             tenant
-                  .policy_create(
-                      &Caller::Bootstrap,
+                .policy_create(
+                    &Caller::Bootstrap,
                     domain,
                     None,
                     resource,
                     role,
-                      &crate::policy::SourceResolver::Nothing,
-                      &crate::policy::TargetResolver::Nothing,
+                    &crate::policy::SourceResolver::Nothing,
+                    &crate::policy::TargetResolver::Nothing,
                     false,
                     true,
-                  )
-                  .await?;
-         }
+                )
+                .await?;
+        }
     }
 
     // G-131: the first admin must be able to SIGN IN. Created users are
@@ -212,18 +211,18 @@ pub async fn bootstrap_tenant(
     // mobile). Mobile needs no verified flag: possession IS the proof.
     if let Some(admin) = admin {
         let mut tenant = storage
-              .tenant_by_id(tenant_name)
-              .ok_or_else(|| anyhow::anyhow!("Tenant '{}' not found", tenant_name))?;
+            .tenant_by_id(tenant_name)
+            .ok_or_else(|| anyhow::anyhow!("Tenant '{}' not found", tenant_name))?;
         tenant.user_create(admin).await?;
         tenant
-              .user_add_role(&Caller::Bootstrap, admin, "admin")
-              .await?;
+            .user_add_role(&Caller::Bootstrap, admin, "admin")
+            .await?;
         if let Some(email) = admin_email {
             tenant.email_create(admin, &email.to_lowercase()).await?;
-         } else if let Some(mobile) = admin_mobile {
+        } else if let Some(mobile) = admin_mobile {
             tenant.mobile_create(admin, mobile).await?;
-         }
-     }
+        }
+    }
     Ok(())
 }
 
@@ -524,120 +523,122 @@ mod tests {
         );
     }
 
-        /// G-131 (extended): `bootstrap_tenant` must NOT create the `root`
-        /// role. The apex role is platform-only (seed.toml); a runtime
-        /// tenant has no cross-tenant authority.
-        #[tokio::test]
-        async fn bootstrap_tenant_excludes_root_role() {
-            init_revocation_store().await;
-            let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let storage = crate::db::Storage::init(tmp.path())
-                 .await
-                 .expect("storage init");
-            storage.new_tenant("no-root").await.expect("tenant");
-            super::bootstrap_tenant(
-                 &storage,
-                 "no-root",
-                Some("no-root.local"),
-                Some("admin@no-root"),
-                Some("admin@no-root.example"),
-                None,
-             )
-             .await
-             .expect("bootstrap");
+    /// G-131 (extended): `bootstrap_tenant` must NOT create the `root`
+    /// role. The apex role is platform-only (seed.toml); a runtime
+    /// tenant has no cross-tenant authority.
+    #[tokio::test]
+    async fn bootstrap_tenant_excludes_root_role() {
+        init_revocation_store().await;
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = crate::db::Storage::init(tmp.path())
+            .await
+            .expect("storage init");
+        storage.new_tenant("no-root").await.expect("tenant");
+        super::bootstrap_tenant(
+            &storage,
+            "no-root",
+            Some("no-root.local"),
+            Some("admin@no-root"),
+            Some("admin@no-root.example"),
+            None,
+        )
+        .await
+        .expect("bootstrap");
 
-            let mut tenant = storage.tenant_by_id("no-root").expect("tenant");
-            let roles = tenant
-                 .roles_page(crate::utils::MAX_PAGE_LIMIT, 0)
-                 .await
-                 .expect("roles")
-                 .items;
-            assert!(
-                !roles.iter().any(|r| r.id == "root"),
-                "runtime tenant must NOT have a root role"
-            );
-             // admin role does exist
-            assert!(
-                roles.iter().any(|r| r.id == "admin"),
-                "the admin role must still be created"
-            );
-            // No root-bound policies leaked through
-            let policies = tenant
-                 .policies_page(crate::utils::MAX_PAGE_LIMIT, 0)
-                 .await
-                 .expect("policies")
-                 .items;
-            assert!(
-                !policies.iter().any(|p| p.role_id == "root"),
-                "runtime tenant must NOT have root-bound policies"
-            );
-        }
+        let mut tenant = storage.tenant_by_id("no-root").expect("tenant");
+        let roles = tenant
+            .roles_page(crate::utils::MAX_PAGE_LIMIT, 0)
+            .await
+            .expect("roles")
+            .items;
+        assert!(
+            !roles.iter().any(|r| r.id == "root"),
+            "runtime tenant must NOT have a root role"
+        );
+        // admin role does exist
+        assert!(
+            roles.iter().any(|r| r.id == "admin"),
+            "the admin role must still be created"
+        );
+        // No root-bound policies leaked through
+        let policies = tenant
+            .policies_page(crate::utils::MAX_PAGE_LIMIT, 0)
+            .await
+            .expect("policies")
+            .items;
+        assert!(
+            !policies.iter().any(|p| p.role_id == "root"),
+            "runtime tenant must NOT have root-bound policies"
+        );
+    }
 
-        /// G-131 (extended): first admin can be provisioned with a mobile
-        /// number (OTP) instead of an email.
-        #[tokio::test]
-        async fn bootstrap_tenant_admin_mobile() {
-            init_revocation_store().await;
-            let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let storage = crate::db::Storage::init(tmp.path())
-                 .await
-                 .expect("storage init");
-            storage.new_tenant("mobile").await.expect("tenant");
-            super::bootstrap_tenant(
-                 &storage,
-                 "mobile",
-                Some("mobile.local"),
-                Some("admin@mobile"),
-                None,
-                Some("+1-555-0100"),
-             )
-             .await
-             .expect("bootstrap");
+    /// G-131 (extended): first admin can be provisioned with a mobile
+    /// number (OTP) instead of an email.
+    #[tokio::test]
+    async fn bootstrap_tenant_admin_mobile() {
+        init_revocation_store().await;
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = crate::db::Storage::init(tmp.path())
+            .await
+            .expect("storage init");
+        storage.new_tenant("mobile").await.expect("tenant");
+        super::bootstrap_tenant(
+            &storage,
+            "mobile",
+            Some("mobile.local"),
+            Some("admin@mobile"),
+            None,
+            Some("+1-555-0100"),
+        )
+        .await
+        .expect("bootstrap");
 
-            let mut tenant = storage.tenant_by_id("mobile").expect("tenant");
-            let admin = tenant.user("admin@mobile").await.expect("admin");
-            let roles = tenant
-                 .user_roles(admin.id)
-                 .await
-                 .expect("roles");
-            assert!(
-                roles.iter().any(|r| r.id == "admin"),
-                "the bootstrap admin must hold the admin role"
-            );
-            let mobiles = tenant
-                 .all_mobiles(Some("admin@mobile"))
-                 .await
-                 .expect("mobiles");
-            assert!(
-                mobiles.iter().any(|m| m.id == "+15550100"),
-                "the bootstrap admin mobile must be attached"
-            );
-            assert_eq!(mobiles.len(), 1);
-        }
+        let mut tenant = storage.tenant_by_id("mobile").expect("tenant");
+        let admin = tenant.user("admin@mobile").await.expect("admin");
+        let roles = tenant.user_roles(admin.id).await.expect("roles");
+        assert!(
+            roles.iter().any(|r| r.id == "admin"),
+            "the bootstrap admin must hold the admin role"
+        );
+        let mobiles = tenant
+            .all_mobiles(Some("admin@mobile"))
+            .await
+            .expect("mobiles");
+        assert!(
+            mobiles.iter().any(|m| m.id == "+15550100"),
+            "the bootstrap admin mobile must be attached"
+        );
+        assert_eq!(mobiles.len(), 1);
+    }
 
-        /// G-131 (extended): passing both admin_email and admin_mobile to
-        /// bootstrap_tenant must fail with a mutual-exclusivity error.
-        #[tokio::test]
-        async fn bootstrap_tenant_email_mobile_mutual_exclusion() {
-            init_revocation_store().await;
-            let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let storage = crate::db::Storage::init(tmp.path())
-                 .await
-                 .expect("storage init");
-            storage.new_tenant("excl").await.expect("tenant");
-            let result = super::bootstrap_tenant(
-                 &storage,
-                 "excl",
-                None,
-                Some("adm"),
-                Some("adm@x.example"),
-                Some("+1-555-0100"),
-             )
-             .await;
-            assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("mutually exclusive"));
-        }
+    /// G-131 (extended): passing both admin_email and admin_mobile to
+    /// bootstrap_tenant must fail with a mutual-exclusivity error.
+    #[tokio::test]
+    async fn bootstrap_tenant_email_mobile_mutual_exclusion() {
+        init_revocation_store().await;
+        let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = crate::db::Storage::init(tmp.path())
+            .await
+            .expect("storage init");
+        storage.new_tenant("excl").await.expect("tenant");
+        let result = super::bootstrap_tenant(
+            &storage,
+            "excl",
+            None,
+            Some("adm"),
+            Some("adm@x.example"),
+            Some("+1-555-0100"),
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("mutually exclusive")
+        );
+    }
 }
