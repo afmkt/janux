@@ -369,9 +369,9 @@ policies = [
 users = [
     # root+admin: tenant/* policies bind `root`, the rest bind `admin` —
     # an operator session needs both to walk the whole admin surface.
-    {{ id = "root@test.local", active = true, roles = ["root", "admin"] }},
-    {{ id = "admin@test.local", active = true, roles = ["admin"] }},
-    {{ id = "user@test.local", active = true, roles = ["user"] }},
+    {{ name = "root@test.local", active = true, roles = ["root", "admin"] }},
+    {{ name = "admin@test.local", active = true, roles = ["admin"] }},
+    {{ name = "user@test.local", active = true, roles = ["user"] }},
 ]
 
 [seed.resend]

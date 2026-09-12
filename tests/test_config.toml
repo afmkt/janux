@@ -35,8 +35,8 @@ domains = [{ id = "test.local", cors = [] }]
 roles = ["root", "admin", "user", "guest"]
 policies = []
 users = [
-    { id = "admin@test.local", active = true, roles = ["admin"] },
-    { id = "user@test.local", active = true, roles = ["user"] },
+    { name = "admin@test.local", active = true, roles = ["admin"] },
+    { name = "user@test.local", active = true, roles = ["user"] },
 ]
 
 [seed.resend]
