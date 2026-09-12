@@ -172,6 +172,7 @@ here so a future reader does not file them as defects.
 | G-99 | **Open signup**: a completed ceremony provisions a `guest` floor; closed enrollment is an RP concern. | DESIGN §1 | Owner decision 2026-09-08. |
 | G-100 | **Passkey/TOTP can never provision a user**; anchor-first (verifiable external identity), passkey second. | DESIGN §1 | Owner decision 2026-09-08. |
 | head-of-line blocking | A slow SMS/email send holds the per-tenant write lock, so other requests for that tenant queue (DESIGN §6). | DESIGN §6 | Throughput, not correctness. Aggravated by G-168 bulk absence. |
+| G-175 | **Root role is seed-only and single-tenant.** `bootstrap_tenant` (runtime path via `admin/tenant/create`) provisions `admin`/`scim`/`user`/`guest` but NOT `root`. The `root` role is established exclusively through `seed.toml` via `Caller::Bootstrap` (the platform-level trust anchor). `Storage::seed` enforces the single-root invariant: at most one tenant may define a user with the `root` role; a config defining root in two tenants is rejected at boot. No runtime API grants or creates `root`. | DESIGN §3, §5 | Root is the platform authority; two roots are incoherent. SCIM (level 60) cannot provision admin (80) or root (100) by the level gate (§3). No promotion path exists. The first admin's credential (email or mobile) lands UNVERIFIED — the admin proves ownership at first login via the normal ceremony. |
 
 ---
 

@@ -8,17 +8,28 @@
 # so the server can reboot against the same file.
 #
 # Built-in role model:
-#   root  — cross-tenant platform operator: tenant lifecycle only.
-#   admin — per-tenant operator: everything inside its own tenant.
-#   user  — regular account: self-service endpoints.
-#   guest — authenticated, no admin grants (default-deny placeholder
+#   root    - cross-tenant platform operator: tenant lifecycle only.
+#            SEED-ONLY: root is created exclusively by this file.
+#            Runtime tenants (admin/tenant/create) do NOT get root.
+#            At most ONE tenant may hold a root user (enforced at boot).
+#   admin - per-tenant operator: everything inside its own tenant.
+#   scim    - machine provisioning: user lifecycle via /scim/v2/*
+#            (level 60 - above user, below admin: cannot administer
+#            administrators or root).
+#   user    - regular account: self-service endpoints.
+#   guest   - authenticated, no admin grants (default-deny placeholder
 #           for app-level policies added later via admin/policy/*).
 #
 # Roles live in the per-tenant DB. "Cross-tenant" works because the
 # tenant/* handlers act globally once the policy gate passes, and the
-# gate is evaluated in the caller's home tenant — the one seeding
-# `root` below. Tenants created later at runtime need their own
-# roles/policies (via the admin API).
+# gate is evaluated in the caller's home tenant - the one seeding
+# `root` below. Tenants created later at runtime get their own
+# roles/policies via admin/tenant/create - bootstrap_tenant, which
+# provisions admin/scim/user/guest (+ standard admin policies) but
+# NOT root. The first admin's email or mobile is created UNVERIFIED
+# - the admin proves ownership at first login via the normal
+# ceremony. Runtime tenants accept either admin_email (magic link)
+# or admin_mobile (SMS OTP), mutually exclusive.
 #
 # Policy notes:
 # - `protect` is default-deny: anything not listed here is rejected.
@@ -68,8 +79,14 @@ roles = ["root", "admin", "scim", "user", "guest"]
 # work. An account without it has no credential and cannot sign in until
 # one is attached.
 users = [
-    { id = "admin", active = true, roles = ["root", "admin", "user"], email = "admin@example.com" },
-    { id = "demo", active = true, roles = ["user"] },
+    { name = "root", active = true, roles = [
+        "root",
+    ], email = "admin@example.com" },
+    { name = "admin", active = true, roles = [
+        "admin",
+    ], email = "admin@example.com" },
+
+
 ]
 
 policies = [

@@ -27,6 +27,21 @@ pub const BUILTIN_ROLES: &[(&str, i64)] = &[
     ("guest", 20),
 ];
 
+/// The builtin catalog restricted to runtime-created tenants
+/// (admin/tenant/create → `bootstrap_tenant`). `root` is
+/// excluded: it is a platform-level, seed-only role — a
+/// runtime tenant has no cross-tenant authority, so the
+/// apex role has no meaning there. The platform tenant
+/// (seed.toml) creates the full `BUILTIN_ROLES` catalog
+/// via `TenantDTO::save`; `bootstrap_tenant` uses this
+/// subset.
+pub const BUILTIN_ROLES_TENANT: &[(&str, i64)] = &[
+     ("admin", 80),
+     ("scim", 60),
+     ("user", 40),
+     ("guest", 20),
+];
+
 /// The level of a built-in role name, if `name` is a catalog member.
 pub fn builtin_level(name: &str) -> Option<i64> {
     BUILTIN_ROLES

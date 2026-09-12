@@ -888,6 +888,23 @@ impl Storage {
 
     pub async fn seed(&mut self, config: &JanuxConfig) -> Result<Self> {
         if let Some(data) = &config.seed {
+            // Before loading, enforce the single-root invariant: at most one
+            // tenant may define a user holding the `root` role. The root role
+            // is the cross-tenant platform authority; two roots would both be
+            // apex-level and the model has no way to arbitrate between them.
+            let root_tenants: Vec<&str> = data
+                .iter()
+                .filter(|t| t.has_root_user())
+                .map(|t| t.tenant_name())
+                .collect();
+            if root_tenants.len() > 1 {
+                return Err(anyhow::anyhow!(
+                    "single-root invariant violated: {} tenants define a root user: {:?}. \
+                     Only one tenant may hold the `root` role.",
+                    root_tenants.len(),
+                    root_tenants
+                ));
+            }
             for d in data {
                 d.save(self).await?;
             }

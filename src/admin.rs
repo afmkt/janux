@@ -11,14 +11,19 @@ pub struct NewTenant {
     pub domain: Option<String>,
     /// First admin user; created and granted the builtin `admin` role.
     pub admin: Option<String>,
-    /// Optional verified email for the first admin (G-131). Without it the
-    /// new tenant's admin is credential-less and can never sign in: strict
-    /// signup refuses the pre-existing username, and every attach path
-    /// (SCIM client, `user/attach_email`) itself requires an admin session
-    /// for THIS tenant. The creator vouches for the address — it lands as
-    /// a verified credential, and the magic-link ceremony mints the first
-    /// session.
-    pub admin_email: Option<String>,
+    /// Credential for the first admin (G-131): an email
+    /// address (magic-link ceremony) or a mobile number (OTP
+    /// possession). Mutually exclusive with `admin_mobile`.
+    /// The credential lands UNVERIFIED — the admin proves
+    /// ownership at first login via the normal ceremony.
+    /// Without a contact the new tenant's admin is
+    /// credential-less and can never sign in.
+      pub admin_email: Option<String>,
+    /// Alternative to `admin_email`: a mobile number for
+    /// provisioning via SMS OTP. No verified flag needed —
+    /// OTP possession at first login IS the ownership proof.
+    #[serde(default)]
+      pub admin_mobile: Option<String>,
 }
 
 #[endpoint(
@@ -44,10 +49,15 @@ pub async fn new_tenant(req: &mut Request, depot: &mut Depot, res: &mut Response
         "tenant",
         &body.name,
         &format!(
-            "domain={},admin={}",
+            "domain={},admin={},contact={}",
             body.domain.as_deref().unwrap_or("-"),
-            body.admin.as_deref().unwrap_or("-")
-        ),
+            body.admin.as_deref().unwrap_or("-"),
+            match (body.admin_email.as_deref(), body.admin_mobile.as_deref()) {
+                    (Some(e), None) => e,
+                    (None, Some(m)) => m,
+                     _ => "-",
+                }
+             ),
     );
 
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
@@ -65,6 +75,7 @@ pub async fn new_tenant(req: &mut Request, depot: &mut Depot, res: &mut Response
                 body.domain.as_deref(),
                 body.admin.as_deref(),
                 body.admin_email.as_deref(),
+                body.admin_mobile.as_deref(),
             )
             .await
             {
