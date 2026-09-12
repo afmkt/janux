@@ -37,8 +37,8 @@ name = "{tenant}"
 domains = [{{ id = "{domain}", cors = [] }}]
 roles = ["root", "admin", "scim", "user", "guest"]
 users = [
-    {{ id = "admin@{domain}", active = true, roles = ["admin"], email = "admin@{domain}" }},
-    {{ id = "user@{domain}", active = true, roles = ["user"] }},
+    {{ name = "admin@{domain}", active = true, roles = ["admin"], email = "admin@{domain}" }},
+    {{ name = "user@{domain}", active = true, roles = ["user"] }},
 ]
 {policies}
 [seed.resend]
