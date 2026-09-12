@@ -52,7 +52,14 @@
             ]
           },
           "admin_email": {
-            "description": "Optional verified email for the first admin (G-131). Without it the\nnew tenant's admin is credential-less and can never sign in: strict\nsignup refuses the pre-existing username, and every attach path\n(SCIM client, `user/attach_email`) itself requires an admin session\nfor THIS tenant. The creator vouches for the address — it lands as\na verified credential, and the magic-link ceremony mints the first\nsession.",
+            "description": "Credential for the first admin (G-131): an email\naddress (magic-link ceremony) or a mobile number (OTP\npossession). Mutually exclusive with `admin_mobile`.\nThe credential lands UNVERIFIED — the admin proves\nownership at first login via the normal ceremony.\nWithout a contact the new tenant's admin is\ncredential-less and can never sign in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "admin_mobile": {
+            "description": "Alternative to `admin_email`: a mobile number for\nprovisioning via SMS OTP. No verified flag needed —\nOTP possession at first login IS the ownership proof.",
             "type": [
               "string",
               "null"

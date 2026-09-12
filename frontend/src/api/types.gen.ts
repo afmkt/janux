@@ -24,15 +24,21 @@ export type OpenapiAdminNewTenant = {
      */
     admin?: string | null;
     /**
-     * Optional verified email for the first admin (G-131). Without it the
-     * new tenant's admin is credential-less and can never sign in: strict
-     * signup refuses the pre-existing username, and every attach path
-     * (SCIM client, `user/attach_email`) itself requires an admin session
-     * for THIS tenant. The creator vouches for the address — it lands as
-     * a verified credential, and the magic-link ceremony mints the first
-     * session.
+     * Credential for the first admin (G-131): an email
+     * address (magic-link ceremony) or a mobile number (OTP
+     * possession). Mutually exclusive with `admin_mobile`.
+     * The credential lands UNVERIFIED — the admin proves
+     * ownership at first login via the normal ceremony.
+     * Without a contact the new tenant's admin is
+     * credential-less and can never sign in.
      */
     admin_email?: string | null;
+    /**
+     * Alternative to `admin_email`: a mobile number for
+     * provisioning via SMS OTP. No verified flag needed —
+     * OTP possession at first login IS the ownership proof.
+     */
+    admin_mobile?: string | null;
     /**
      * First domain of the new tenant; the standard admin policy set is
      * bound to it. Without a domain the
