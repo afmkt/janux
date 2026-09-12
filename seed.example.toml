@@ -79,14 +79,8 @@ roles = ["root", "admin", "scim", "user", "guest"]
 # work. An account without it has no credential and cannot sign in until
 # one is attached.
 users = [
-    { name = "root", active = true, roles = [
-        "root",
-    ], email = "admin@example.com" },
-    { name = "admin", active = true, roles = [
-        "admin",
-    ], email = "admin@example.com" },
-
-
+      { name = "root", roles = ["root"], active = true, email = "root@example.com" },
+      { name = "admin", roles = ["admin"], active = true, email = "admin@example.com" },
 ]
 
 policies = [

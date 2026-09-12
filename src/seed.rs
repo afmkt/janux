@@ -275,27 +275,47 @@ mod tests {
             );
         }
 
+        let root = tenant
+            .users
+            .iter()
+            .find(|u| u.name == "root")
+            .expect("bootstrap root seeded");
+        assert!(root.active);
+        assert!(
+            root.roles.contains(&"root".to_string()),
+            "root user must hold the root role"
+        );
         let admin = tenant
             .users
             .iter()
             .find(|u| u.name == "admin")
             .expect("bootstrap admin seeded");
         assert!(admin.active);
-        for role in ["root", "admin", "user"] {
+        // The role model is SPLIT across users: `root` (cross-tenant platform
+        // operator) and `admin` (per-tenant operator) are distinct accounts.
+        // A per-tenant admin must NOT hold root — root is platform-only
+        // (seed.toml) and is never provisioned by a runtime tenant
+        // (bootstrap_tenant_excludes_root_role).
+        assert!(
+            admin.roles.contains(&"admin".to_string()),
+            "admin user must hold the admin role"
+        );
+        assert!(
+            !admin.roles.contains(&"root".to_string()),
+            "the per-tenant admin must NOT hold the platform root role"
+        );
+
+        // G-131: each seeded operator must vouch an email credential —
+        // without it the account can never sign in (strict signup refuses the
+        // pre-existing username and no self-service attach path exists for a
+        // credential-less account).
+        for op in [&root, &admin] {
             assert!(
-                admin.roles.contains(&role.to_string()),
-                "admin lacks {role}"
+                op.email.as_deref().is_some_and(|e| e.contains('@')),
+                "seeded operator {} must vouch an email credential (G-131)",
+                op.name
             );
         }
-
-        // G-131: the bootstrap admin must vouch an email credential —
-        // without it the seeded admin can never sign in (strict signup
-        // refuses the pre-existing username and no self-service attach
-        // path exists for a credential-less account).
-        assert!(
-            admin.email.as_deref().is_some_and(|e| e.contains('@')),
-            "the seeded admin must vouch an email credential (G-131)"
-        );
 
         // G-133: magic links must land on a route that EXISTS — the
         // hosted /login SPA consumes token/username/email from the query.
