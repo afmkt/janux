@@ -225,7 +225,7 @@ impl SessionDTO {
             Some(s) => {
                 // Validate before persisting: a malformed or too-broad scope
                 // is a boot-time failure, never a runtime surprise.
-                crate::utils::validate_cookie_scope(&s, domain)
+                crate::utils::validate_cookie_scope(s, domain)
                     .map_err(|e| anyhow::anyhow!("invalid cookie_scope at domain {domain}: {e}"))?;
                 tenant.config_set(&c, serde_json::json!(s)).await?;
             }
@@ -238,7 +238,7 @@ impl SessionDTO {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[allow(clippy::upper_case_acronys)] // OTP is a domain acronym
+#[allow(clippy::upper_case_acronyms)] // OTP is a domain acronym
 pub struct OTPDTO {
     pub api_secret: String,
     pub api_key: String,

@@ -342,9 +342,7 @@ async fn session_scope(req: &Request, depot: &mut Depot) -> Option<String> {
     let Ok(state) = depot.obtain_mut::<crate::server::ServerState>() else {
         return None;
     };
-    let Some(domain) = get_domain(req, &state) else {
-        return None;
-    };
+    let domain = get_domain(req, state)?;
     let mut tenant = match state.storage.tenant_by_domain(domain) {
         Some(t) => t,
         None => return None,
@@ -361,7 +359,7 @@ async fn auth_redirect(req: &Request, depot: &mut Depot) -> String {
     let Ok(state) = depot.obtain_mut::<crate::server::ServerState>() else {
         return "/login".to_string();
     };
-    let Some(domain) = get_domain(req, &state) else {
+    let Some(domain) = get_domain(req, state) else {
         return "/login".to_string();
     };
     let mut tenant = match state.storage.tenant_by_domain(domain) {
