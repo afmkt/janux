@@ -8,7 +8,11 @@
 #                              SCIM, health). Public.
 #   https://app.example.com  — a static file, gated by forward-auth.
 #
-# TLS is driven by the `CADDY_TLS` env var (up.py; defaults to `internal`).
+# TLS: `tls internal` below (per site) makes caddy sign with its local CA.
+# NOTE: this caddy build does NOT honor the CADDY_TLS env var, and its
+# caddyfile adapter rejects a `global { tls internal }` block; the working
+# form is `tls internal` inside each site block. That is what up.py's
+# `trust-ca` then extracts from data/caddy/pki/authorities/local/.
 #
 # ── Sub-domain SSO via a Domain-scoped cookie ──────────────────────────
 # The session cookie is Host-only BY DEFAULT (src/verify.rs::set_session_cookie):
@@ -32,13 +36,16 @@
 # bounced /app lands on the AUTH host's login UI, then the Domain-scoped
 # cookie makes the post-login /app succeed. Caddy propagates the 303 to the
 # browser. See ../README.md.
-{
-	# No CADDY_TLS env here (up.py sets it); keep the global block minimal so
-	# the `handle` blocks below parse.
-}
+# A `global { tls internal }` block is rejected by this caddy build's caddyfile
+# adapter, so TLS is configured per site instead: see the `tls internal` line
+# in the app + auth blocks below.
 
 # ── The app host: static file gated by forward-auth ─────────────────────
 app.example.com {
+	# Use caddy's local CA (self-signed) so https://app.example.com works
+	# without a real, public cert.
+	tls internal
+
 	# The demo "service": a static file gated by forward-auth. A successful (2xx)
 	# probe falls through to nginx; an unauthenticated probe yields janux's 303
 	# -> /login, propagated to the browser below.
@@ -57,6 +64,9 @@ app.example.com {
 
 # ── The auth host: janux's full surface, public ─────────────────────────
 auth.example.com {
+	# Same local CA so the browser trusts auth.example.com too.
+	tls internal
+
 	handle {
 		reverse_proxy auth:8080
 	}

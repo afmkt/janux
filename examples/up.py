@@ -11,9 +11,11 @@ Each sub-directory (single-host/, split-hosts/) is a self-contained
  1. renders base.toml / seed.toml from the *.example.toml templates
     (regenerating the encryption_key; you never edit a generated .toml
     by hand),
- 2. exports CADDY_TLS so Caddy uses its local CA, and
- 3. for split-hosts, maps the two hostnames into /etc/hosts and -- on
-    macOS -- trusts that CA in the system keychain.
+ 2. (split-hosts) maps the two hostnames into /etc/hosts and -- on macOS
+    -- trusts caddy's local CA in the system keychain. TLS itself is
+    configured in each Caddyfile via a per-site `tls internal` directive
+    (this caddy build ignores the CADDY_TLS env var and rejects a
+    `global { tls internal }` block, so no env plumbing is needed).
 
 TLS is MANDATORY, not optional: janux's session cookie is `Secure` and
 HOST-ONLY (no Domain attribute; src/verify.rs::set_session_cookie), so it
@@ -43,11 +45,6 @@ SETUPS = ("single-host", "split-hosts")
 SPLIT_HOSTS = ("app.example.com", "auth.example.com")
 HOSTS_FILE = Path("/etc/hosts")
 _MARK = "janux-example-split-hosts"
-# Caddy 2.x global TLS via env. "tls internal" is the value that survives this
-# Caddy's `handle` parser -- a `global { tls internal }` Caddyfile block does
-# NOT, so the env is the one TLS control.
-CADDY_TLS_VALUE = "tls internal"
-
 
 # --- config rendering -----------------------------------------------------
 def _render(src: Path, dst: Path, regen_key: bool) -> None:
@@ -176,10 +173,9 @@ def trust_caddy_root(setup: str) -> None:
 
 # --- compose wrappers -----------------------------------------------------
 def compose(setup: str, *args: str) -> None:
-    env = dict(os.environ, CADDY_TLS=CADDY_TLS_VALUE)
     cmd = ["docker", "compose", f"-f{setup}/compose.yml", *args]
     print("+ " + " ".join(shlex.quote(c) for c in cmd))
-    rc = subprocess.run(cmd, cwd=HERE, env=env).returncode
+    rc = subprocess.run(cmd, cwd=HERE).returncode
     if rc != 0:
         sys.exit(rc)
 
@@ -189,12 +185,14 @@ def main() -> None:
         print(
             "usage: ./up.py <"
             + "|".join(SETUPS)
-            + "> <up|down|trust-ca>",
+            + "> <up|down|down --purge|trust-ca>",
             file=sys.stderr,
         )
         sys.exit(2)
     setup = sys.argv[1]
     action = sys.argv[2] if len(sys.argv) > 2 else "up"
+      # `down --purge` (or -v/-p) also wipes the named volumes.
+    purge = (action == "purge") or any(f in sys.argv[3:] for f in ("--purge", "-v", "-p"))
     setup_dir = HERE / setup
     if not setup_dir.is_dir():
         print(f"      no such example: {setup_dir}", file=sys.stderr)
@@ -221,8 +219,16 @@ def main() -> None:
         else:
             print("      Linux: https://127.0.0.1/app works; cert warns once.")
 
-    elif action == "down":
-        compose(setup, "down", "-v")
+      # `down` keeps the named volumes (incl. caddy's PKI, so a previously
+      # trusted CA stays valid). `purge` / `down --purge` also wipe volumes,
+      # regenerating caddy's local CA on the next `up` -- so re-run `trust-ca`
+      # afterwards, or the browser keeps rejecting the stale root.
+    elif action in ("down", "purge"):
+        if purge:
+            compose(setup, "down", "-v")
+            print(f"      purged named volumes for {setup} (CA regenerates on `up`; re-run `trust-ca`)")
+        else:
+            compose(setup, "down")
         if setup == "split-hosts":
             print(f"==> unmapping {', '.join(SPLIT_HOSTS)}")
             update_hosts(add=False)

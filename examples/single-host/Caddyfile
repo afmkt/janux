@@ -2,23 +2,25 @@
 # ONE hostname (`localhost`) fronts janux's full surface AND a protected
 # static resource at `/app`, both behind forward-auth.
 #
-# TLS is driven by the `CADDY_TLS` environment variable (set by up.py; it
-# defaults to `internal`, i.e. caddy's local CA). It is intentionally NOT set
-# in this file: in Caddy 2.x+ a `global { tls internal }` block breaks the
-# `handle` parsing below, so the env is the clean mechanism.
+# TLS is `tls internal` below (per site): Caddy signs `localhost` with its
+# local CA. NOTE: this Caddy build ignores the `CADDY_TLS` env var and its
+# caddyfile adapter rejects a `global { tls internal }` block, so the
+# directive lives in the site block -- verified not to interfere with the
+# `handle` blocks below.
 #
 # ── Why TLS ───────────────────────────────────────────────────────────
 # The janux session cookie is `Secure` (+ host-only, no Domain attribute; see
 # src/verify.rs::set_session_cookie), so it only transmits over HTTPS.
-# `localhost` is a browser secure-context, so `tls internal` is the clean
-# choice; up.py maps the host to 127.0.0.1 in /etc/hosts and trusts that CA
-# on macOS.
+# `localhost` is a browser secure-context, so a local CA is the clean
+# choice; on macOS trust that CA once with `up.py single-host trust-ca`
+# (up.py handles the /etc/hosts mapping only for split-hosts).
 #
 # ── Request flow ─────────────────────────────────────────────────────
-#     /api/v1/auth/verify -> janux    (public — Caddy POSTs the auth probe here)
-#     /app                 -> forward_auth janux verify -> nginx (gated)
-#     /  (everything else) -> janux     (discovery, OIDC, admin UI, SCIM, health,
-#                                        the /login page that redirects land on)
+#      /api/v1/auth/verify -> janux     (public — Caddy POSTs the auth probe here)
+#      /app                 -> forward_auth janux verify -> nginx (gated)
+#      /   (everything else) -> janux      (discovery, OIDC, admin UI, SCIM,
+#                                          health, the /login page that
+#                                          redirects land on)
 #
 # ── The redirect on unauth ──────────────────────────────────────────────
 # When a gate probe is UNAUTHENTICATED, janux answers it with a 303 -> /login
@@ -31,6 +33,10 @@
 # valid "denied" result — the gate still blocks the request, just no bounce.)
 
 localhost {
+	# Sign localhost with caddy's local CA so browsers get a closed TLS
+	# chain. This per-site form is what this caddy build accepts.
+	tls internal
+
 	# The demo "service": a static file gated by forward-auth. A
 	# successful (2xx) probe falls through to nginx; an unauthenticated
 	# probe yields janux's 303 -> /login, propagated below.
@@ -38,11 +44,11 @@ localhost {
 	handle @appName {
 		forward_auth auth:8080 {
 			uri /api/v1/auth/verify
-			# janux runs its DEFAULT-DENY engine on the PROXIED request: it reads
-			# X-Forwarded-{Host,Uri,Method} (Caddy sets them) and evaluates the
-			# tenant's policy for resource "/app" (seeded in seed.toml). 200 ->
-			# allow; 401 -> unauth; 403 -> the who/is/for triple lacks permission.
-		}
+				# janux runs its DEFAULT-DENY engine on the PROXIED request: it reads
+				# X-Forwarded-{Host,Uri,Method} (Caddy sets them) and evaluates the
+				# tenant's policy for resource "/app" (seeded in seed.toml). 200 ->
+				# allow; 401 -> unauth; 403 -> the who/is/for triple lacks permission.
+			}
 		reverse_proxy app:80
 	}
 

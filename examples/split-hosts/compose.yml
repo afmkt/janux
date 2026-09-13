@@ -1,16 +1,18 @@
-# ── Split-hosts example ──────────────────────────────────────────────────
+# ── Split-hosts example ────────────────────────────────────────────────
 #   caddy  TWO public hostnames, ONE janux instance:
-#            - app.example.com    -> protected /app (forward_auth) + full UI
-#            - auth.example.com   -> the canonical IdP/admin/discovery host
+#             - app.example.com    -> protected /app (forward_auth) + full UI
+#             - auth.example.com   -> the canonical IdP/admin/discovery host
 #   auth   janux reverse proxy target & forward-auth server (built or pulled)
 #   app    the "simple service": a static site behind /app (existing image)
 #
-# up.py generates base.toml/seed.toml and — because TLS is required for the
-# Secure cookie on a non-loopback host — mints a local CA, trusts it, and maps
-# the hostnames to 127.0.0.1:
+# TLS is mandatory (the Secure cookie on a non-loopback host). TLS is
+# configured in the Caddyfile via a per-site `tls internal` directive, so each
+# hostname is signed by caddy's local CA. up.py maps the two hostnames to
+# 127.0.0.1 and trusts that CA on macOS:
 #
-#   python3 up.py split-hosts up --tls          # https://app.example.com/app
-#   python3 up.py split-hosts down
+#   python3 up.py split-hosts up          # https://app.example.com/app
+#   python3 up.py split-hosts trust-ca    # macOS: trust the local CA
+#   python3 up.py split-hosts down        # keep volumes (CA stays trusted)
 #
 # NOTE: this setup publishes 80/443, the same as single-host — don't run both
 # at once. Pick one.
@@ -23,7 +25,7 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
-    container_name: janux-split-hosts
+    container_name: auth
     restart: unless-stopped
     networks:
       - default
@@ -47,16 +49,15 @@ services:
   # caddy: the public gateway for BOTH hostnames
   caddy:
     image: caddy:latest
-    container_name: caddy-split-hosts
+    container_name: caddy
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
-    environment:
-      # up.py sets CADDY_TLS="internal" (caddy's local CA); the Secure
-      # cookie needs TLS. No tls directive in the Caddyfile, so this env is the
-      # one TLS control.
-      CADDY_TLS: ${CADDY_TLS:-internal}
+    # TLS is `internal` via the per-site `tls internal` directive in the
+    # Caddyfile. This caddy build ignores the CADDY_TLS env var and rejects a
+    # `global { tls internal }` block, so no env override is set here; the
+    # Secure cookie is served over caddy's local CA.
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - split_caddy_data:/data
@@ -68,7 +69,7 @@ services:
     # app: the "simple service" — static files behind /app
   app:
     image: nginx:alpine
-    container_name: app-split-hosts
+    container_name: app
     restart: unless-stopped
     networks:
       - default
