@@ -18,8 +18,8 @@
 services:
   # janux: the auth server + forward-auth probe
   auth:
-    image: ${JANUX_IMAGE:-janux:latest}
-    pull_policy: ${JANUX_PULL:-build}
+    image: ghcr.io/afmkt/janux:latest
+    pull_policy: always
     build:
       context: ../..
       dockerfile: Dockerfile
@@ -65,7 +65,7 @@ services:
       auth:
         condition: service_healthy
 
-   # app: the "simple service" — static files behind /app
+    # app: the "simple service" — static files behind /app
   app:
     image: nginx:alpine
     container_name: app-split-hosts
@@ -86,7 +86,7 @@ networks:
     ipam:
       driver: default
       config:
-         - subnet: 172.29.0.0/16
+        - subnet: 172.29.0.0/16
 
 # Distinct from single-host so the two setups' data can coexist on disk.
 volumes:

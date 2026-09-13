@@ -6,9 +6,9 @@ target
 data/
 test-data/
 .env
+*.crt
+*.key
 janux.toml
-base.toml
-seed.toml
 .obsidian/
 .venv/
 __pycache__/

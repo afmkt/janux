@@ -65,12 +65,12 @@ Run it:
 
 ```sh
 cd examples
-./up.py single-host up             # build + render config + up (detached)
+./up.py single-host up             # render config + up (detached)
 open  https://localhost/app        # macOS;  https://127.0.0.1/app on Linux
 ```
 
 The first visit to `/app` bounces to `/login`, you authenticate (magic link),
-and `/app` opens. `./up.py single-host logs` tails; `down` tears it down.
+and `/app` opens. `docker compose -f single-host/compose.yml logs` tails; `./up.py single-host down` tears it down.
 
 ## Scenario 2 — split-hosts (sub-domain SSO via a Domain-scoped cookie)
 
