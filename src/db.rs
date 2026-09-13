@@ -873,11 +873,12 @@ impl Storage {
                         }
                         Entry::Occupied(v) => {
                             let owner = v.get();
-                            let parent = path.parent()
-                                 .map(|p| p.to_string_lossy().to_string())
-                                 .unwrap_or_default();
+                            let parent = path
+                                .parent()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_default();
                             return Err(anyhow::anyhow!(
-                                  "Domain '{}' is already claimed by tenant '{}'.\
+                                "Domain '{}' is already claimed by tenant '{}'.\
                                    Tenant '{}' cannot also claim it.\
                                    Likely cause: a stale tenant directory '{}/{}' exists in the \
                                    data dir from a previous run (or an older seed.toml) that seeded \
@@ -891,8 +892,8 @@ impl Storage {
                                 owner,
                                 parent,
                                 owner,
-                              ));
-                          }
+                            ));
+                        }
                     }
                 }
             }

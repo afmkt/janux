@@ -446,7 +446,7 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
 
     // G-166: the client row and its metadata both persisted — record
     // the dynamic-client registration so the trail shows the new client_id.
-     crate::audit::record_target_detail(res, "client", &client_id, "dcr-create");
+    crate::audit::record_target_detail(res, "client", &client_id, "dcr-create");
 
     // G-125 (RFC 7592 §3): issue the initial management credential. A
     // tenant without a signing key cannot mint it — roll the registration
@@ -1195,18 +1195,21 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
     // G-139: the canonical session cookie is HttpOnly — only the server
     // can remove it from the jar, so RP-initiated logout expires it on
     // both response paths (harmless when no cookie was ever set).
-    crate::verify::set_session_cookie(res, None);
+    // #1: reuse the tenant's cookie Domain so the clear matches the jar.
+    let scope = crate::config::SessionDTO::load(&mut tenant, &domain)
+        .await
+        .cookie_scope;
+    crate::verify::set_session_cookie(res, None, scope.as_deref());
 
-     // G-166: RP-initiated logout is a session mutation — record who was
-     // logged out (identifying client + user subject) for the trail.
-     let end_detail =
-          match (client_id, user_id) {
-               (Some(c), Some(u)) => format!("client={c};subject={u}"),
-               (Some(c), None) => format!("client={c}"),
-               (None, Some(u)) => format!("subject={u}"),
-               (None, None) => "anonymous".to_string(),
-             };
-     crate::audit::record_target_detail(res, "auth", "end_session", &end_detail);
+    // G-166: RP-initiated logout is a session mutation — record who was
+    // logged out (identifying client + user subject) for the trail.
+    let end_detail = match (client_id, user_id) {
+        (Some(c), Some(u)) => format!("client={c};subject={u}"),
+        (Some(c), None) => format!("client={c}"),
+        (None, Some(u)) => format!("subject={u}"),
+        (None, None) => "anonymous".to_string(),
+    };
+    crate::audit::record_target_detail(res, "auth", "end_session", &end_detail);
 
     // ── Respond ────────────────────────────────────────────────────────
     match redirect_target {
@@ -1863,7 +1866,7 @@ mod tests {
             let mut tenant = storage.tenant_by_id("ext-tenant").expect("tenant");
             tenant.key_create(HTTP_DOMAIN, "key1").await.expect("key");
         }
-        let state = crate::server::ServerState::create_with(storage, false, &[])
+        let state = crate::server::ServerState::create_with(storage, false, &[], false)
             .await
             .expect("server state");
         (state, tmp)

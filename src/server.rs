@@ -331,6 +331,18 @@ pub struct JanuxConfig {
     ///       in the list, e.g. `trusted_proxies = ["10.0.0.5","172.16.0.0/12"]`.
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
+    /// Opt-in: when a forward-auth probe (`X-Forwarded-*` present and the
+    /// request is a forwarded one) is UNAUTHENTICATED, janux answers it with a
+    /// 303 redirect to the hosted `/login` page instead of a bare 401
+    /// problem+json. This is what lets a browser be sent to log in by a proxy
+    /// gate (Caddy `forward_auth`, nginx `auth_request`), whose upstream
+    /// `handle_response` cannot inject a `Location` into a copied 3xx.
+    ///
+    /// Default `false` — the historical behavior (401 problem+json). Harmless
+    /// to leave on for any deployment: only the forwarded, unauthenticated
+    /// path changes, and direct callers always see the 401.
+    #[serde(default)]
+    pub forward_auth_redirect: bool,
     /// TEST HARNESS ONLY (G-136 enabler): widen every per-IP rate-limit
     /// quota (auth 6/min, OIDC public 12/min, admin 12/min, SCIM 60/min)
     /// to absurdity. The conformance suite drives the whole protocol from
@@ -497,6 +509,9 @@ pub struct ServerStateInner {
     /// `pages_dir` in the seed config); overrides are config-file-only, so
     /// the cache never needs invalidation at runtime.
     pub pages_dirs: dashmap::DashMap<String, std::path::PathBuf>,
+    /// When a forwarded forward-auth probe is unauthenticated, respond 303 to
+    /// `/login` instead of 401. See `JanuxConfig::forward_auth_redirect`.
+    pub forward_auth_redirect: bool,
 }
 
 /// Shared server state, cheap to clone (Arc inside) so it can be injected
@@ -568,6 +583,7 @@ impl ServerState {
         storage: Storage,
         trust_forwarded_headers: bool,
         trusted_proxies: &[String],
+        forward_auth_redirect: bool,
     ) -> Result<ServerState> {
         let trusted_proxies =
             TrustedProxies::parse(trusted_proxies).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -577,6 +593,7 @@ impl ServerState {
                 storage,
                 trust_forwarded_headers,
                 trusted_proxies,
+                forward_auth_redirect,
                 pages_dirs,
             }),
         })

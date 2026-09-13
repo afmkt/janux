@@ -1,0 +1,112 @@
+# ---------------------------------------------------------------------------
+# Single-host example: janux + Caddy + a protected static "app"
+# ---------------------------------------------------------------------------
+# One hostname (localhost:80/443). Caddy fronts everything by *path*:
+#
+#       /app -> forward-auth via janux (/api/v1/auth/verify) -> nginx
+#       /    -> janux   (discovery, OIDC, admin UI, SCIM, health, /login page)
+#
+# Why single-host is REQUIRED for a browser: janux's session cookie is
+# host-only (no Domain attribute) + Secure, so the browser only re-sends it to
+# the SAME host that set it -- which Caddy forwards both /login and /app to.
+# Split hosts cannot share that cookie (see ../split-hosts/ for the caveats).
+#
+# Network: a fixed bridge subnet (172.28.0.0/16) lets trusted_proxies pin
+# Caddy's source IP so janux honors X-Forwarded-* without a "proxy IP not
+# trusted" boot warning (G-149). Override with NETWORK_MODE=... as needed.
+#
+# TLS (mandatory): the Secure cookie needs https, and Caddy auto-redirects
+# localhost http->https. CADDY_TLS (env, value `internal` = Caddy's local CA)
+# drives TLS; there is deliberately NO tls directive in the Caddyfile. On Linux
+# open https://127.0.0.1/app; on macOS trust Caddy's CA (`up.py ... trust-ca`).
+
+name: janux-single-host
+
+services:
+   # janux: the auth server + forward-auth probe (built here or pulled).
+  auth:
+    image: ${JANUX_IMAGE:-janux:latest}
+    pull_policy: ${JANUX_PULL:-build}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: janux-single-host
+    restart: unless-stopped
+    networks:
+       - default
+    volumes:
+        # janux loads "base" + "seed" from its WORKDIR (/app); data_dir is ./data.
+       - ./base.toml:/app/base.toml:ro
+       - ./seed.toml:/app/seed.toml:ro
+       - single_auth_data:/app/data
+    healthcheck:
+       # 503 unless server state is injected and the data dir is present
+       # (src/ops.rs) -> a broken volume reads unhealthy, not "serving".
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/v1/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    expose:
+       - "8080"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+   # The "simple service": a static file gated by forward-auth. nginx:alpine
+   # stands in for "your app" and serves ./site over plain HTTP INSIDE the
+   # network (no published port); app-nginx.conf maps /app/ onto the static
+   # root so Caddy can forward-auth the request WITHOUT stripping the path.
+  app:
+    image: nginx:alpine
+    container_name: app-single-host
+    restart: unless-stopped
+    depends_on:
+       - auth
+    networks:
+       - default
+    volumes:
+       - ./site:/usr/share/nginx/html:ro
+       - ./app-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    expose:
+       - "80"
+
+   # Caddy: the public front-end / forward-auth gate.
+  caddy:
+    image: caddy:latest
+    container_name: caddy-single-host
+    restart: unless-stopped
+    ports:
+       - "80:80"
+       - "443:443"
+    networks:
+       - default
+    environment:
+        # CADDY_TLS = `internal` (Caddy's local CA). No tls directive in the
+        # Caddyfile -- a `global { tls ... }` block breaks `handle` parsing in
+        # Caddy 2.11.4. up.py exports CADDY_TLS="tls internal".
+      CADDY_TLS: "${CADDY_TLS:-internal}"
+    volumes:
+       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+       - single_caddy_config:/config/caddy
+       - single_caddy_data:/data
+    depends_on:
+      auth:
+        condition: service_healthy
+
+ # 172.28.0.0/16 so base.toml's trusted_proxies pin Caddy's bridge source
+ # (also avoids the G-149 boot warning). Distinct from split-hosts' 172.29.
+networks:
+  default:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+          - subnet: 172.28.0.0/16
+
+ # Named volumes are per-project so the two examples' data can coexist on disk.
+volumes:
+  single_auth_data:
+  single_caddy_data:
+  single_caddy_config:

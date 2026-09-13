@@ -1,3 +1,16 @@
+# Split-hosts example base config: ONE janux instance, TWO public hostnames.
+#   auth   janux  reverse proxy target & forward-auth server (built or pulled)
+#   caddy  front   app.example.com/app + app.example.com/login -> forward_auth
+#   app    nginx   the protected /app static file (existing image, no build)
+#
+# trust_forwarded_headers lets janux act as a forward-auth probe: Caddy sends
+# X-Forwarded-{Host,Uri,Method,Proto} and janux evaluates the PROXIED request
+# (X-Forwarded-Uri + X-Forwarded-Method), not /api/v1/auth/verify itself.
+# trusted_proxies pins the bridge subnet so only caddy's source is trusted.
+#
+# TLS is required here: the Secure session cookie only transmits over HTTPS,
+# and app.example.com is not a loopback host, so localhost's secure-context
+# exception doesn't apply. Use `up.py split-hosts up --tls` (local CA).
 # Example base server configuration.
 # Copy to base.toml (gitignored) and adjust, then run: janux -c base -c seed
 data_dir = "./data"
@@ -15,7 +28,7 @@ encryption_key = "12345678123456781234567812345678123456781234567812345678123456
 #         and the real URI. A directly reachable server in `true` mode can be
 #         tenant-spoofed and limiter-bypassed with forged headers — the boot
 #         log warns loudly when it is on.
-trust_forwarded_headers = false
+trust_forwarded_headers = true
 
 # When `trust_forwarded_headers = true`, this restricts which TCP *source*
 # addresses are allowed to *supply* `X-Forwarded-*` headers. A forwarded
@@ -30,7 +43,12 @@ trust_forwarded_headers = false
 # it with your proxy's address(es) to close the hole. A malformed entry
 # aborts boot. Examples:
 # trusted_proxies = ["10.0.0.5", "172.16.0.0/12", "fd00::/8"]
-trusted_proxies = []
+trusted_proxies = ["172.29.0.0/16"]
+
+# Opt-in: an UNAUTHENTICATED forward-auth probe gets a 303 -> /login so a
+# browser is sent to the hosted login page. Off by default (a bare 401 is a
+# valid "denied" answer too); harmless for direct callers. See ../README.md.
+forward_auth_redirect = true
 
 [bind]
 address = "0.0.0.0"

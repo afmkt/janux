@@ -1,6 +1,6 @@
 use salvo::prelude::*;
-use std::sync::{Mutex, OnceLock};
 use sha2::{Digest, Sha256};
+use std::sync::{Mutex, OnceLock};
 use tracing::{error, info};
 
 /// What a request acted ON (G-89). The audit hoop sees the route, the
@@ -52,7 +52,13 @@ pub fn record_target_detail(res: &mut Response, kind: &'static str, name: &str, 
 /// trail then renders `diff=old->new` alongside whatever `detail=` fact
 /// was recorded, giving a mutation line its full shape even when a field
 /// is set by many distinct callers.
-pub fn record_target_diff(res: &mut Response, kind: &'static str, name: &str, before: &str, after: &str) {
+pub fn record_target_diff(
+    res: &mut Response,
+    kind: &'static str,
+    name: &str,
+    before: &str,
+    after: &str,
+) {
     res.extensions.insert(AuditTarget {
         kind,
         name: name.to_string(),
@@ -78,9 +84,8 @@ pub fn record_target_full(
         name: name.to_string(),
         detail: Some(detail.to_string()),
         diff: Some(format!("{before}->{after}")),
-      });
+    });
 }
-
 
 /// The rendered `target`/`detail`/`diff` triple for the audit line; "-" in
 /// each slot when the handler did not record it (reads, unparseable
@@ -300,8 +305,9 @@ pub async fn audit(req: &mut Request, depot: &mut Depot, res: &mut Response, ctr
     let elapsed = start.elapsed();
     // Correlation id from the edge hoop (crate::ops::request_id); empty
     // when the route is exercised without it (e.g. isolated test setups).
-    let request_id =
-        crate::ops::request_id_of(depot).cloned().unwrap_or_default();
+    let request_id = crate::ops::request_id_of(depot)
+        .cloned()
+        .unwrap_or_default();
     let (actor, sub, domain) = audit_actor(depot);
     let (target, detail, diff) = audit_target(res);
 
@@ -412,22 +418,22 @@ mod tests {
         record_target_detail(res, "user", "alice", "active=false");
         res.status_code(StatusCode::OK);
         res.render(Json(crate::utils::ApiResponse::ok(())));
-     }
+    }
 
-     #[handler]
+    #[handler]
     async fn diff_probe(res: &mut Response) {
         record_target_diff(res, "user", "bob", "true", "false");
         res.status_code(StatusCode::OK);
         res.render(Json(crate::utils::ApiResponse::ok(())));
-     }
+    }
 
-     #[handler]
+    #[handler]
     async fn inject_session(
         req: &mut Request,
         depot: &mut Depot,
         res: &mut Response,
         ctrl: &mut FlowCtrl,
-     ) {
+    ) {
         depot.inject(crate::db::JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
@@ -436,58 +442,58 @@ mod tests {
                 domain: "example.com".to_string(),
                 mfa: HashSet::new(),
                 roles: HashSet::from(["admin".to_string()]),
-             },
+            },
             expect_mfa: false,
             domain: "example.com".to_string(),
             auth_time: None,
-         });
+        });
         ctrl.call_next(req, depot, res).await;
-     }
+    }
 
-     /// End-to-end shape check (G-89): a real request through the hoop
-     /// renders actor, tenant, and the handler-recorded target into the
-     /// log line — the contract log-based alerting and forensics rely on.
-     #[tokio::test]
+    /// End-to-end shape check (G-89): a real request through the hoop
+    /// renders actor, tenant, and the handler-recorded target into the
+    /// log line — the contract log-based alerting and forensics rely on.
+    #[tokio::test]
     async fn audit_hoop_renders_actor_and_target() {
         use std::io::Write;
         use std::sync::{Arc, Mutex};
         use tracing_subscriber::fmt::MakeWriter;
 
-         #[derive(Clone, Default)]
+        #[derive(Clone, Default)]
         struct SharedBuf(Arc<Mutex<Vec<u8>>>);
         impl Write for SharedBuf {
             fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
                 self.0.lock().unwrap().write(b)
-             }
+            }
             fn flush(&mut self) -> std::io::Result<()> {
                 Ok(())
-             }
-         }
+            }
+        }
         impl<'a> MakeWriter<'a> for SharedBuf {
             type Writer = SharedBuf;
             fn make_writer(&self) -> SharedBuf {
                 self.clone()
-             }
-         }
+            }
+        }
 
         let buf = SharedBuf::default();
         let subscriber = tracing_subscriber::fmt()
-             .with_writer(buf.clone())
-             .with_ansi(false)
-             .finish();
+            .with_writer(buf.clone())
+            .with_ansi(false)
+            .finish();
         let guard = tracing::subscriber::set_default(subscriber);
 
         let service = Service::new(
             Router::new().push(
                 Router::with_path("probe")
-                     .hoop(audit)
-                     .hoop(inject_session)
-                     .post(mutation_probe),
-             ),
-         );
+                    .hoop(audit)
+                    .hoop(inject_session)
+                    .post(mutation_probe),
+            ),
+        );
         let res = salvo::test::TestClient::post("http://localhost/probe")
-             .send(&service)
-             .await;
+            .send(&service)
+            .await;
         assert_eq!(res.status_code, Some(StatusCode::OK));
         drop(guard);
 
@@ -501,68 +507,64 @@ mod tests {
         // G-166 tamper-evident fields ride every line.
         assert!(logged.contains("seq="), "{logged}");
         assert!(logged.contains("prev="), "{logged}");
-     }
+    }
 
-     /// G-166: a full before→after diff snapshot renders as its own
-     /// `diff=` field, distinct from the single-value `detail=` fact.
-     #[tokio::test]
+    /// G-166: a full before→after diff snapshot renders as its own
+    /// `diff=` field, distinct from the single-value `detail=` fact.
+    #[tokio::test]
     async fn audit_hoop_renders_diff_snapshot() {
         use std::io::Write;
         use std::sync::{Arc, Mutex};
         use tracing_subscriber::fmt::MakeWriter;
 
-         #[derive(Clone, Default)]
+        #[derive(Clone, Default)]
         struct SharedBuf(Arc<Mutex<Vec<u8>>>);
         impl Write for SharedBuf {
             fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
                 self.0.lock().unwrap().write(b)
-             }
+            }
             fn flush(&mut self) -> std::io::Result<()> {
                 Ok(())
-             }
-         }
+            }
+        }
         impl<'a> MakeWriter<'a> for SharedBuf {
             type Writer = SharedBuf;
             fn make_writer(&self) -> SharedBuf {
                 self.clone()
-             }
-         }
+            }
+        }
 
         let buf = SharedBuf::default();
         let subscriber = tracing_subscriber::fmt()
-             .with_writer(buf.clone())
-             .with_ansi(false)
-             .finish();
+            .with_writer(buf.clone())
+            .with_ansi(false)
+            .finish();
         let guard = tracing::subscriber::set_default(subscriber);
 
         let service = Service::new(
-            Router::new().push(
-                Router::with_path("probe")
-                     .hoop(audit)
-                     .post(diff_probe),
-             ),
-         );
+            Router::new().push(Router::with_path("probe").hoop(audit).post(diff_probe)),
+        );
         let res = salvo::test::TestClient::post("http://localhost/probe")
-             .send(&service)
-             .await;
+            .send(&service)
+            .await;
         assert_eq!(res.status_code, Some(StatusCode::OK));
         drop(guard);
 
         let logged = String::from_utf8(buf.0.lock().unwrap().clone()).expect("utf8 log");
         assert!(logged.contains("target=user:bob"), "{logged}");
         assert!(logged.contains("diff=true->false"), "{logged}");
-     }
+    }
 
-     /// G-89: the actor context comes from the injected session; without
-     /// one every field degrades to "-" instead of panicking or lying.
-     #[test]
+    /// G-89: the actor context comes from the injected session; without
+    /// one every field degrades to "-" instead of panicking or lying.
+    #[test]
     fn audit_actor_reads_the_injected_session() {
         let mut depot = Depot::new();
         assert_eq!(
             audit_actor(&depot),
-             ("-".into(), "-".into(), "-".into()),
-             "no session → placeholder actor"
-         );
+            ("-".into(), "-".into(), "-".into()),
+            "no session → placeholder actor"
+        );
 
         depot.inject(crate::db::JwtVerify {
             can_access: true,
@@ -572,46 +574,49 @@ mod tests {
                 domain: "api.example.com".to_string(),
                 mfa: HashSet::new(),
                 roles: HashSet::from(["admin".to_string()]),
-             },
+            },
             expect_mfa: false,
             domain: "api.example.com".to_string(),
             auth_time: None,
-         });
+        });
         assert_eq!(
             audit_actor(&depot),
-             ("alice".into(), "uuid-1".into(), "api.example.com".into())
-         );
-     }
+            ("alice".into(), "uuid-1".into(), "api.example.com".into())
+        );
+    }
 
-     /// G-89: handlers record what the request acted ON; the hoop renders
-     /// `kind:name` plus the optional detail/diff, and "-" when nothing was
-     /// recorded (reads, unparseable bodies, uncovered routes).
-     #[test]
+    /// G-89: handlers record what the request acted ON; the hoop renders
+    /// `kind:name` plus the optional detail/diff, and "-" when nothing was
+    /// recorded (reads, unparseable bodies, uncovered routes).
+    #[test]
     fn audit_target_reads_the_recorded_context() {
         let mut res = Response::new();
         assert_eq!(audit_target(&res), ("-".into(), "-".into(), "-".into()));
 
         record_target(&mut res, "user", "alice");
-        assert_eq!(audit_target(&res), ("user:alice".into(), "-".into(), "-".into()));
+        assert_eq!(
+            audit_target(&res),
+            ("user:alice".into(), "-".into(), "-".into())
+        );
 
         record_target_detail(&mut res, "role", "ops", "level=79");
         assert_eq!(
             audit_target(&res),
-             ("role:ops".into(), "level=79".into(), "-".into()),
-             "the latest record wins"
-         );
+            ("role:ops".into(), "level=79".into(), "-".into()),
+            "the latest record wins"
+        );
 
         record_target_diff(&mut res, "user", "bob", "true", "false");
         assert_eq!(
             audit_target(&res),
-             ("user:bob".into(), "-".into(), "true->false".into()),
-             "the diff is a separate slot from detail"
-         );
-     }
+            ("user:bob".into(), "-".into(), "true->false".into()),
+            "the diff is a separate slot from detail"
+        );
+    }
 
-     /// G-166: an unbroken trail verifies, and any single edit — a changed
-     /// line, a dropped line, or a reordered pair — is detected.
-     #[test]
+    /// G-166: an unbroken trail verifies, and any single edit — a changed
+    /// line, a dropped line, or a reordered pair — is detected.
+    #[test]
     fn audit_chain_detects_tampering() {
         let lines = [
             "OK POST /user/set 200 actor=admin target=user:bob detail=- diff=true->false",
@@ -619,8 +624,8 @@ mod tests {
             "OK POST /key/retire 200 actor=admin target=key:main detail=retire diff=-",
         ];
 
-         // A fresh chain links every line; the emitted `prev` is the one
-         // a verifier would recompute.
+        // A fresh chain links every line; the emitted `prev` is the one
+        // a verifier would recompute.
         let mut chain = Chain::new();
         let mut claimed_prevs = Vec::new();
         let mut seqs = Vec::new();
@@ -628,51 +633,54 @@ mod tests {
             let (seq, prev) = chain.next(line);
             claimed_prevs.push(prev);
             seqs.push(seq);
-         }
+        }
         assert!(
             verify_chain(&lines, &claimed_prevs),
-             "an unbroken trail must verify"
-         );
-         // seq is a monotonic 1-based counter.
+            "an unbroken trail must verify"
+        );
+        // seq is a monotonic 1-based counter.
         assert_eq!(seqs, vec![1, 2, 3]);
 
-         // Genesis prev is 32 zero bytes → 64 '0' chars.
+        // Genesis prev is 32 zero bytes → 64 '0' chars.
         assert_eq!(
-             claimed_prevs[0],
-             "0000000000000000000000000000000000000000000000000000000000000000"
-         );
+            claimed_prevs[0],
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        );
 
-         // A modified line breaks its own link.
-        let tampered = [lines[0], "OK POST /user/set 200 actor=admin target=user:bob detail=- diff=false->true", lines[2]];
+        // A modified line breaks its own link.
+        let tampered = [
+            lines[0],
+            "OK POST /user/set 200 actor=admin target=user:bob detail=- diff=false->true",
+            lines[2],
+        ];
         let cp = claimed_prevs.clone();
         assert!(
             !verify_chain(&tampered, &cp),
-             "a rewritten line must fail verification"
-         );
+            "a rewritten line must fail verification"
+        );
 
-         // A reordered pair breaks the link between them.
+        // A reordered pair breaks the link between them.
         let reordered = [lines[0], lines[2], lines[1]];
         assert!(
             !verify_chain(&reordered, &claimed_prevs),
-             "a reordered trail must fail verification"
-         );
-     }
+            "a reordered trail must fail verification"
+        );
+    }
 
-     /// G-140: one-shot secrets riding in query strings must never reach
-     /// the log sink; the rest of the URI stays useful.
-     #[test]
+    /// G-140: one-shot secrets riding in query strings must never reach
+    /// the log sink; the rest of the URI stays useful.
+    #[test]
     fn audit_uri_redacts_secret_query_values() {
         use salvo::http::uri::Uri;
 
-         // No query → just the path.
+        // No query → just the path.
         let uri: Uri = "/api/v1/admin/user/create".parse().unwrap();
         assert_eq!(redacted_uri(&uri), "/api/v1/admin/user/create");
 
-         // Secret values redacted, names and innocent params kept.
-        let uri: Uri =
-            "/api/v1/auth/totp/verify?code=123456&jwt=eyJhbGci&state=abc&user=alice"
-                .parse()
-                .unwrap();
+        // Secret values redacted, names and innocent params kept.
+        let uri: Uri = "/api/v1/auth/totp/verify?code=123456&jwt=eyJhbGci&state=abc&user=alice"
+            .parse()
+            .unwrap();
         let logged = redacted_uri(&uri);
         assert!(logged.contains("code=[redacted]"), "{logged}");
         assert!(logged.contains("jwt=[redacted]"), "{logged}");
@@ -681,50 +689,57 @@ mod tests {
         assert!(!logged.contains("123456"), "{logged}");
         assert!(!logged.contains("eyJhbGci"), "{logged}");
 
-         // Case-insensitive parameter matching; magic-link landings.
+        // Case-insensitive parameter matching; magic-link landings.
         let uri: Uri = "/login?Token=sekrit&username=bob".parse().unwrap();
         let logged = redacted_uri(&uri);
         assert!(logged.contains("Token=[redacted]"), "{logged}");
         assert!(!logged.contains("sekrit"), "{logged}");
 
-         // Valueless pairs and empty values survive unchanged.
+        // Valueless pairs and empty values survive unchanged.
         let uri: Uri = "/x?flag&code=".parse().unwrap();
         let logged = redacted_uri(&uri);
         assert!(logged.contains("flag"), "{logged}");
         assert!(logged.contains("code=[redacted]"), "{logged}");
-     }
+    }
 
-/// A full before→after diff is captured when the handler reads the prior
-/// state and records both sides (G-166 #1).
-#[test]
-fn full_diff_captures_before_and_after() {
-    let mut res = Response::new();
-    record_target_full(&mut res, "user", "bob", "active=false", "active=true", "active=false");
-    let (t, detail, diff) = audit_target(&res);
-    assert_eq!(t, "user:bob");
-    assert_eq!(detail, "active=false");
-    assert_eq!(diff, "active=true->active=false");
-}
+    /// A full before→after diff is captured when the handler reads the prior
+    /// state and records both sides (G-166 #1).
+    #[test]
+    fn full_diff_captures_before_and_after() {
+        let mut res = Response::new();
+        record_target_full(
+            &mut res,
+            "user",
+            "bob",
+            "active=false",
+            "active=true",
+            "active=false",
+        );
+        let (t, detail, diff) = audit_target(&res);
+        assert_eq!(t, "user:bob");
+        assert_eq!(detail, "active=false");
+        assert_eq!(diff, "active=true->active=false");
+    }
 
-/// A sensitive admin read is attributed with a `read/<resource>` target so
-/// the enumeration itself is audited (G-166 #2).
-#[test]
-fn read_target_names_the_resource() {
-    let mut res = Response::new();
-    record_target(&mut res, "read", "user");
-    let (t, _, _) = audit_target(&res);
-    assert_eq!(t, "read:user");
-}
+    /// A sensitive admin read is attributed with a `read/<resource>` target so
+    /// the enumeration itself is audited (G-166 #2).
+    #[test]
+    fn read_target_names_the_resource() {
+        let mut res = Response::new();
+        record_target(&mut res, "read", "user");
+        let (t, _, _) = audit_target(&res);
+        assert_eq!(t, "read:user");
+    }
 
-/// A public mutation that failed before recording a target still leaves an
-/// audit line with an empty target placeholder — never an unlogged event
-/// (G-166 #4).
-#[test]
-fn no_target_renders_placeholders() {
-    let res = Response::new();
-    let (t, detail, diff) = audit_target(&res);
-    assert_eq!(t, "-");
-    assert_eq!(detail, "-");
-    assert_eq!(diff, "-");
-}
+    /// A public mutation that failed before recording a target still leaves an
+    /// audit line with an empty target placeholder — never an unlogged event
+    /// (G-166 #4).
+    #[test]
+    fn no_target_renders_placeholders() {
+        let res = Response::new();
+        let (t, detail, diff) = audit_target(&res);
+        assert_eq!(t, "-");
+        assert_eq!(detail, "-");
+        assert_eq!(diff, "-");
+    }
 }

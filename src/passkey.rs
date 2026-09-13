@@ -865,7 +865,7 @@ mod tests {
             tenant.user_create("alice").await.expect("user");
             tenant.user_create("bob").await.expect("user");
         }
-        let state = crate::server::ServerState::create_with(storage, false, &[])
+        let state = crate::server::ServerState::create_with(storage, false, &[], false)
             .await
             .expect("server state");
         (state, tmp)

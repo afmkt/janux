@@ -18,12 +18,12 @@ pub struct NewTenant {
     /// ownership at first login via the normal ceremony.
     /// Without a contact the new tenant's admin is
     /// credential-less and can never sign in.
-      pub admin_email: Option<String>,
+    pub admin_email: Option<String>,
     /// Alternative to `admin_email`: a mobile number for
     /// provisioning via SMS OTP. No verified flag needed —
     /// OTP possession at first login IS the ownership proof.
     #[serde(default)]
-      pub admin_mobile: Option<String>,
+    pub admin_mobile: Option<String>,
 }
 
 #[endpoint(
@@ -53,11 +53,11 @@ pub async fn new_tenant(req: &mut Request, depot: &mut Depot, res: &mut Response
             body.domain.as_deref().unwrap_or("-"),
             body.admin.as_deref().unwrap_or("-"),
             match (body.admin_email.as_deref(), body.admin_mobile.as_deref()) {
-                    (Some(e), None) => e,
-                    (None, Some(m)) => m,
-                     _ => "-",
-                }
-             ),
+                (Some(e), None) => e,
+                (None, Some(m)) => m,
+                _ => "-",
+            }
+        ),
     );
 
     let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();

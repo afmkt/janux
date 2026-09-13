@@ -875,13 +875,16 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .obtain::<ServerState>()
         .expect("ServerState not found");
 
-     // G-166: the legacy social compatibility callback records its audit
-     // target up front so a failed or denied callback is still attributed
-     // in the trail (who tried to log in through which IdP) even when the
-      // exchange never completes. The provider id is the path segment.
+    // G-166: the legacy social compatibility callback records its audit
+    // target up front so a failed or denied callback is still attributed
+    // in the trail (who tried to log in through which IdP) even when the
+    // exchange never completes. The provider id is the path segment.
     let provider = req.params().get("id").cloned().unwrap_or_default();
-    let social_target =
-        if provider.is_empty() { "social".to_string() } else { format!("social:{provider}") };
+    let social_target = if provider.is_empty() {
+        "social".to_string()
+    } else {
+        format!("social:{provider}")
+    };
     crate::audit::record_target_detail(res, "auth", &social_target, "factor=social,legacy");
 
     // (provider from path is available via request params if needed)
@@ -1513,7 +1516,7 @@ mod tests {
                 .await
                 .expect("provider");
         }
-        let state = crate::server::ServerState::create_with(storage, false, &[])
+        let state = crate::server::ServerState::create_with(storage, false, &[], false)
             .await
             .expect("server state");
         (state, tmp)

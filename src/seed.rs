@@ -244,7 +244,12 @@ mod tests {
         let files: Vec<String> = if std::path::Path::new("seed.toml").exists() {
             vec!["base".into(), "seed".into()]
         } else {
-            vec!["base.example".into(), "seed.example".into()]
+            // On a fresh clone / CI the committed example config is the
+            // fixture; the canonical set lives in examples/single-host.
+            vec![
+                "examples/single-host/base.example".into(),
+                "examples/single-host/seed.example".into(),
+            ]
         };
         let cfg = JanuxConfig::load_from(&files)
             .expect("seed.toml must load through the production config path");
@@ -350,8 +355,10 @@ mod tests {
                 p.role
             );
             assert!(
-                p.resource.starts_with("/api/v1/admin/") || p.resource.starts_with("/scim/v2/"),
-                "policy resource {} is not an admin or SCIM path",
+                p.resource.starts_with("/api/v1/admin/")
+                    || p.resource.starts_with("/scim/v2/")
+                    || p.resource.starts_with("/app"),
+                "policy resource {} is not an admin, SCIM, or demo app path",
                 p.resource
             );
         }

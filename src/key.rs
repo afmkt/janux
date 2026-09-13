@@ -388,20 +388,20 @@ pub async fn retire_key(req: &mut Request, depot: &mut Depot, res: &mut Response
             // H9 (same class as delete): one domain's admin must not
             // retire another domain's signing keys. Fully qualified call —
             // `tenant.key` would resolve to the DashMap guard's method.
-             // G-166: read the prior active flag so the trail captures the
-             // full active=true->false transition, not just the retire fact.
+            // G-166: read the prior active flag so the trail captures the
+            // full active=true->false transition, not just the retire fact.
             let before_retired = Tenant::key(&mut tenant, &body.name)
-                  .await
-                  .ok()
-                  .map(|k| k.retired)
-                  .unwrap_or(true);
+                .await
+                .ok()
+                .map(|k| k.retired)
+                .unwrap_or(true);
             crate::audit::record_target_diff(
-                 res,
-                  "key",
-                  &body.name,
-                  &format!("retired={before_retired}"),
-                  "retired=true",
-              );
+                res,
+                "key",
+                &body.name,
+                &format!("retired={before_retired}"),
+                "retired=true",
+            );
             match Tenant::key(&mut tenant, &body.name).await {
                 Ok(key) if key.domain_id != domain => {
                     res.status_code(StatusCode::FORBIDDEN);
@@ -627,7 +627,7 @@ mod tests {
                     .expect("builtin role");
             }
         }
-        let state = crate::server::ServerState::create_with(storage, false, &[])
+        let state = crate::server::ServerState::create_with(storage, false, &[], false)
             .await
             .expect("server state");
         (state, tmp)

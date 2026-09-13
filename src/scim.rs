@@ -1053,7 +1053,7 @@ mod tests {
                     .expect("scim policy");
             }
         }
-        let state = crate::server::ServerState::create_with(storage, false, &[])
+        let state = crate::server::ServerState::create_with(storage, false, &[], false)
             .await
             .expect("server state");
         (state, tmp)

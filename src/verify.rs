@@ -22,6 +22,14 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         .obtain_mut::<crate::server::ServerState>()
         .ok()
         .and_then(|state| crate::utils::forwarded_origin(req, state));
+    let (is_forwarded, want_redirect) = depot
+        .obtain_mut::<crate::server::ServerState>()
+        .ok()
+        .map(|state| {
+            let forwarded = crate::utils::forwarded_origin(req, state).is_some();
+            (forwarded, state.forward_auth_redirect)
+        })
+        .unwrap_or((false, false));
     let result = match at {
         Some((method, path)) => validate_jwt_for(req, depot, Some((method, path))).await,
         None => validate_jwt(req, depot).await,
@@ -35,6 +43,14 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             let _ = res.add_header("X-MFA-Required", "true", true);
             return;
         }
+    }
+    if is_forwarded && want_redirect {
+        // Browsers resolve the relative Location against their current
+        // host; the proxy must forward /login to janux, which hosts it.
+        let loc = auth_redirect(req, depot).await;
+        let _ = res.add_header("Location", &loc, true);
+        res.status_code(StatusCode::SEE_OTHER);
+        return;
     }
     let err = ApiProblem::unauthorized();
     res.status_code(StatusCode::UNAUTHORIZED);
@@ -95,7 +111,11 @@ pub async fn logout(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 
             // G-139: the session cookie is HttpOnly — only the server can
             // remove it from the jar, so logout must expire it explicitly.
-            set_session_cookie(res, None);
+            // #1: reuse the same Domain so the clear matches the jar entry.
+            let scope = crate::config::SessionDTO::load(&mut tenant, domain)
+                .await
+                .cookie_scope;
+            set_session_cookie(res, None, scope.as_deref());
             res.status_code(StatusCode::OK);
             res.render(Json(ApiResponse::ok(())));
             return;
@@ -129,7 +149,8 @@ pub async fn refresh(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let via_cookie = crate::utils::session_cookie_jwt(req).is_some();
     if let Some(new_jwt) = refresh_jwt(req, depot).await {
         if via_cookie {
-            set_session_cookie(res, Some(&new_jwt));
+            let scope = session_scope(req, depot).await;
+            set_session_cookie(res, Some(&new_jwt), scope.as_deref());
         }
         res.status_code(StatusCode::OK);
         res.render(Json(ApiResponse::ok(new_jwt)));
@@ -287,7 +308,7 @@ pub async fn session_info(req: &mut Request, depot: &mut Depot, res: &mut Respon
 /// (H5/G-111): HttpOnly, Secure, SameSite=Strict, Path=/. Used by `logout`
 /// (JS cannot remove an HttpOnly cookie itself) and `refresh` (the rotated
 /// token must replace the revoked one in the jar).
-pub fn set_session_cookie(res: &mut Response, jwt: Option<&str>) {
+pub fn set_session_cookie(res: &mut Response, jwt: Option<&str>, domain: Option<&str>) {
     use salvo::http::cookie::{Cookie, SameSite};
     let mut builder = Cookie::build((
         crate::utils::SESSION_COOKIE,
@@ -297,10 +318,66 @@ pub fn set_session_cookie(res: &mut Response, jwt: Option<&str>) {
     .http_only(true)
     .secure(true)
     .same_site(SameSite::Strict);
+    // Sub-domain SSO (#1): widen the cookie's `Domain` attribute so a
+    // browser shares one login across the sibling domains janux serves under
+    // a registrable domain. Operator-declared + validated (never inferred
+    // here); `None`/empty keeps host-only behavior. A CLEAR must reuse the
+    // same `Domain`, or the browser will not match the old jar entry.
+    if let Some(d) = domain {
+        let d = d.trim();
+        if !d.is_empty() {
+            builder = builder.domain(d.to_string());
+        }
+    }
     if jwt.is_none() {
         builder = builder.expires(salvo::http::cookie::time::OffsetDateTime::UNIX_EPOCH);
     }
     res.add_cookie(builder.build());
+}
+
+/// The registrable domain this request's tenant scopes its session cookie to
+/// (sub-domain SSO, #1). `None` = the host-only default. Reads the per-domain
+/// `session.cookie_scope` from the tenant Config store.
+async fn session_scope(req: &Request, depot: &mut Depot) -> Option<String> {
+    let Ok(state) = depot.obtain_mut::<crate::server::ServerState>() else {
+        return None;
+    };
+    let Some(domain) = get_domain(req, &state) else {
+        return None;
+    };
+    let mut tenant = match state.storage.tenant_by_domain(domain) {
+        Some(t) => t,
+        None => return None,
+    };
+    crate::config::SessionDTO::load(&mut tenant, domain)
+        .await
+        .cookie_scope
+}
+
+/// The tenant-scoped login origin to bounce an UNAUTHENTICATED forward-auth
+/// probe to (#5): the domain's configured `session.redirect_url` + `/login`.
+/// `None` (single-host) falls back to the bare relative `/login`.
+async fn auth_redirect(req: &Request, depot: &mut Depot) -> String {
+    let Ok(state) = depot.obtain_mut::<crate::server::ServerState>() else {
+        return "/login".to_string();
+    };
+    let Some(domain) = get_domain(req, &state) else {
+        return "/login".to_string();
+    };
+    let mut tenant = match state.storage.tenant_by_domain(domain) {
+        Some(t) => t,
+        None => return "/login".to_string(),
+    };
+    let base = crate::config::SessionDTO::load(&mut tenant, domain)
+        .await
+        .redirect_url;
+    if let Some(b) = base {
+        let t = b.trim();
+        if !t.is_empty() {
+            return format!("{}/login", t.trim_end_matches('/'));
+        }
+    }
+    "/login".to_string()
 }
 
 // ─── Sudo mode for credential mutations (G-132) ──────────────────────────────
@@ -350,6 +427,69 @@ pub fn mark_reauth_required(res: &mut Response) {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// Forward-auth UX: an unauthenticated PROXIED request (X-Forwarded-*)
+    /// becomes a 303 -> /login when `forward_auth_redirect` is on, and the
+    /// historical 401 problem+json when it is off. The 401 path is the
+    /// backward-compatible default; the 303 path is what a browser behind
+    /// Caddy `forward_auth` / nginx `auth_request` needs to reach login.
+    #[tokio::test]
+    async fn forward_auth_unauth_redirects_or_401() {
+        async fn state_with_redirect(wants: bool) -> crate::server::ServerState {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let storage = crate::db::Storage::init(tmp.path())
+                .await
+                .expect("storage init");
+            // trust forwarded headers, no proxy allow-list (trust all), toggle flag
+            let state = crate::server::ServerState::create_with(storage, true, &[], wants)
+                .await
+                .expect("state");
+            let _ = tmp; // keep the data dir alive for the test's duration
+            state
+        }
+
+        // A forwarded request with NO session token, exactly as Caddy presents
+        // it to /api/v1/auth/verify.
+        let probe = || {
+            salvo::test::TestClient::get("http://localhost/api/v1/auth/verify")
+                .add_header("Host", "app.example.com", true)
+                .add_header("X-Forwarded-Uri", "/app", true)
+                .add_header("X-Forwarded-Method", "GET", true)
+        };
+
+        // Flag ON: unauthenticated + forwarded -> 303 to /login.
+        let on = state_with_redirect(true).await;
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(on))
+                .push(Router::with_path("api/v1/auth/verify").get(super::verify)),
+        );
+        let res = probe().send(&service).await;
+        assert_eq!(
+            res.status_code.expect("status"),
+            StatusCode::SEE_OTHER,
+            "flag on must redirect an unauthenticated probe to login"
+        );
+        assert_eq!(
+            res.headers().get("Location").unwrap().to_str().unwrap(),
+            "/login",
+            "the 303 must point at the hosted login page"
+        );
+
+        // Flag OFF: the same request keeps the historical 401 problem+json.
+        let off = state_with_redirect(false).await;
+        let service = Service::new(
+            Router::new()
+                .hoop(salvo::affix_state::inject(off))
+                .push(Router::with_path("api/v1/auth/verify").get(super::verify)),
+        );
+        let res = probe().send(&service).await;
+        assert_eq!(
+            res.status_code.expect("status"),
+            StatusCode::UNAUTHORIZED,
+            "flag off must keep the historical 401 answer"
+        );
+    }
 
     fn verify_with_auth_time(auth_time: Option<usize>) -> JwtVerify {
         JwtVerify {
@@ -405,12 +545,46 @@ mod tests {
     /// the cookie jar into `Set-Cookie` headers at send time.
     #[handler]
     async fn set_cookie_probe(res: &mut Response) {
-        set_session_cookie(res, Some("tok"));
+        set_session_cookie(res, Some("tok"), None);
     }
 
     #[handler]
     async fn clear_cookie_probe(res: &mut Response) {
-        set_session_cookie(res, None);
+        set_session_cookie(res, None, None);
+    }
+
+    // #1: an operator-declared `cookie_scope` widens the session cookie to
+    // a registrable Domain, so a browser shares one login across the
+    // sibling domains janux serves under it.
+    #[handler]
+    async fn set_domain_probe(res: &mut Response) {
+        set_session_cookie(res, Some("tok"), Some("example.com"));
+    }
+
+    #[tokio::test]
+    async fn session_cookie_domain_scope() {
+        let service =
+            Service::new(Router::new().push(Router::with_path("set").get(set_domain_probe)));
+        let res = salvo::test::TestClient::get("http://localhost/set")
+            .send(&service)
+            .await;
+        let set = res
+            .headers()
+            .get(salvo::http::header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .expect("set cookie")
+            .to_string();
+        assert!(
+            set.contains(&format!("{}=tok", crate::utils::SESSION_COOKIE)),
+            "{set}"
+        );
+        assert!(
+            set.contains("Domain=example.com"),
+            "scoped cookie must carry Domain=example.com: {set}"
+        );
+        for attr in ["HttpOnly", "Secure", "SameSite=Strict", "Path=/"] {
+            assert!(set.contains(attr), "missing {attr} in {set}");
+        }
     }
 
     #[tokio::test]

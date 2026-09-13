@@ -259,6 +259,7 @@ async fn main() {
         db,
         server_config.trust_forwarded_headers,
         &server_config.trusted_proxies,
+        server_config.forward_auth_redirect,
     )
     .await
     .expect("Can not create server state");

@@ -153,8 +153,92 @@ impl ResendDTO {
     }
 }
 
+/// Per-domain session configuration, stored in the tenant Config store under
+/// `session.cookie_scope.<domain>` / `session.redirect_url.<domain>` — the same
+/// migration-free pattern as `pages.<domain>` (`DomainDTO::pages_dir`).
+///
+/// Both fields default absent so every existing tenant behaves exactly as
+/// before.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct SessionDTO {
+    /// Where janux should send an UNAUTHENTICATED forward-auth probe to log in
+    /// (the tenant-scoped target of `JanuxConfig::forward_auth_redirect`). An
+    /// absolute origin, e.g. `https://auth.example.com`; janux appends
+    /// `/login`. When unset the probe is redirected to the bare relative
+    /// `/login` on its current host — correct for single-host deployments
+    /// where the proxy front-ends janux's own `/login`.
+    #[serde(default)]
+    pub redirect_url: Option<String>,
+    /// The registrable domain to scope the session cookie to (sub-domain SSO).
+    /// When set, the session cookie carries `Domain=<cookie_scope>`, so a
+    /// browser shares one login across every sibling domain janux serves
+    /// within `cookie_scope` (e.g. `auth.example.com` + `app.example.com`
+    /// under `example.com`). Validated label-aligned (RFC 6265) at write time
+    /// and never auto-inferred from the request — scoping is operator-declared.
+    #[serde(default)]
+    pub cookie_scope: Option<String>,
+}
+
+pub const SESSION_COOKIE_SCOPE_PREFIX: &str = "session.cookie_scope.";
+pub const SESSION_REDIRECT_URL_PREFIX: &str = "session.redirect_url.";
+
+/// Build a `session.*.<domain>` config key (the inverse of
+/// `crate::domain::DomainDTO::save`).
+fn session_config_key(prefix: &str, domain: &str) -> String {
+    format!("{prefix}{domain}")
+}
+
+impl SessionDTO {
+    /// Load the per-domain session config. Missing keys read as `None` — the
+    /// pre-feature default. A domain that has neither set returns a fully
+    /// empty DTO.
+    pub async fn load(tenant: &mut Tenant, domain: &str) -> Self {
+        let redirect_url = tenant
+            .config_get(&session_config_key(SESSION_REDIRECT_URL_PREFIX, domain))
+            .await
+            .and_then(|v| v.as_str().map(str::to_string));
+        let cookie_scope = tenant
+            .config_get(&session_config_key(SESSION_COOKIE_SCOPE_PREFIX, domain))
+            .await
+            .and_then(|v| v.as_str().map(str::to_string));
+        Self {
+            redirect_url,
+            cookie_scope,
+        }
+    }
+
+    /// Upsert the per-domain session config. An absent field REMOVES a
+    /// previously seeded value so editing the seed config actually turns the
+    /// feature off (seed is otherwise upsert-only, like `pages_dir`).
+    pub async fn save(&self, tenant: &mut Tenant, domain: &str) -> Result<()> {
+        let r = session_config_key(SESSION_REDIRECT_URL_PREFIX, domain);
+        match &self.redirect_url {
+            Some(u) => {
+                tenant.config_set(&r, serde_json::json!(u)).await?;
+            }
+            None => {
+                tenant.config_delete(&r).await?;
+            }
+        }
+        let c = session_config_key(SESSION_COOKIE_SCOPE_PREFIX, domain);
+        match &self.cookie_scope {
+            Some(s) => {
+                // Validate before persisting: a malformed or too-broad scope
+                // is a boot-time failure, never a runtime surprise.
+                crate::utils::validate_cookie_scope(&s, domain)
+                    .map_err(|e| anyhow::anyhow!("invalid cookie_scope at domain {domain}: {e}"))?;
+                tenant.config_set(&c, serde_json::json!(s)).await?;
+            }
+            None => {
+                tenant.config_delete(&c).await?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
-#[allow(clippy::upper_case_acronyms)] // OTP is a domain acronym
+#[allow(clippy::upper_case_acronys)] // OTP is a domain acronym
 pub struct OTPDTO {
     pub api_secret: String,
     pub api_key: String,

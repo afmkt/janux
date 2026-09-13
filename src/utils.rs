@@ -333,6 +333,94 @@ pub fn get_domain<'a>(req: &'a Request, state: &ServerState) -> Option<&'a str> 
     resolve_host(req, state).map(|(_, domain)| domain)
 }
 
+/// RFC 6265 §5.1.3 `domain-match`: does `host` belong to `parent`?
+///
+/// Two strings domain-match when `host == parent`, or `parent` is a
+/// label-aligned suffix of `host` (the boundary is a '.', never a substring).
+/// Label alignment is the security-critical detail: `example.com.evil.com`
+/// does NOT match `example.com`, even though it contains it as a
+/// substring.
+///
+/// Used to validate a declared `cookie_scope` — janux NEVER infers the scope
+/// from the request, it only confirms the host the operator served actually
+/// falls inside the scope they declared.
+pub fn domain_matches(host: &str, parent: &str) -> bool {
+    if host == parent {
+        return true;
+    }
+    let host_labels: Vec<&str> = host.split('.').collect();
+    let parent_labels: Vec<&str> = parent.split('.').collect();
+    if host_labels.len() < parent_labels.len() + 1 {
+        return false;
+    }
+    // The last `parent_labels.len()` of `host`'s labels must equal `parent`
+    // exactly (label-aligned), which makes the substring / cross-TLD traps
+    // impossible.
+    let n = parent_labels.len();
+    host_labels[host_labels.len() - n..] == parent_labels
+}
+
+/// Is a single DNS label well-formed (RFC 1035, lightly relaxed)? 1–63
+/// alnum/hyphen chars, no leading or trailing hyphen.
+fn valid_dns_label(label: &str) -> bool {
+    let s = label;
+    let ok_len = (1..=63).contains(&s.len());
+    let ok_ascii = s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    let ok_ends = !s.starts_with('-') && !s.ends_with('-');
+    ok_len && ok_ascii && ok_ends
+}
+
+/// Validate a declared `cookie_scope` against the domain janux serves it for.
+///
+/// Returns `Ok(())` only when BOTH hold:
+///      1. `scope` is a plausible registrable domain — >= 2 labels, every
+///       label a valid DNS label, no leading/trailing dot or empty label.
+///      2. `host` (the domain being written the scoped cookie for) actually
+///       domain-matches `scope` (label-aligned, see [`domain_matches`]); a
+///       host inside its own scope must sit in it, so a scope that does not
+///       cover the served host is rejected rather than silently widening.
+///
+/// This is a deliberately conservative, *non-public-suffix* check: janux
+/// cannot ship the PSL, so it guards the two traps that matter operationally
+/// — a bare TLD (`.com`, `co`) and the `evil.com.evil..` misalignment — while
+/// trusting the operator to name a real registrable domain. The cookie stays
+/// `Secure` + `SameSite=Strict` + `HttpOnly`; only the `Domain` attribute
+/// here is widened, and only to a domain the operator declared.
+pub fn validate_cookie_scope(scope: &str, host: &str) -> Result<(), String> {
+    let scope = scope.trim();
+    if scope.is_empty() {
+        return Err("cookie_scope is empty".into());
+    }
+    if scope.starts_with('.') || scope.ends_with('.') || scope.contains("..") {
+        return Err(format!("cookie_scope {scope:?} has a bad label boundary"));
+    }
+    if scope == host.trim() {
+        // A host-equal scope is a no-op Domain — the host-only default.
+        // Reject it so an operator cannot express "no widening" this way;
+        // leave the field unset instead.
+        return Err(format!(
+            "cookie_scope {scope:?} equals the host; leave it unset for host-only"
+        ));
+    }
+    let labels: Vec<&str> = scope.split('.').collect();
+    if labels.len() < 2 {
+        return Err(format!("cookie_scope {scope:?} has < 2 labels"));
+    }
+    for l in &labels {
+        if !valid_dns_label(l) {
+            return Err(format!(
+                "cookie_scope {scope:?} has an invalid DNS label {l:?}"
+            ));
+        }
+    }
+    if !domain_matches(host, scope) {
+        return Err(format!(
+            "cookie_scope {scope:?} does not cover host {host:?}"
+        ));
+    }
+    Ok(())
+}
+
 /// The scheme the client used to reach this server: `X-Forwarded-Proto`
 /// (first entry) when forwarded headers are trusted, otherwise the actual
 /// connection scheme. Untrusted or malformed forwarding values fall back
@@ -1144,6 +1232,38 @@ mod tests {
     use salvo::http::header::HOST;
     use salvo::http::header::HeaderName;
 
+    /// #1 / #5: cookie_scope validation. The label-alignment rule is the
+    /// security load-bearing part: `example.com.evil.com` must NOT be
+    /// treated as inside `example.com` even though it contains it.
+    #[test]
+    fn cookie_scope_label_matching() {
+        // Exact match and genuine subdomains of the scope pass.
+        assert!(domain_matches("example.com", "example.com"));
+        assert!(domain_matches("a.example.com", "example.com"));
+        assert!(domain_matches("a.b.example.com", "example.com"));
+
+        // The substring trap: contains the suffix at a NON-label boundary
+        // (or is a distinct domain that merely ends in it).
+        assert!(!domain_matches("notexample.com", "example.com"));
+        assert!(!domain_matches("example.com.evil.com", "example.com"));
+        assert!(!domain_matches("evil.com", "example.com"));
+
+        // A scope must actually cover the host written the cookie for.
+        assert!(validate_cookie_scope("example.com", "a.example.com").is_ok());
+
+        // Traps that MUST be rejected before the cookie is ever written.
+        assert!(validate_cookie_scope("example.com", "a.notexample.com").is_err());
+        assert!(validate_cookie_scope("example.com", "evil.com").is_err());
+        assert!(validate_cookie_scope("example.com.evil.com", "example.com").is_err());
+
+        // A bare TLD / too few labels, and a host-equals-scope no-op widen.
+        assert!(validate_cookie_scope("com", "example.com").is_err());
+        assert!(validate_cookie_scope("example.com", "example.com").is_err());
+        assert!(validate_cookie_scope(".example.com", "example.com").is_err());
+        assert!(validate_cookie_scope("", "example.com").is_err());
+        assert!(validate_cookie_scope("ex-ample..com", "example.com").is_err());
+    }
+
     /// ServerState with an in-memory router table — no storage init, no
     /// revocation store, no runtime dependencies.
     /// Like [`test_state`], but also compiles a `trusted_proxies` peer
@@ -1165,7 +1285,7 @@ mod tests {
                 .insert((*d).to_string(), "test-tenant".to_string());
         }
         let proxies: Vec<String> = trusted_proxies.iter().map(|s| s.to_string()).collect();
-        ServerState::create_with(storage, trust_forwarded_headers, &proxies)
+        ServerState::create_with(storage, trust_forwarded_headers, &proxies, false)
             .await
             .expect("server state")
     }

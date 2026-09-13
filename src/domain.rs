@@ -24,6 +24,18 @@ pub struct DomainDTO {
     /// `crate::pages`. Stored in the tenant Config store (`pages.<domain>`,
     /// the migration-free extension point) rather than as a Domain column.
     pub pages_dir: Option<String>,
+    /// Tenant-scoped redirect target for an UNAUTHENTICATED forward-auth
+    /// probe (the `JanuxConfig::forward_auth_redirect` 303). An absolute
+    /// origin, e.g. `https://auth.example.com`; janux appends `/login`.
+    /// Per-domain, config-file-only (see `crate::config::SessionDTO`).
+    #[serde(default)]
+    pub redirect_url: Option<String>,
+    /// The registrable domain to scope this domain's session cookie to
+    /// (sub-domain SSO). When set the session cookie carries
+    /// `Domain=<cookie_scope>`, sharing one login across the sibling
+    /// domains janux serves under it. Per-domain, config-file-only.
+    #[serde(default)]
+    pub cookie_scope: Option<String>,
 }
 impl DomainDTO {
     pub async fn save(&self, tenant: &mut Tenant) -> Result<()> {
@@ -66,6 +78,16 @@ impl DomainDTO {
                     .await?;
             }
         }
+
+        // Per-domain session config (sub-domain SSO + tenant-scoped
+        // forward-auth redirect). Absent both = host-only cookie + bare
+        // /login — the pre-feature default.
+        crate::config::SessionDTO {
+            redirect_url: self.redirect_url.clone(),
+            cookie_scope: self.cookie_scope.clone(),
+        }
+        .save(tenant, &self.id)
+        .await?;
         Ok(())
     }
 }

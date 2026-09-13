@@ -238,7 +238,11 @@ pub fn api(disable_rate_limits: bool) -> Router {
                 ))
                 .hoop(crate::verify::protect)
                 // tenant
-                .push(Router::with_path("tenant/list").hoop(crate::audit::audit).get(crate::admin::all_tenants))
+                .push(
+                    Router::with_path("tenant/list")
+                        .hoop(crate::audit::audit)
+                        .get(crate::admin::all_tenants),
+                )
                 .push(
                     Router::with_path("tenant/create")
                         .hoop(crate::audit::audit)
@@ -261,7 +265,11 @@ pub fn api(disable_rate_limits: bool) -> Router {
                         .post(crate::admin::delete_domain),
                 )
                 // user
-                .push(Router::with_path("user/list").hoop(crate::audit::audit).get(crate::user::all_users))
+                .push(
+                    Router::with_path("user/list")
+                        .hoop(crate::audit::audit)
+                        .get(crate::user::all_users),
+                )
                 .push(
                     Router::with_path("user/create")
                         .hoop(crate::audit::audit)
@@ -336,7 +344,11 @@ pub fn api(disable_rate_limits: bool) -> Router {
                         .post(crate::role::delete_role),
                 )
                 // social login providers
-                .push(Router::with_path("provider/list").hoop(crate::audit::audit).get(crate::social::all_providers))
+                .push(
+                    Router::with_path("provider/list")
+                        .hoop(crate::audit::audit)
+                        .get(crate::social::all_providers),
+                )
                 .push(
                     Router::with_path("provider/create")
                         .hoop(crate::audit::audit)
@@ -360,7 +372,11 @@ pub fn api(disable_rate_limits: bool) -> Router {
                         .post(crate::policy::delete_policy),
                 )
                 // key
-                .push(Router::with_path("key/list").hoop(crate::audit::audit).get(crate::key::all_keys))
+                .push(
+                    Router::with_path("key/list")
+                        .hoop(crate::audit::audit)
+                        .get(crate::key::all_keys),
+                )
                 .push(
                     Router::with_path("key/create")
                         .hoop(crate::audit::audit)
@@ -463,7 +479,7 @@ pub fn public_routes(disable_rate_limits: bool) -> Router {
                 .push(
                     // ── Consent round-trip (SPA, Bearer JWT) ─────────────────
                     Router::with_path("consent")
-                    .hoop(crate::audit::audit)
+                        .hoop(crate::audit::audit)
                         .post(crate::oidc::consent_submit)
                         .push(Router::with_path("info").get(crate::oidc::consent_info)),
                 )
@@ -478,8 +494,8 @@ pub fn public_routes(disable_rate_limits: bool) -> Router {
                 .push(
                     // ── Token Revocation Endpoint (RFC 7009 / RFC 8414 §3.2) ─
                     Router::with_path("revoke")
-                    .hoop(crate::audit::audit)
-                    .post(crate::oidc::revoke),
+                        .hoop(crate::audit::audit)
+                        .post(crate::oidc::revoke),
                 )
                 .push(
                     // ── Token Introspection Endpoint (RFC 7662 / RFC 8414 §3.2) ─
@@ -493,7 +509,7 @@ pub fn public_routes(disable_rate_limits: bool) -> Router {
                 .push(
                     // ── Dynamic Client Registration (RFC 7591 / RFC 7592) ─
                     Router::with_path("register")
-                    .hoop(crate::audit::audit)
+                        .hoop(crate::audit::audit)
                         .post(crate::oidc_ext::register)
                         .push(
                             Router::with_path("{client_id}")
@@ -505,7 +521,7 @@ pub fn public_routes(disable_rate_limits: bool) -> Router {
                 .push(
                     // ── RP-Initiated Logout 1.0 ──────────────────────────────
                     Router::with_path("end_session")
-                    .hoop(crate::audit::audit)
+                        .hoop(crate::audit::audit)
                         .get(crate::oidc_ext::end_session)
                         .post(crate::oidc_ext::end_session),
                 )
@@ -515,10 +531,10 @@ pub fn public_routes(disable_rate_limits: bool) -> Router {
                     Router::with_path("device-login")
                         .push(Router::with_path("info").get(crate::oidc::device_login_info))
                         .push(
-                             Router::with_path("approve")
-                                   .hoop(crate::audit::audit)
-                                   .post(crate::oidc::device_login_approve),
-                           ),
+                            Router::with_path("approve")
+                                .hoop(crate::audit::audit)
+                                .post(crate::oidc::device_login_approve),
+                        ),
                 ),
         )
 }
@@ -558,7 +574,7 @@ mod tests {
             router: dashmap::DashMap::new(),
             topology: tokio::sync::Mutex::new(()),
         };
-        crate::server::ServerState::create_with(storage, false, &[])
+        crate::server::ServerState::create_with(storage, false, &[], false)
             .await
             .expect("server state")
     }

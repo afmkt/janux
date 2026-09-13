@@ -1,0 +1,63 @@
+# ── Multi-host deployment ───────────────────────────────────────────────
+# TWO hostnames front ONE janux. Both must be reachable from the client over
+# https (caddy's local CA; up.py maps both into /etc/hosts and trusts that CA
+# on macOS). Both names are added to `JANUX_HOSTS` (compose.yml) so janux
+# resolves the tenant for each.
+#
+#   https://auth.example.com — janux whole surface (login UI, OIDC, admin,
+#                              SCIM, health). Public.
+#   https://app.example.com  — a static file, gated by forward-auth.
+#
+# TLS is driven by the `CADDY_TLS` env var (up.py; defaults to `internal`).
+#
+# ── Sub-domain SSO via a Domain-scoped cookie ──────────────────────────
+# The session cookie is Host-only BY DEFAULT (src/verify.rs::set_session_cookie):
+# a browser sends it back only to the host that SET it. In this layout the
+# login is done on `auth.example.com`, so a host-only cookie would NOT be sent
+# to `app.example.com` and the gate would bounce on every /app.
+#
+# That is why this compose sets BOTH domains' `cookie_scope = "example.com"`
+# (examples/split-hosts/seed.example.toml). janux then writes
+# `Set-Cookie: ...; Domain=example.com`, so the browser treats
+# auth.example.com and app.example.com as one site and shares ONE login
+# across both hosts. The scope is validated at seed time by an RFC 6265
+# 5.1.3 label-aligned match (NOT substring) so it can never leak to a
+# sibling registrable domain. See `session.cookie_scope` below in the seed.
+#
+# ── The redirect on unauth ──────────────────────────────────────────────
+# `base.toml` sets `forward_auth_redirect = true`, so an UNAUTHENTICATED
+# /app probe gets janux's 303. janux resolves the 303 target from the
+# request's tenant-scoped `session.redirect_url` and appends /login:
+# app.example.com points back at auth.example.com (see the seed), so a
+# bounced /app lands on the AUTH host's login UI, then the Domain-scoped
+# cookie makes the post-login /app succeed. Caddy propagates the 303 to the
+# browser. See ../README.md.
+{
+	# No CADDY_TLS env here (up.py sets it); keep the global block minimal so
+	# the `handle` blocks below parse.
+}
+
+# ── The app host: static file gated by forward-auth ─────────────────────
+app.example.com {
+	# The demo "service": a static file gated by forward-auth. A successful (2xx)
+	# probe falls through to nginx; an unauthenticated probe yields janux's 303
+	# -> /login, propagated to the browser below.
+	@appName path /app
+	handle @appName {
+		forward_auth auth:8080 {
+			uri /api/v1/auth/verify
+			# janux runs its DEFAULT-DENY engine on the PROXIED request: it reads
+			# X-Forwarded-{Host,Uri,Method} and evaluates the tenant's policy for
+			# resource "/app" (seeded in seed.toml). 200 -> allow; 401 -> unauth;
+			# 403 -> the who/is/for triple lacks permission.
+		}
+		reverse_proxy app:80
+	}
+}
+
+# ── The auth host: janux's full surface, public ─────────────────────────
+auth.example.com {
+	handle {
+		reverse_proxy auth:8080
+	}
+}

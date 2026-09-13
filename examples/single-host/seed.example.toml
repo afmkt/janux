@@ -1,3 +1,10 @@
+# Single-host example seed (Caddy front on `localhost`).
+# Tenant `localhost` serves the whole janux surface; the protected static
+# app lives at `path /app` and is gated here by the three /app rows near the
+# end (forward_auth -> /api/v1/auth/verify -> default-deny engine).
+# Copy -> seed.toml, set your [seed.resend] credentials, fill the admin
+# `email`, then `up.py single-host`. See ../README.md.
+
 # ================================================================
 # Seed configuration: populates tenant DB records on startup.
 # Load order: `janux -c base -c seed` (the default).
@@ -166,6 +173,14 @@ policies = [
     # ─
     { domain = "localhost", resource = "/scim/v2/Users", role = "scim", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "localhost", resource = "/scim/v2/Users/{id}", role = "scim", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    # ── demo: the protected static app (gated by Caddy forward_auth) ───
+    # Caddy gates `path /app` through janux /api/v1/auth/verify, which runs
+    # the DEFAULT-DENY engine on the PROXIED request (X-Forwarded-Uri=/app).
+    # /app needs a row here or every /app 401s regardless of session validity.
+    # EXACT match (G-43, no wildcards): the client hits `/app`, no trailing slash.
+    { domain = "localhost", resource = "/app", role = "user",  source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/app", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/app", role = "root",  source = "Nothing", target = "Nothing", mfa = false, allowed = true },
 ]
 
 [seed.resend]

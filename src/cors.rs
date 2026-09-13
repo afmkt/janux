@@ -87,7 +87,7 @@ mod tests {
             .domain_cors(DOMAIN, vec![ALLOWED.to_string()])
             .await
             .expect("cors allow-list");
-        let state = crate::server::ServerState::create_with(storage, false, &[])
+        let state = crate::server::ServerState::create_with(storage, false, &[], false)
             .await
             .expect("server state");
         (state, tmp)

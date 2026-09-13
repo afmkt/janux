@@ -1,0 +1,54 @@
+# ── Single-host deployment ──────────────────────────────────────────────
+# ONE hostname (`localhost`) fronts janux's full surface AND a protected
+# static resource at `/app`, both behind forward-auth.
+#
+# TLS is driven by the `CADDY_TLS` environment variable (set by up.py; it
+# defaults to `internal`, i.e. caddy's local CA). It is intentionally NOT set
+# in this file: in Caddy 2.x+ a `global { tls internal }` block breaks the
+# `handle` parsing below, so the env is the clean mechanism.
+#
+# ── Why TLS ───────────────────────────────────────────────────────────
+# The janux session cookie is `Secure` (+ host-only, no Domain attribute; see
+# src/verify.rs::set_session_cookie), so it only transmits over HTTPS.
+# `localhost` is a browser secure-context, so `tls internal` is the clean
+# choice; up.py maps the host to 127.0.0.1 in /etc/hosts and trusts that CA
+# on macOS.
+#
+# ── Request flow ─────────────────────────────────────────────────────
+#     /api/v1/auth/verify -> janux    (public — Caddy POSTs the auth probe here)
+#     /app                 -> forward_auth janux verify -> nginx (gated)
+#     /  (everything else) -> janux     (discovery, OIDC, admin UI, SCIM, health,
+#                                        the /login page that redirects land on)
+#
+# ── The redirect on unauth ──────────────────────────────────────────────
+# When a gate probe is UNAUTHENTICATED, janux answers it with a 303 -> /login
+# because `forward_auth_redirect = true` in base.toml. Caddy's `forward_auth`
+# simply propagates that non-2xx to the browser, which then authenticates at
+# /login, gets its host-only cookie, and retries /app. The redirect lives on
+# the AUTH side (janux knows its login URL), so it works for Caddy AND nginx
+# `auth_request` alike — a proxy cannot inject a Location into a copied 3xx.
+# (Off by default; with it off janux answers a bare 401 problem+json, also a
+# valid "denied" result — the gate still blocks the request, just no bounce.)
+
+localhost {
+	# The demo "service": a static file gated by forward-auth. A
+	# successful (2xx) probe falls through to nginx; an unauthenticated
+	# probe yields janux's 303 -> /login, propagated below.
+	@appName path /app
+	handle @appName {
+		forward_auth auth:8080 {
+			uri /api/v1/auth/verify
+			# janux runs its DEFAULT-DENY engine on the PROXIED request: it reads
+			# X-Forwarded-{Host,Uri,Method} (Caddy sets them) and evaluates the
+			# tenant's policy for resource "/app" (seeded in seed.toml). 200 ->
+			# allow; 401 -> unauth; 403 -> the who/is/for triple lacks permission.
+		}
+		reverse_proxy app:80
+	}
+
+	# Everything else is the janux auth server + hosted UI — all public, so
+	# /login and the admin console are reachable.
+	handle {
+		reverse_proxy auth:8080
+	}
+}
