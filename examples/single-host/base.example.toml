@@ -1,0 +1,38 @@
+# Single-host example — base config for janux running BEHIND Caddy.
+# Copy to base.toml (gitignored) and adjust, then run via up.py or:
+#   janux -c base -c seed
+#
+# This host runs the whole janux surface (hosted login UI, OIDC, admin,
+# SCIM, health) AND the forward-auth probe for the protected static app,
+# because a single Caddy front (`localhost`) is the only layout janux's
+# host-only session cookie supports cleanly. See ../README.md.
+
+data_dir = "./data"
+
+# 64 hex chars (32 bytes) for AES-256-GCM. Generate your own, e.g.:
+#   openssl rand -hex 32
+# RECOVERY-CRITICAL: encrypts at-rest secrets (signing-key privates,
+# social provider secrets, TOTP, Resend/Aliyun delivery keys).
+encryption_key = "1234567812345678123456781234567812345678123456781234567812345678"
+
+# TRUE: Caddy overwrites X-Forwarded-*, so janux trusts them for tenant
+# resolution (Host / X-Forwarded-Host) and the forward-auth verify path
+# (X-Forwarded-Uri / X-Forwarded-Method). With this off, /app can never be
+# gated — verify would evaluate its own endpoint, not the proxied path.
+trust_forwarded_headers = true
+
+# G-149: restrict WHICH peers may SUPPLY X-Forwarded-*. Caddy sits on the
+# fixed `janux` bridge subnet below, so this allow-list closes the
+# tenant-spoof / limiter-bypass hole without a boot warning.
+trusted_proxies = ["172.28.0.0/16"]
+
+# Opt-in: when Caddy's forward_auth probe is UNAUTHENTICATED, janux answers 303
+# -> /login instead of a bare 401, so a browser is sent to the hosted login page
+# and can authenticate + retry. A proxy cannot inject a Location into a copied
+# 3xx, so the redirect is janux's job. Off by default (401 problem+json is still
+# a valid forward-auth "denied" answer); harmless for direct callers.
+forward_auth_redirect = true
+
+[bind]
+address = "0.0.0.0"
+port = 8080

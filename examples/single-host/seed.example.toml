@@ -1,0 +1,203 @@
+# Single-host example seed (Caddy front on `localhost`).
+# Tenant `localhost` serves the whole janux surface; the protected static
+# app lives at `path /app` and is gated here by the three /app rows near the
+# end (forward_auth -> /api/v1/auth/verify -> default-deny engine).
+# Copy -> seed.toml, set your [seed.resend] credentials, fill the admin
+# `email`, then `up.py single-host`. See ../README.md.
+
+# ================================================================
+# Seed configuration: populates tenant DB records on startup.
+# Load order: `janux -c base -c seed` (the default).
+#
+# Each [[seed]] entry creates (or updates) one tenant: its domains,
+# built-in roles, bootstrap users, RBAC policies, and provider
+# config. Seeding is idempotent — roles/users/policies are upserted,
+# so the server can reboot against the same file.
+#
+# Built-in role model:
+#   root    - cross-tenant platform operator: tenant lifecycle only.
+#            SEED-ONLY: root is created exclusively by this file.
+#            Runtime tenants (admin/tenant/create) do NOT get root.
+#            At most ONE tenant may hold a root user (enforced at boot).
+#   admin - per-tenant operator: everything inside its own tenant.
+#   scim    - machine provisioning: user lifecycle via /scim/v2/*
+#            (level 60 - above user, below admin: cannot administer
+#            administrators or root).
+#   user    - regular account: self-service endpoints.
+#   guest   - authenticated, no admin grants (default-deny placeholder
+#           for app-level policies added later via admin/policy/*).
+#
+# Roles live in the per-tenant DB. "Cross-tenant" works because the
+# tenant/* handlers act globally once the policy gate passes, and the
+# gate is evaluated in the caller's home tenant - the one seeding
+# `root` below. Tenants created later at runtime get their own
+# roles/policies via admin/tenant/create - bootstrap_tenant, which
+# provisions admin/scim/user/guest (+ standard admin policies) but
+# NOT root. The first admin's email or mobile is created UNVERIFIED
+# - the admin proves ownership at first login via the normal
+# ceremony. Runtime tenants accept either admin_email (magic link)
+# or admin_mobile (SMS OTP), mutually exclusive.
+#
+# Policy notes:
+# - `protect` is default-deny: anything not listed here is rejected.
+# - Resource paths match exactly (no wildcards, G-43), so every
+#   admin endpoint gets its own row.
+# - `action` omitted = all HTTP methods; the router still enforces
+#   the real method (405 otherwise).
+# - Flip mfa = true on destructive rows once TOTP step-up is part of
+#   the admin workflow.
+#
+# SECURITY: development bootstrap only. A seeded user WITHOUT `email`
+# has no credential and can never sign in — strict signup refuses the
+# pre-existing username (the old attach-on-first-verify takeover hole is
+# closed). Give bootstrap accounts their credential via the `email`
+# field below (seeded VERIFIED on every boot — idempotent, and the
+# repair path for an already-booted credential-less admin is "add the
+# email, restart"), or later via `admin/user/attach_email`. Replace the
+# placeholder addresses before running on a publicly reachable host.
+# ================================================================
+
+[[seed]]
+name = "localhost"
+# Domain fields:
+#   id        — hostname clients reach this tenant at (Host / X-Forwarded-Host).
+#   cors      — [] forbid, ["tenant"] share among the tenant's domains,
+#               or an explicit allow list.
+#   pages_dir — optional filesystem root of per-domain frontend page
+#               overrides. Scaffold it with `janux dump-frontend <dir>`,
+#               prune/edit, then point the domain at it. Serving is
+#               per-file: anything missing from the dir falls back to the
+#               embedded frontend. Config-file-only by design — see
+#               docs/FRONTEND.md.
+domains = [{ id = "localhost", cors = [] }, { id = "0.0.0.0", cors = [] }]
+# Example with a page override:
+# domains = [
+#     { id = "localhost", cors = [] },
+#     { id = "auth.example.com", cors = ["tenant"], pages_dir = "./data/pages/auth.example.com" },
+# ]
+
+# Pre-built roles. Created before users and policies so that
+# policy_create can resolve them.
+roles = ["root", "admin", "scim", "user", "guest"]
+
+# Bootstrap accounts. `email` (optional) vouches that address as a
+# VERIFIED login credential at seed time (G-131) — set the admin's to an
+# inbox you control; that is what makes the magic-link quickstart sign-in
+# work. An account without it has no credential and cannot sign in until
+# one is attached.
+users = [
+      { name = "root", roles = ["root"], active = true, email = "root@example.com" },
+      { name = "admin", roles = ["admin"], active = true, email = "admin@example.com" },
+]
+
+policies = [
+    # ── root: cross-tenant lifecycle ──────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/tenant/list", role = "root", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/tenant/create", role = "root", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/tenant/delete", role = "root", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: domains ────────────────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/domain/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/domain/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/domain/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: users ──────────────────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/user/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/activate", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/add_role", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/remove_role", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/remove_email", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/attach_email", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/remove_mobile", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/remove_passkey", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/remove_social", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/roles", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: roles ──────────────────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/role/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/role/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/role/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: social providers ───────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/provider/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/provider/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/provider/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: policies ───────────────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/policy/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/policy/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/policy/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: signing keys ───────────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/key/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/key/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/key/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/key/retire", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: TOTP administration ────────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/totp/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/totp/remove", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: OIDC relying parties ───────────────────────────────────
+    { domain = "localhost", resource = "/api/v1/admin/oauth2client/list", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/oauth2client/create", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/oauth2client/delete", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/oauth2client/meta", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: OIDC feature switches (Dynamic Client Registration) ────
+    { domain = "localhost", resource = "/api/v1/admin/oidc/config", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── admin: observability (process-global telemetry) ───────────────
+    { domain = "localhost", resource = "/api/v1/admin/metrics", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── user: self-service (handlers act on the caller's own account) ─
+    { domain = "localhost", resource = "/api/v1/admin/user/activate/self", role = "user", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/api/v1/admin/user/delete/self", role = "user", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+
+    # ── scim: machine provisioning (G-S1/G-S2). `{id}` is the canonical
+    #    resource the SCIM protect hoop substitutes for the dynamic path
+    #    segment — policies match exactly (G-43), so one row covers all
+    #    resource instances. The role + policy rows are the default
+    #    provisioning; the machine principal itself is NOT seeded (a
+    #    committed client secret would be a standing provisioning
+    #    credential). Register one per IdP connection as admin — that
+    #    registration is the consent the client_credentials grant
+    #    enforces (requested ∩ registered scope):
+    #      POST /api/v1/admin/oauth2client/create
+    #        { client_id: "okta-scim", secret: "<random>",
+    #          grant_types: "client_credentials",
+    #          token_endpoint_auth_method: "client_secret_post",
+    #          default_scopes: "scim" }
+    # ─
+    { domain = "localhost", resource = "/scim/v2/Users", role = "scim", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/scim/v2/Users/{id}", role = "scim", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    # ── demo: the protected static app (gated by Caddy forward_auth) ───
+    # Caddy gates `path /app` through janux /api/v1/auth/verify, which runs
+    # the DEFAULT-DENY engine on the PROXIED request (X-Forwarded-Uri=/app).
+    # /app needs a row here or every /app 401s regardless of session validity.
+    # EXACT match (G-43, no wildcards): the client hits `/app`, no trailing slash.
+    { domain = "localhost", resource = "/app", role = "user",  source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/app", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "localhost", resource = "/app", role = "root",  source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+]
+
+[seed.resend]
+from = "noreply@example.com"
+resend_key = "your-resend-api-key"
+template = "./email/verify.html"
+# Where the magic link lands: the hosted login SPA, which reads
+# token/username/email from the query and auto-verifies (G-133 — the old
+# /api/v1/auth/email/landing value pointed at a route that never
+# existed, so every emailed link 404'd).
+verify_url = "http://localhost/login"
+
+
+[seed.alisms]
+api_secret = "your-sms-api-secret"
+api_key = "your-sms-api-key"
+template_code = "your-template-code"
+sign_name = "Your Company"
+region_id = "cn-shanghai"
+endpoint = "dysmsapi.aliyuncs.com"
