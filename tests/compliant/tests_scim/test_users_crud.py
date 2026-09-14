@@ -149,13 +149,14 @@ def test_user_crud_lifecycle(scim, janux_env):
 
 
 def test_filter_is_case_insensitive(scim, janux_env):
-    # G-145 (RFC 7644 §5/§7.8): userName folds at the SCIM boundary and
-    # filters resolve regardless of the presented case.
+    # G-145 (RFC 7644 §5/§7.8): userName is canonicalized at the store
+    # choke point (create folds + lookup folds), so every surface -- SCIM
+    # filter AND admin console -- resolves the same user regardless of case.
     mixed = f"Mixed-{uuid4().hex[:8]}@{janux_env.domain}"
     r = scim.post("Users", {"schemas": [USER_SCHEMA], "userName": mixed})
     assert r.status_code == 201, r.text
     folded = mixed.lower()
-    assert r.json()["userName"] == folded, "create folds case at the boundary"
+    assert r.json()["userName"] == folded, "create canonicalizes userName via the store"
 
     for queried in (mixed, folded, mixed.upper()):
         r = scim.get("Users", params={"filter": f'userName eq "{queried}"'})

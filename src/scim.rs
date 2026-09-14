@@ -369,23 +369,16 @@ fn parse_user_name_filter(filter: &str) -> Result<Option<String>, ()> {
     }
 }
 
-/// RFC 7644 §7.8: `userName` matching is case-insensitive. Exact first,
-/// then the lowercase fold — SCIM-created users are stored folded
-/// (`create_user` folds at the boundary, G-145), so IdP-synced
-/// directories round-trip fully case-insensitive; admin-created
-/// mixed-case names remain reachable by their exact spelling. A
-/// cross-surface folded index (a `name_lower` column) is the tracked
-/// residual for admin-created mixed-case names queried in a different
-/// case.
+/// RFC 7644 §7.8: `userName` matching is case-insensitive:
+/// canonicalization now lives at the store
+/// choke points (`Tenant::user_create`/`user_rename` fold, G-145) and
+/// `Tenant::user` folds its query, so ONE lookup resolves regardless
+/// of case for BOTH admin-created and IdP-synced users. The earlier
+/// residual — admin-created mixed-case names reachable only by their
+/// exact spelling, tracked for a cross-surface `name_lower` index —
+/// is now CLOSED: one canonical spelling serves every surface.
 async fn resolve_user_ci(tenant: &mut Tenant, name: &str) -> Option<User> {
-    if let Ok(user) = tenant.user(name).await {
-        return Some(user);
-    }
-    let folded = name.to_lowercase();
-    if folded != name {
-        return tenant.user(&folded).await.ok();
-    }
-    None
+    tenant.user(name).await.ok()
 }
 
 #[handler]
@@ -488,8 +481,9 @@ async fn apply_attrs(
     if let Some(new_name) = &body.user_name
         && !new_name.is_empty()
     {
-        // G-145: renames fold case at the SCIM boundary too, so a
-        // PUT/PATCH cannot reintroduce a case-split identity.
+        // G-145: userName is case-insensitive and `Tenant::user_rename`
+        // folds to the canonical form, so a PUT/PATCH cannot
+        // reintroduce a case-split identity; this fold is at the boundary.
         let folded = new_name.to_lowercase();
         if folded != user.name {
             user = tenant.user_rename(caller, &user.name, &folded).await?;
@@ -553,10 +547,10 @@ pub async fn create_user(req: &mut Request, depot: &mut Depot, res: &mut Respons
         .user_name
         .as_deref()
         .filter(|n| !n.is_empty())
-        // G-145: fold case at the SCIM boundary — RFC 7644 §7.8 treats
-        // userName as case-insensitive, so SCIM-provisioned directories
-        // store the canonical lowercase form and round-trip lookups
-        // (filter, path, uniqueness) never split on case.
+        // G-145: RFC 7644 §7.8 treats userName as case-insensitive.
+        // The store is now authoritative — `Tenant::user_create` folds
+        // every surface to the canonical lowercase form — so this SCIM
+        // boundary fold is a defensive duplicate, not the mechanism.
         .map(|n| n.to_lowercase())
     else {
         scim_error(
@@ -1133,11 +1127,12 @@ mod tests {
         serde_json::from_str(&res.take_string().await.unwrap_or_default()).unwrap()
     }
 
-    /// G-145: `userName` is case-insensitive at the SCIM boundary (RFC
-    /// 7644 §5, §7.8): create folds to the canonical lowercase form and
-    /// filter lookups resolve regardless of the presented case — the old
-    /// parser lowercased the filter VALUE and then matched case-
-    /// sensitively, so `eq "Admin"` could never find anything.
+    /// G-145: `userName` is case-insensitive end-to-end (RFC 7644 §5,
+    /// §7.8). Canonicalization lives at the store choke point, not at the
+    /// boundary; create folds to lowercase and the filter parser matches the
+    /// folded store — so `eq "Admin"` resolves the `admin` user
+    /// (historic bug: the old parser lowercased the filter VALUE and matched
+    /// case-sensitively, which never found anything).
     #[tokio::test]
     async fn scim_user_name_is_case_insensitive() {
         let (state, _tmp) = scim_test_env().await;
@@ -1161,7 +1156,7 @@ mod tests {
         let created = scim_json(&mut res).await;
         assert_eq!(
             created["userName"], "mixedcase@example.com",
-            "create folds case at the SCIM boundary"
+             "create canonicalizes the stored userName via user_create"
         );
 
         for queried in [
@@ -1187,6 +1182,37 @@ mod tests {
             );
         }
     }
+    #[tokio::test]
+    async fn g145_case_fold_is_cross_surface() {
+        // Canonicalization lives at the store, not at a boundary. The admin
+        // console creates through `Tenant::user_create` -- the same choke point
+        // SCIM uses -- so it folds case identically, and `Tenant::user` then
+        // resolves the identity regardless of the presented case.
+        let (state, _tmp) = scim_test_env().await;
+        let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let created = tenant.user_create("MixedCase@Example.com").await;
+        let user = match created {
+            Ok(u) => u,
+            Err(e) => panic!("{e}"),
+         };
+        assert_eq!(
+            user.name, "mixedcase@example.com",
+             "admin-path user_create canonicalizes case like the SCIM path"
+         );
+        for queried in [
+             "MixedCase@Example.com",
+             "MIXEDCASE@EXAMPLE.COM",
+             "miXeDCase@EXaMpLe.CoM",
+         ] {
+            match tenant.user(queried).await {
+                Ok(found) => assert_eq!(
+                     found.name, "mixedcase@example.com",
+                      "case-insensitive lookup {queried} resolves the folded user"),
+                Err(_) => panic!("lookup {queried} failed"),
+             }
+         }
+     }
+
 
     /// G-146: PATCH `add` APPENDS to a multi-valued attribute and
     /// `remove` is implemented (RFC 7644 §3.5.2) — the old replace-only

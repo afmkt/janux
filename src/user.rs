@@ -154,8 +154,12 @@ impl User {
 /// params, JWT claims, SCIM location paths and the `actor` field of every
 /// audit line — a conservative allowlist keeps it URL-, log- and
 /// claim-safe. `@` is allowed because SCIM userNames and seeded admins
-/// are email-shaped. Case-SENSITIVE by design: folding would collide
-/// existing mixed-case identities; SCIM folds at its own boundary (G-145).
+/// are email-shaped. This is a CHARSET gate only — it does not fold case.
+/// The authoritative case-fold (G-145, RFC 7644 s7.8) lives at the choke
+/// points: `user_create` and `user_rename` canonicalize the stored `name`
+/// to ASCII-lowercase and the lookup `user()` folds its input — the same
+/// model the email path uses (`email_create_inner`, G-105). Every surface
+/// (admin, SCIM, seed, signup) thus agrees on one canonical spelling.
 pub fn valid_username(name: &str) -> bool {
     !name.is_empty()
         && name.chars().count() <= 254
@@ -199,16 +203,20 @@ impl Tenant {
     }
 
     pub async fn user_create(&mut self, name: &str) -> Result<User> {
-        // G-105: the username is the one identifier never verified
-        // out-of-band — gate its charset at the single creation choke
-        // point (signup, admin, SCIM and seed all funnel through here).
+        // G-105 / G-145: the username is the one identifier never verified
+        // out-of-band, so it is canonicalized here at the single
+        // creation choke point (signup, admin, SCIM and seed all funnel
+        // through): gate the charset, THEN ASCII case-fold — mirroring
+        // `email_create_inner`. Folding here makes `userName` case-
+        // insensitive for EVERY surface (RFC 7644 s7.8); the SCIM
+        // boundary no longer folds on its own.
         if !valid_username(name) {
             return Err(anyhow::anyhow!(
                 "invalid username: ASCII letters, digits and . _ @ - only, 1-254 chars"
             ));
         }
         toasty::create!(User {
-            name: name,
+            name: name.to_lowercase(),
             active: true
         })
         .exec(&mut self.database)
@@ -217,8 +225,12 @@ impl Tenant {
     }
 
     /// Wire-boundary lookup: login name (SCIM `userName`) -> user.
+    /// Case-insensitive: the stored form is canonical (lowercase, via
+    /// `user_create`/`user_rename`, G-145), so the query folds —
+    /// one canonical spelling resolves for every surface that names a user.
     pub async fn user(&mut self, name: &str) -> Result<User> {
-        let mut rows: Vec<User> = User::filter(User::fields().name().eq(name))
+        let key = name.to_lowercase();
+        let mut rows: Vec<User> = User::filter(User::fields().name().eq(&key))
             .exec(&mut self.database)
             .await
             .map_err(anyhow::Error::from)?;
@@ -292,7 +304,10 @@ impl Tenant {
         name: &str,
         new_name: &str,
     ) -> Result<User> {
-        // G-105: renames pass the same charset gate as creation.
+        // G-105: renames pass the same charset gate as creation;
+        // G-145: the new name is folded below so a PUT/PATCH cannot
+        // reintroduce a case-split identity — the store is
+        // authoritative, not the caller's spelling.
         if !valid_username(new_name) {
             return Err(anyhow::anyhow!(
                 "invalid username: ASCII letters, digits and . _ @ - only, 1-254 chars"
@@ -300,13 +315,14 @@ impl Tenant {
         }
         let user = self.user(name).await?;
         self.require_above_user(caller, user.id).await?;
+        let new_name = new_name.to_lowercase();
         if new_name != user.name {
             anyhow::ensure!(!new_name.is_empty(), "user name must not be empty");
-            if self.user(new_name).await.is_ok() {
+        if self.user(&new_name).await.is_ok() {
                 return Err(anyhow::anyhow!("user name '{new_name}' already exists"));
             }
             User::update_by_id(user.id)
-                .name(new_name)
+                .name(&new_name)
                 .exec(&mut self.database)
                 .await
                 .map_err(anyhow::Error::from)?;
