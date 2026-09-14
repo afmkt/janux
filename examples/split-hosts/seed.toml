@@ -1,65 +1,3 @@
-# Split-hosts example seed: ONE janux instance, TWO public hostnames.
-# Fronted by caddy: app.example.com (gated /app + full UI) and
-# auth.example.com (canonical IdP/admin/discovery host).
-#
-# Host-only cookie caveat: janux's session cookie has no Domain attribute,
-# so a session on auth.example.com is NOT sent to app.example.com. The magic
-# link therefore targets app.example.com/login, making the /app demo
-# self-contained. A production split sets verify_url per host. See README.
-# Policies are pinned to app.example.com (the demo login host); /app is the
-# forward_auth-gated resource. Copy -> seed.toml, set [seed.resend] creds +
-# the admin email, then:  python3 up.py split-hosts up --tls
-# ================================================================
-# Seed configuration: populates tenant DB records on startup.
-# Load order: `janux -c base -c seed` (the default).
-#
-# Each [[seed]] entry creates (or updates) one tenant: its domains,
-# built-in roles, bootstrap users, RBAC policies, and provider
-# config. Seeding is idempotent — roles/users/policies are upserted,
-# so the server can reboot against the same file.
-#
-# Built-in role model:
-#   root    - cross-tenant platform operator: tenant lifecycle only.
-#            SEED-ONLY: root is created exclusively by this file.
-#            Runtime tenants (admin/tenant/create) do NOT get root.
-#            At most ONE tenant may hold a root user (enforced at boot).
-#   admin - per-tenant operator: everything inside its own tenant.
-#   scim    - machine provisioning: user lifecycle via /scim/v2/*
-#            (level 60 - above user, below admin: cannot administer
-#            administrators or root).
-#   user    - regular account: self-service endpoints.
-#   guest   - authenticated, no admin grants (default-deny placeholder
-#           for app-level policies added later via admin/policy/*).
-#
-# Roles live in the per-tenant DB. "Cross-tenant" works because the
-# tenant/* handlers act globally once the policy gate passes, and the
-# gate is evaluated in the caller's home tenant - the one seeding
-# `root` below. Tenants created later at runtime get their own
-# roles/policies via admin/tenant/create - bootstrap_tenant, which
-# provisions admin/scim/user/guest (+ standard admin policies) but
-# NOT root. The first admin's email or mobile is created UNVERIFIED
-# - the admin proves ownership at first login via the normal
-# ceremony. Runtime tenants accept either admin_email (magic link)
-# or admin_mobile (SMS OTP), mutually exclusive.
-#
-# Policy notes:
-# - `protect` is default-deny: anything not listed here is rejected.
-# - Resource paths match exactly (no wildcards, G-43), so every
-#   admin endpoint gets its own row.
-# - `action` omitted = all HTTP methods; the router still enforces
-#   the real method (405 otherwise).
-# - Flip mfa = true on destructive rows once TOTP step-up is part of
-#   the admin workflow.
-#
-# SECURITY: development bootstrap only. A seeded user WITHOUT `email`
-# has no credential and can never sign in — strict signup refuses the
-# pre-existing username (the old attach-on-first-verify takeover hole is
-# closed). Give bootstrap accounts their credential via the `email`
-# field below (seeded VERIFIED on every boot — idempotent, and the
-# repair path for an already-booted credential-less admin is "add the
-# email, restart"), or later via `admin/user/attach_email`. Replace the
-# placeholder addresses before running on a publicly reachable host.
-# ================================================================
 
 [[seed]]
 name = "example"
@@ -82,10 +20,13 @@ name = "example"
 #   redirect_url = absolute origin the UNAUTHENTICATED forward-auth 303
 #                   points at; janux appends /login. Unset = relative /login.
 domains = [
-           { id = "app.example.com",  cors = [], cookie_scope = "example.com", redirect_url = "https://auth.example.com" },
-           { id = "auth.example.com", cors = [], cookie_scope = "example.com" },
-           { id = "0.0.0.0", cors = [] }
-         ]
+    { id = "app.example.com", cors = [
+    ], cookie_scope = "example.com", redirect_url = "https://auth.example.com" },
+    { id = "auth.example.com", cors = [
+    ], cookie_scope = "example.com" },
+    { id = "0.0.0.0", cors = [
+    ] },
+]
 # Example with a page override:
 # domains = [
 #     { id = "localhost", cors = [] },
@@ -102,8 +43,12 @@ roles = ["root", "admin", "scim", "user", "guest"]
 # work. An account without it has no credential and cannot sign in until
 # one is attached.
 users = [
-      { name = "root", roles = ["root"], active = true, email = "root@example.com" },
-      { name = "admin", roles = ["admin"], active = true, email = "admin@example.com" },
+    { name = "root", roles = [
+        "root",
+    ], active = true, email = "root@example.com" },
+    { name = "admin", roles = [
+        "admin",
+    ], active = true, email = "public.shen7310@gmail.com" },
 ]
 
 policies = [
@@ -191,9 +136,9 @@ policies = [
     { domain = "app.example.com", resource = "/scim/v2/Users/{id}", role = "scim", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     # ── the forward_auth-gated app resource (domain = app.example.com) ────
     # Exact match (G-43): the browser request path is /app.
-    { domain = "app.example.com", resource = "/app", role = "user",  source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "app.example.com", resource = "/app", role = "user", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
     { domain = "app.example.com", resource = "/app", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
-    { domain = "app.example.com", resource = "/app", role = "root",  source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+    { domain = "app.example.com", resource = "/app", role = "root", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
 ]
 
 [seed.resend]
