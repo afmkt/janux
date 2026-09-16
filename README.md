@@ -137,19 +137,20 @@ The seed shape is pinned by the `seed_toml_bootstraps_builtin_roles` test, so a 
 
 ## Backup & restore
 
-The data dir holds every tenant schema, all signing keys, and the revocation store. Backups are **cold** operations (the databases are exclusively locked while the server holds them — `janux backup` verifies this and refuses to copy a live tree):
+The data dir holds every tenant schema, all signing keys, and the revocation store. Because the databases are exclusively locked while the server runs, **stop the server first**, then back up the data dir as an ordinary file copy:
 
 ```sh
-# stop the server, then:
-janux backup ./backups                # → backups/backup-<timestamp>/ + manifest.json
-janux restore ./backups/backup-<timestamp>    # into an empty data dir
-janux restore ./backups/backup-<timestamp> --force   # disaster recovery: replace the data dir
-janux rekey <64-hex-new-key>          # rotate the encryption key
+# stop the server, then copy the data dir:
+tar czf backup-$(date +%s).tgz -C "$(dirname data)" data        # or:  cp -r data backups/data-$(date +%s)/
+# on restore, extract into an empty data dir (disaster recovery overwrites it):
+tar xzf backup-<ts>.tgz -C "$(dirname data)"                    # or:  cp -r backups/data-<ts> data
 ```
 
-`janux rekey` re-encrypts every at-rest secret under the new key. After a successful run, **put the new key in your config** or the next boot cannot decrypt.
+Schedule the copy with cron/systemd timers.
 
-The complete restore set is the backup dir **plus** your config files (`base.toml`/`seed.toml`) **plus** the `encryption_key` — without the key, the at-rest secrets in the backup are unrecoverable. Schedule with cron/systemd timers; `just backup` wraps the common case.
+The complete restore set is the data dir **plus** your config files (`base.toml`/`seed.toml`) **plus** the `encryption_key` — without the key, the at-rest secrets (signing keys, provider credentials) are unrecoverable.
+
+Rotate the encryption key with `janux rekey <64-hex-new-key>`, which re-encrypts every at-rest secret (signing-key privates, provider secrets, TOTP, stored mail/SMS credentials) under the new key. After a successful run, **put the new key in your config** or the next boot cannot decrypt.
 
 ---
 

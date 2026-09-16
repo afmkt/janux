@@ -58,28 +58,6 @@ enum Commands {
         /// Target directory (created if missing; existing files overwritten)
         dir: std::path::PathBuf,
     },
-    /// Back up the data directory, then exit (the server does NOT start).
-    /// COLD operation: stop the server first — the databases are
-    /// exclusively locked while it holds them, and the backup validates
-    /// that every database opens before copying. Creates
-    /// DEST/backup-<timestamp>/ with a manifest.json. The config files
-    /// (base.toml/seed.toml) and the encryption_key live outside the data
-    /// dir — back them up separately; without the key the at-rest secrets
-    /// in the backup are unrecoverable.
-    Backup {
-        /// Destination directory (a timestamped backup dir is created inside)
-        dest: std::path::PathBuf,
-    },
-    /// Restore a backup created by `janux backup`, then exit (the server
-    /// does NOT start). COLD operation: stop the server first. Refuses to
-    /// replace a non-empty data dir unless --force.
-    Restore {
-        /// The timestamped backup directory (containing manifest.json)
-        src: std::path::PathBuf,
-        /// Replace a non-empty data dir (disaster recovery, not a merge)
-        #[arg(long)]
-        force: bool,
-    },
     /// Re-encrypt every at-rest secret (signing-key privates, social
     /// provider secrets, TOTP secrets, stored mail/SMS credentials) under
     /// a NEW encryption key, then exit (the server does NOT start). COLD
@@ -134,47 +112,6 @@ async fn main() {
             config_paths
         )
     });
-
-    // Backup/restore are COLD operations handled before anything opens
-    // the data dir (Storage::init would take the very locks the backup
-    // validation checks for).
-    match &cli.command {
-        Some(Commands::Backup { dest }) => {
-            match db::backup_data_dir(Path::new(&server_config.data_dir), dest).await {
-                Ok((dir, manifest)) => {
-                    println!(
-                        "Backed up {} tenant(s), {} file(s) to {}",
-                        manifest.tenants.len(),
-                        manifest.files.len(),
-                        dir.display()
-                    );
-                    return;
-                }
-                Err(e) => {
-                    eprintln!("Backup failed: {e:#}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        Some(Commands::Restore { src, force }) => {
-            match db::restore_data_dir(src, Path::new(&server_config.data_dir), *force).await {
-                Ok(manifest) => {
-                    println!(
-                        "Restored {} tenant(s) into {} (backup created {})",
-                        manifest.tenants.len(),
-                        server_config.data_dir,
-                        manifest.created_at
-                    );
-                    return;
-                }
-                Err(e) => {
-                    eprintln!("Restore failed: {e:#}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        _ => {}
-    }
 
     // G-149: trusting X-Forwarded-* hands tenant resolution and every
     // per-IP limiter to whoever can set those headers. Restricting header

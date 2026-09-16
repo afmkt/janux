@@ -40,7 +40,6 @@ e2e:
     cargo test --test all_tests -- --test-threads=1
 
 
-
 # G-165: browser-driven UI e2e. The SPAs are embedded in `janux` via
 # rust-embed, so the frontend must be built first; the harness spawns a
 # real `target/debug/janux` subprocess plus a mock Resend, hence the debug
@@ -59,11 +58,6 @@ ui:
 compliant:
     @echo "Running the OIDC/SCIM conformance suite (needs uv)..."
     cd tests/compliant && uv run pytest -q
-
-
-backup:
-    @echo "Backing up the data dir (stop the server first)..."
-    cargo run --bin janux -- backup ./backups
 
 
 # UI e2e is opt-out of `test` (it needs a browser); run it via `just ui`.
