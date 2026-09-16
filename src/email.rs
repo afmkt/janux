@@ -291,10 +291,73 @@ async fn send(config: &ResendDTO, to: &str, subject: &str, content: &str) -> any
     };
     let email =
         CreateEmailBaseOptions::new(config.from.clone(), vec![to], subject).with_html(content);
-    let _response = resend.emails.send(email).await?;
-
+    let response = resend.emails.send(email).await;
+       // Surface the Resend-side reason (status + body) in the console — the
+      // failure is otherwise swallowed downstream into a bare "Fail to send
+      // email", leaving nothing to act on.
+    if let Err(e) = &response {
+        tracing::error!(
+             from = %config.from,
+           to,
+          error = %format!("{e:#}"),
+           "Magic-link email failed to send via Resend"
+         );
+     }
+    if let Err(e) = response {
+        return Err(anyhow::anyhow!(describe_resend_error(&e)));
+      }
     Ok(())
 }
+
+/// Map a `resend-rs` error to a single message that leads with an actionable
+/// hint but keeps the raw Resend response (status + name + body) intact, so
+/// email failures are both *diagnosable* and never silently collapsed to a
+/// bare "Fail to send email".
+fn describe_resend_error(err: &resend_rs::Error) -> String {
+    match err {
+        resend_rs::Error::Resend(resp) => {
+            let hint = match resp.status_code {
+                401 =>
+                   "Invalid or revoked Resend API key - check `resend_key` in your seed/config",
+                403 =>
+                   "Resend refused the send - the `from` domain is usually not verified or not \
+                     authorized on your Resend account",
+                400 | 422 =>
+                   "Resend rejected the request - check `from`/`to` and your account mode (test \
+                   mode only delivers to test@resend.dev)",
+                429 => "Resend rate limit exceeded - send less often or check your plan",
+                500..=599 => "Resend-side error - resend.com may be degraded; try again shortly",
+                 other => return format!("Resend HTTP {other}: {}", resp.message),
+                };
+            if resp.message.trim().is_empty() {
+                format!("{hint} (HTTP {} {})", resp.status_code, resp.name)
+              } else {
+                format!(
+                      "{hint} (HTTP {} {}): {}",
+                    resp.status_code,
+                  resp.name,
+                  resp.message,
+                  )
+                }
+          }
+        resend_rs::Error::Http(req_err) =>
+            format!("Could not reach Resend - check outbound network / `resend.base_url`: {req_err}"),
+        resend_rs::Error::RateLimit {
+            ratelimit_limit,
+            ratelimit_reset,
+             ..
+        } => {
+            let limit =
+                 ratelimit_limit.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string());
+            let seconds =
+                ratelimit_reset.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string());
+            format!("Resend rate limit exceeded - {limit} requests / {seconds}s")
+        }
+        resend_rs::Error::Parse { message, .. } =>
+            format!("Resend returned an unparseable response: {message}"),
+        resend_rs::Error::Other(msg) => msg.clone(),
+      }
+ }
 
 #[derive(RustEmbed)]
 #[folder = "./template/email/"]
@@ -424,15 +487,16 @@ async fn dispatch_magic_link(
     subject: &str,
     content: &str,
 ) -> Result<(), String> {
-    if send(cfg, email, subject, content).await.is_ok() {
-        MLINK_CACHE
-            .insert(format!("{}:{}", domain, token), user_name.to_string())
-            .await
-            .ok();
-        Ok(())
-    } else {
-        Err("Fail to send email".to_string())
+    if let Err(e) = send(cfg, email, subject, content).await {
+        // Keep a stable prefix but attach the Resend-side cause so a
+        // misconfiguration (e.g. an unverified `from` domain) is not lost.
+        return Err(format!("Fail to send email: {e:#}"));
     }
+    MLINK_CACHE
+        .insert(format!("{}:{}", domain, token), user_name.to_string())
+        .await
+        .ok();
+    Ok(())
 }
 
 #[endpoint(
@@ -990,25 +1054,23 @@ async fn deliver_add_email_ceremony(
     user_name: &str,
     prepared: PreparedAddMail,
 ) -> Result<String, String> {
-    if send(
+    if let Err(e) = send(
         &prepared.cfg,
         &prepared.to,
         &prepared.subject,
         prepared.content.as_ref(),
     )
-    .await
-    .is_ok()
-    {
-        MLINK_CACHE
-            .insert(
-                format!("email_add:{}:{}", domain, prepared.token),
-                user_name.to_string(),
-            )
-            .await
-            .ok();
-        return Ok(prepared.token);
+    .await {
+        return Err(format!("Fail to send email: {e:#}"));
     }
-    Err("Fail to send email".to_string())
+    MLINK_CACHE
+        .insert(
+            format!("email_add:{}:{}", domain, prepared.token),
+            user_name.to_string(),
+        )
+        .await
+        .ok();
+    Ok(prepared.token)
 }
 
 #[endpoint(
@@ -1223,6 +1285,54 @@ pub async fn add_verify(req: &mut Request, depot: &mut Depot, res: &mut Response
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+       // regression: a failed Resend send must surface an *actionable* hint and
+     // the *raw* Resend response (status + name + body), not just the bare
+     // "Fail to send email" the login "Send Link" path returned with no
+      // console error. This is the unverified-`from`-domain case.
+     #[test]
+     fn describe_resend_error_keeps_hint_and_raw_body() {
+        use resend_rs::types::ErrorResponse;
+        let err = resend_rs::Error::Resend(ErrorResponse {
+            status_code: 403,
+            message: "The gmail.com domain is not verified. Please, add and verify your domain."
+                 .to_string(),
+             name: "validation_error".to_string(),
+            });
+
+        let msg = describe_resend_error(&err);
+          // actionable: points at the likely cause
+        assert!(
+             msg.contains("not verified"),
+             "actionable hint missing from: {msg}"
+         );
+         // raw: the actual Resend status + name + body are preserved
+        assert!(msg.contains("HTTP 403"), "status missing from: {msg}");
+        assert!(
+             msg.contains("validation_error"),
+             "resend 'name' missing from: {msg}"
+         );
+        assert!(
+            msg.contains("gmail.com domain is not verified"),
+             "resend body missing from: {msg}"
+         );
+      }
+
+      #[test]
+    fn describe_resend_error_maps_401_to_key_hint() {
+        use resend_rs::types::ErrorResponse;
+        let err = resend_rs::Error::Resend(ErrorResponse {
+            status_code: 401,
+            message: "API key is invalid".to_string(),
+            name: "invalid_api_key".to_string(),
+          });
+        let msg = describe_resend_error(&err);
+        assert!(msg.contains("API key"), "401 hint missing from: {msg}");
+        assert!(
+             msg.contains("API key is invalid"),
+              "raw body missing from: {msg}"
+         );
+      }
 
     fn query_map(link: &Url) -> std::collections::HashMap<String, String> {
         link.query_pairs().into_owned().collect()

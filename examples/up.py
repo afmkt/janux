@@ -9,9 +9,11 @@ Each sub-directory (single-host/, split-hosts/) is a self-contained
 `docker compose` project: caddy (public front) + janux (auth) + nginx
 (the "simple service", a static site). This wrapper, per project:
 
- 1. renders base.toml / seed.toml from the *.example.toml templates
-       (regenerating the encryption_key; you never edit a generated .toml
-    by hand),
+ 1. assumes the gitignored base.toml / seed.toml already exist -- they are
+     created ONCE, out of band, from the committed *.example.toml templates
+     via a manual `cp` (see the README). They hold local, often-secret
+     values, so up.py NEVER renders or clobbers them; it only checks that
+     they exist and points at the *.example.toml to copy when one is missing.
  2. maps the Caddyfront site hostnames (parsed out of the Caddyfile) into
       /etc/hosts and -- on macOS -- trusts caddy's local CA in the system
     keychain. TLS itself is configured in each Caddyfile via a per-site
@@ -70,36 +72,44 @@ def _marker(setup: str) -> str:
     return f"janux-example-{setup}"
 
 
-# --- config rendering -----------------------------------------------------
-def _render(src: Path, dst: Path, regen_key: bool) -> None:
-    text = src.read_text()
-    if regen_key:
-        key = os.urandom(32).hex()       # 64 hex chars == 32 bytes, AES-256-GCM
-        text, n = re.subn(
-            r"^encryption_key\s*=.*$",
-            f'encryption_key = "{key}"',
-            text,
-            count=1,
-            flags=re.MULTILINE,
+# --- config presence check ------------------------------------------------
+# base.toml / seed.toml are gitignored and are created ONCE, out of band, from
+# the committed *.example.toml templates (a manual `cp`, see the README). They
+# carry local, often-secret values -- the process encryption key and the
+# [seed.resend] creds -- so up.py MUST NOT render or clobber them: a copy step
+# would wipe the real credentials on every `up`. We only assert that they exist
+# and, when one is missing, point at the *.example.toml template to copy.
+REQUIRED_CONFIGS = (
+          ("base.example.toml", "base.toml"),
+          ("seed.example.toml", "seed.toml"),
+      )
+
+
+def require_configs(setup_dir: Path) -> None:
+    missing = [
+             (example, target)
+        for example, target in REQUIRED_CONFIGS
+        if not (setup_dir / target).exists()
+     ]
+    if missing:
+        log.error(
+              "  missing required config: %s",
+             ", ".join(target for _example, target in missing),
          )
-        assert n == 1, f"{src}: no encryption_key line to replace"
-        log.info("  fresh 32-byte encryption_key -> %s", dst.name)
-    dst.write_text(text)
-    log.info("  rendered %s <- %s", dst.name, src.name)
-
-
-def prepare_configs(setup_dir: Path) -> None:
-     # Copy *.example.toml -> *.toml (gitignored) so `up` works from a clone.
-    for example, target, regen in (
-         ("base.example.toml", "base.toml", True),
-         ("seed.example.toml", "seed.toml", False),
-     ):
-        src = setup_dir / example
-        log.debug("  render %s -> %s (regen_key=%s)", example, target, regen)
-        if not src.exists():
-            log.warning("  missing %s (skipping)", src)
-            continue
-        _render(src, setup_dir / target, regen)
+        for example, target in missing:
+            if (setup_dir / example).exists():
+                log.info("    create it from the template:   cp %s %s", example, target)
+            else:
+                log.warning(
+                     "    template %s is also missing; %s cannot be generated here",
+                    example,
+                    target,
+                 )
+        log.info(
+             "  after copying, set a real encryption_key in base.toml "
+             "(openssl rand -hex 32) and your [seed.resend] creds in seed.toml")
+        raise SystemExit(1)
+    log.info("  using existing base.toml / seed.toml (not clobbered; secrets preserved)")
 
 
 # --- /etc/hosts mapping ---------------------------------------------------
@@ -291,8 +301,8 @@ def main() -> None:
         sys.exit(1)
 
     if action == "up":
-        log.info("== %s: rendering config", setup)
-        prepare_configs(setup_dir)
+        log.info("== %s: checking config", setup)
+        require_configs(setup_dir)
         hosts = extract_caddy_hosts(setup_dir / "Caddyfile")
         if hosts:
             log.info("== mapping %s -> 127.0.0.1", ", ".join(hosts))

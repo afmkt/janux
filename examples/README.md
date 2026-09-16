@@ -14,13 +14,13 @@ is a 3-container stack:
 
 ```
 examples/
-  up.py                  # renders config + runs either stack
+  up.py                  # checks config exists (needs base.toml/seed.toml), maps hosts, runs either stack
   single-host/           # ONE hostname (localhost): auth + gated /app, same host
     compose.yml
     Caddyfile
     app-nginx.conf       # nginx `location /app/` -> aliased static file
-    base.example.toml    # -> base.toml (gitignored) on `up.py up`
-    seed.example.toml    # -> seed.toml
+    base.example.toml    # template -> base.toml (gitignored), `cp` once by hand
+    seed.example.toml    # -> seed.toml (gitignored; put real creds in the copy)
     site/index.html      # the protected static file
   split-hosts/           # TWO hostnames: auth.example.com + app.example.com
                          (same files, app-nginx.conf + seed keyed to app.example.com)
@@ -65,7 +65,7 @@ Run it:
 
 ```sh
 cd examples
-./up.py single-host up             # render config + up (detached)
+./up.py single-host up             # needs base.toml/seed.toml; up (detached)
 open  https://localhost/app        # macOS;  https://127.0.0.1/app on Linux
 ```
 
@@ -199,8 +199,11 @@ domains = [
 
 ## Files
 
-- **`up.py`** — renders `*.example.toml` -> `*.toml` (fresh `encryption_key`),
-  sets `CADDY_TLS`, maps split-hosts into `/etc/hosts`, and runs compose.
+- **`up.py`** — ensures the git-ignored `base.toml` / `seed.toml` exist
+  (create them from the committed `*.example.toml` templates by hand with `cp` on
+   first run — it NEVER renders or clobbers them, so the creds you put in
+   `seed.toml` survive every `up`), sets `CADDY_TLS`, maps split-hosts into
+   `/etc/hosts`, and runs compose.
 - **`single-host/`**, **`split-hosts/`** — see the tree above; each is a
   standalone `docker compose` project.
 - **`site/index.html`** — the protected static file (self-contained: no
