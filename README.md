@@ -49,6 +49,7 @@ Point a deployment at a published image via `JANUX_IMAGE` / `JANUX_PULL=always` 
 
 ### Deployment notes
 
+- **Replace the example `encryption_key` before deploying** — the shipped `base.example.toml` uses a well-known dummy value (`12345678…`). Generate a fresh one with `openssl rand -hex 32`. The key encrypts every at-rest secret (signing-key privates, social provider secrets, TOTP, mail/SMS credentials); deploying with the example key means anyone who reads the data dir can decrypt them, and rotating later requires `janux rekey`.
 - Put the server behind a reverse proxy that overwrites `X-Forwarded-*` and flip `trust_forwarded_headers` to `true`, then name that proxy in `trusted_proxies` (IP/CIDR allow-list, G-149): header authority is restricted to those peers, so a directly reachable port can no longer be tenant-spoofed or limiter-bypassed. With the list empty and `true` set, every peer is trusted (boot logs a loud warning); if directly reachable, keep the shipped default `false`.
 - Run **one instance** per data dir: ceremony state (magic links, OTP codes, challenges, rate limits) is process-local **by design** — it fails closed on loss, and only the revocation store is shared via `jwt.db` (DESIGN.md §6).
 - Persist the `data/` volume — it holds every tenant schema and the signing keys.
