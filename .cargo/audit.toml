@@ -4,8 +4,10 @@
 # directory. G-164: `cargo audit` runs in CI against the committed Cargo.lock;
 # the cleanly-fixable advisories are fixed at the source instead of ignored
 # here (bcrypt >=0.19.2, crossbeam-epoch >=0.9.20, h2 >=0.4.16, quinn-proto
-# >=0.11.15, and the `protobuf` DoS is eliminated by disabling prometheus'
-# default feature so it is no longer a dependency at all).
+# >=0.11.15, rustls >=0.23.45 (RUSTSEC-2026-0285: a TLS 1.3 encryption-level
+# fix, the rustls port of Go's GO-2026-4340 / CVE-2025-61730), and the
+# `protobuf` DoS is eliminated by disabling prometheus' default feature so it is
+# no longer a dependency at all).
 #
 # The IDs below are the *unfixable in place* transitive crates. For each one a
 # real upgrade is either unavailable, or it forces a `rust-crypto` ecosystem
