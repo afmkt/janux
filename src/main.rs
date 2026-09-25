@@ -70,6 +70,17 @@ enum Commands {
         /// New encryption key: 64 hex chars (32 bytes), e.g. `openssl rand -hex 32`
         new_key: String,
     },
+       /// Print the JWKS (public keys only) to stdout for a PostgREST-style
+       /// verifier, then exit (the server does NOT start). With no DOMAIN the
+       /// set of EVERY tenant in the data dir is exported (with a warning); with
+       /// DOMAIN only that domain's owning tenant is exported. PostgREST consumes
+       /// it via `jwt-secret = "@jwks.json"` (it does not fetch JWKS over HTTP).
+       /// The private signing key is never emitted.
+    Jwks {
+           /// Domain name restricting the export to that domain's owning tenant.
+           /// Omit to export every tenant.
+        domain: Option<String>,
+        },
 }
 
 #[tokio::main]
@@ -112,6 +123,21 @@ async fn main() {
             config_paths
         )
     });
+
+     // JWKS export is a cold, read-only operation needing only the public key
+     // material (never the encryption key), so run it before the encryption-key
+     // requirement and before seeding the storage.
+    if let Some(Commands::Jwks { domain }) = &cli.command {
+        match db::export_jwks(Path::new(&server_config.data_dir), domain.as_deref())
+             .await
+        {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("JWKS export failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     // G-149: trusting X-Forwarded-* hands tenant resolution and every
     // per-IP limiter to whoever can set those headers. Restricting header

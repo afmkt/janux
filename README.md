@@ -152,6 +152,8 @@ The complete restore set is the data dir **plus** your config files (`base.toml`
 
 Rotate the encryption key with `janux rekey <64-hex-new-key>`, which re-encrypts every at-rest secret (signing-key privates, provider secrets, TOTP, stored mail/SMS credentials) under the new key. After a successful run, **put the new key in your config** or the next boot cannot decrypt.
 
+Hand off the signing keys to an external verifier (e.g. PostgREST, which verifies but does **not** sign) with `janux jwks [DOMAIN]`, which prints the **public** JWKS to stdout — the private signing key is never emitted. With no `DOMAIN` it exports every tenant's set and warns that a combined multi-tenant JWKS mixes key namespaces (a `kid` is unique within a tenant, not globally); pass a `DOMAIN` to export just that domain's owning tenant. Wire PostgREST to it via `jwt-secret = "@jwks.json"` (it does not fetch JWKS over HTTP — unlike the live `GET /.well-known/jwks.json` endpoint).
+
 ---
 
 ## Testing

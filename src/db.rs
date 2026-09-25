@@ -1120,6 +1120,74 @@ pub async fn rekey_data_dir(data_dir: &Path, new_key_hex: &str) -> Result<RekeyR
     Ok(report)
 }
 
+// ─── JWKS export (for PostgREST / other external verifiers) ────────────────
+
+/// Print the JWKS (public keys only) to stdout for a PostgREST-style verifier.
+///
+/// With `domain` set the export is restricted to that domain's OWNING tenant:
+/// a domain name is what an operator actually has, and a tenant holds every
+/// one of its domains' keys, so one tenant's set is the complete set that
+/// verifies that tenant's tokens. With `domain` None, EVERY tenant in the data
+/// dir is exported and the operator is warned: a combined multi-tenant set mixes
+/// key namespaces (a key `kid` is unique within a tenant, not globally) and must
+/// not be pointed at by a single-tenant verifier. Public keys only - the private
+/// signing half is never read, so this path needs no encryption key.
+pub async fn export_jwks(data_dir: &Path, domain: Option<&str>) -> Result<()> {
+    let storage = Storage::init(data_dir).await?;
+
+    let tenant_names: Vec<String> = match domain {
+        Some(dom) => {
+            let tenant = storage
+                 .tenant_by_domain(dom)
+                 .ok_or_else(|| {
+                    anyhow::anyhow!(
+                         "domain '{}' is not registered to any tenant in '{}'",
+                        dom,
+                        data_dir.display()
+                    )
+                 })?;
+            eprintln!(
+                 "Exporting the JWKS of tenant '{}' (owner of domain '{}').",
+                tenant.name,
+                dom
+             );
+            vec![tenant.name.clone()]
+         }
+        None => {
+            eprintln!(
+                 "WARNING: no domain given - exporting the JWKS of EVERY tenant in \
+                 '{}'. A combined multi-tenant set mixes key namespaces (a key \\`kid\\` \
+                 is unique within a tenant, not globally); do not point a single-tenant \
+                 verifier at it. Pass a domain name to export one tenant's set instead.",
+                data_dir.display()
+             );
+            storage.all_tenants().await?
+         }
+     };
+
+    let mut jwk_set = jsonwebtoken::jwk::JwkSet { keys: Vec::new() };
+    let mut key_count = 0usize;
+    for name in tenant_names {
+        let Some(mut tenant) = storage.tenant_by_id(&name) else {
+            continue;
+         };
+        let built = tenant.build_jwks().await?;
+        key_count += built.keys.len();
+        jwk_set.keys.extend(built.keys);
+     }
+
+    if key_count == 0 {
+        anyhow::bail!(
+             "no signing keys found to export in data dir '{}'; create one first",
+            data_dir.display()
+         );
+     }
+
+    let json = serde_json::to_string_pretty(&jwk_set)?;
+    println!("{json}");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

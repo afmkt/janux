@@ -81,6 +81,16 @@ Create a new small service, e.g. `sample_rp/` — a single-file FastAPI app on p
 - `POST http://localhost:8080/token` **form-encoded** (`TokenRequest`, `src/oidc.rs`): `grant_type=authorization_code`, `code`, `redirect_uri` (must be byte-identical to the one in `/authorize`), `client_id`, `client_secret`, `code_verifier`. Optional `lifetime` (seconds, G-90): requested ACCESS-token lifetime, clamped into `[60, ceiling]` — ceiling 60 min for user access tokens, 90 days for `client_credentials`. A client may **shorten** its tokens, never lengthen them past policy; omitted → ceiling. ID tokens (15-min authentication assertions) and refresh-family windows (30 days) are unaffected. The ceremony `verify` endpoints accept the same parameter for the session JWT (ceiling 15 min), and social login takes it as a `lifetime` query param at initiation; shortened internal sessions keep their lifetime across `auth/refresh` rotation.
 - The response is `TokenResponse`: `access_token`, `id_token` (because you asked for `openid`), `refresh_token` (because of `offline_access`), `expires_in`.
 - Validate the `id_token` properly: fetch JWKS from `jwks_uri`, verify signature (**RS256**, `src/jwt.rs:114`), and check `iss` equals the issuer from discovery, `aud` equals your `client_id`, `exp` not passed. Then (or additionally) call `GET /userinfo` with `Authorization: Bearer <access_token>` to get claims.
+
+**For PostgREST / other external verifiers** (they verify the signature but never sign): janux has **no symmetric secret** to share — it signs with **RS256**, so a verifier only ever needs the **public** key. Two ways to obtain it: (1) the live `GET /.well-known/jwks.json` endpoint, or (2) the cold CLI `janux jwks [DOMAIN]`, which prints the public JWKS to stdout (the private signing key is never emitted and the command needs no `encryption_key`). A `DOMAIN` exports that domain's owning tenant; omit it to export **every** tenant (a warning notes the mixed-namespace caveat). PostgREST does not fetch JWKS over HTTP, so materialize it once and point the config at it:
+
+```sh
+janux jwks api.example.com > jwks.json        # one tenant's set
+# postgrest.conf:
+#   jwt-secret = "@jwks.json"
+```
+
+Because janux embeds a `kid` in every token header, PostgREST selects the key by `kid`; keep all non-retired keys in the file (a retired key stays in the JWKS until its outstanding tokens drain, G-97), and map PostgREST's role claim (`jwt-role-claim-key`) to wherever janux puts the role. `jwks` must be re-run after any key rotation.
 - Set your own local session cookie and redirect to `/`.
 
 **Endpoint 3: `GET /`** — show the signed-in user's claims, or a "Sign in" link.

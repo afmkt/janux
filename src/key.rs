@@ -146,6 +146,28 @@ impl Tenant {
         Ok(Page::from_rows(rows, limit, offset))
     }
 
+    /// Build this tenant's JWKS (public keys only), INCLUDING retired keys
+    /// (G-97: they keep verifying outstanding tokens and stay published in
+    /// the JWKS during the drain window between retirement and deletion).
+    /// A single key's conversion failure is skipped (a malformed row must not
+    /// blank the whole set); the query itself may still fail. Shared by the
+    /// `.well-known/jwks.json` endpoint and the `janux jwks` CLI subcommand so
+    /// the two cannot drift; the private signing half is NEVER emitted (a
+    /// verifier only needs the public key to check an RS256 signature, so the
+    /// private PEM stays in janux - it is the crown jewel).
+    pub async fn build_jwks(&mut self) -> Result<JwkSet> {
+        let mut jwk_set = JwkSet { keys: vec![] };
+        for key_model in self.all_keys().await? {
+                  // Convert stored PEM public key into a jsonwebtoken JWK
+            if let Ok(public_pem) = key_model.public_pem()
+                   && let Ok(jwk) = pem_to_jwk(&public_pem, &key_model.id)
+               {
+                jwk_set.keys.push(jwk);
+               }
+           }
+        Ok(jwk_set)
+    }
+
     /// Retire a signing key (G-97): stops signing, keeps verifying.
     ///
     /// The row stays in the DB, so `jwt_decode`'s `kid` lookup and the JWKS
@@ -514,20 +536,10 @@ pub async fn jwks_endpoint(req: &mut Request, depot: &mut Depot, res: &mut Respo
     let mut jwk_set = JwkSet { keys: vec![] };
 
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
-        && let Ok(keys) = tenant.all_keys().await
-    {
-        // Retired keys stay published (G-97): RPs need them to verify
-        // outstanding tokens during the drain window between retirement
-        // and deletion.
-        for key_model in keys {
-            // Convert stored PEM public key into a jsonwebtoken JWK
-            if let Ok(public_pem) = key_model.public_pem()
-                && let Ok(jwk) = pem_to_jwk(&public_pem, &key_model.id)
-            {
-                jwk_set.keys.push(jwk);
-            }
-        }
-    }
+           && let Ok(built) = tenant.build_jwks().await
+      {
+        jwk_set = built;
+      }
 
     res.render(Json(jwk_set));
 }
@@ -998,4 +1010,34 @@ mod tests {
             "b1 is now the last signable key"
         );
     }
+     /// G-97 export contract: `build_jwks` publishes EVERY key of the
+     /// domain's tenant - retired keys included (they must keep verifying
+     /// outstanding tokens until deleted) - and exposes public material
+     /// only (no private key surface can leak through the verifier input).
+    #[tokio::test]
+    async fn build_jwks_publishes_every_key_including_retired() {
+        let (state, _tmp) = key_test_env().await;
+        let mut tenant = state.storage
+             .tenant_by_domain(DOMAIN_A)
+             .expect("DOMAIN_A tenant");
+        tenant.key_create(DOMAIN_A, "k1").await.expect("k1");
+        tenant.key_create(DOMAIN_A, "k2").await.expect("k2");
+        tenant.key_retire("k1").await.expect("retire k1");
+
+        let set = tenant.build_jwks().await.expect("build jwks");
+        let mut kids: Vec<&str> = set
+             .keys
+             .iter()
+             .map(|k| k.common.key_id.as_deref().unwrap_or(""))
+             .collect();
+        kids.sort();
+        assert_eq!(kids, ["k1", "k2"], "retired keys stay in the export");
+
+        // No private material: a JWK carries only the public `n`/`e`; the
+        // serialized set must never contain a private exponent (`d`).
+        let json = serde_json::to_string(&set).expect("serialize jwks");
+        assert!(!json.contains("\"d\":"),
+             "the export must expose public keys only: {json}");
+    }
+
 }
