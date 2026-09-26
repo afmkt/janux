@@ -431,6 +431,21 @@ fn roles_for_machine_scopes(scopes: &[String]) -> std::collections::HashSet<Stri
 /// registration consents to, and a confidential client without the
 /// `scim` scope gets `invalid_scope` instead of a provisioning token.
 #[allow(clippy::too_many_arguments)]
+
+/// Pick the `aud` value for a token issued to `client`.
+///
+/// When `aud_is_domain` is set (the default), the tenant domain is used as
+/// the `aud` claim — this is the natural resource-service identifier and
+/// matches the internal session-token path.  Otherwise the opaque
+/// `client_id` is used (RFC 7591-legacy behavior).
+fn aud_from_client(client: &OAuth2Client, domain: &str) -> String {
+    if client.aud_is_domain {
+        domain.to_string()
+     } else {
+        client.id.clone()
+     }
+}
+
 async fn handle_client_credentials(
     tenant: &mut crate::db::Tenant,
     client: &OAuth2Client,
@@ -534,7 +549,7 @@ async fn handle_client_credentials(
         &key,
         lifetime_min,
         JwtOidcParams {
-            client_id: client.id.clone(),
+            client_id: aud_from_client(client, domain),
             nonce: None,
             amr: None,
             acr: None,
@@ -603,7 +618,7 @@ async fn mint_token_response(
         &key,
         access_minutes,
         JwtOidcParams {
-            client_id: client.id.clone(),
+            client_id: aud_from_client(client, domain),
             nonce: nonce.clone(),
             amr: amr.clone(),
             acr: acr.clone(),
@@ -3428,12 +3443,12 @@ pub struct RevokeRequest {
 /// the 90-day SCIM principals revocable and introspectable by their own
 /// client — the documented "off switch" (`CLIENT_CREDENTIALS_TOKEN_LIFETIME_
 /// MINUTES`) was a silent no-op without it.
-fn machine_token_belongs_to(data: &serde_json::Value, aud: &str, client_id: &str) -> bool {
+fn machine_token_belongs_to(data: &serde_json::Value, aud: &str, expected_aud: &str, client_id: &str) -> bool {
     data.get("client_id")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .is_empty()
-        && aud == client_id
+        && aud == expected_aud
         && data
             .get("username")
             .and_then(|v| v.as_str())
@@ -3567,7 +3582,7 @@ pub async fn revoke(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // response must not leak that the token exists (RFC 7009 §2.1). Machine
     // tokens bind through `aud` + the username convention (G-130).
     let token_client_id = data.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
-    let machine_for_caller = machine_token_belongs_to(data, &tkn.claims.aud, &client.id);
+    let machine_for_caller = machine_token_belongs_to(data, &tkn.claims.aud, &aud_from_client(&client, &domain), &client.id);
     if tkn.claims.iss != issuer || (token_client_id != client.id.as_str() && !machine_for_caller) {
         revoke_ok(res);
         return;
@@ -3842,7 +3857,7 @@ pub async fn introspect(req: &mut Request, depot: &mut Depot, res: &mut Response
     // was already matched by the validation primitive.) Machine tokens bind
     // through `aud` + the username convention (G-130).
     let token_client_id = data.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
-    let machine_for_caller = machine_token_belongs_to(data, &decision.claims.aud, &client.id);
+    let machine_for_caller = machine_token_belongs_to(data, &decision.claims.aud, &aud_from_client(&client, &domain), &client.id);
     if token_client_id != client.id.as_str() && !machine_for_caller {
         introspect_ok(res, IntrospectResponse::default());
         return;
@@ -4699,6 +4714,7 @@ mod tests {
                         "code",
                         "client_secret_post",
                         "openid offline_access",
+                    true,
                     )
                     .await
                     .expect("oauth2 client");
@@ -5014,6 +5030,7 @@ mod tests {
                     "",
                     "client_secret_post",
                     "scim",
+                true,
                 )
                 .await
                 .expect("client");
@@ -5225,6 +5242,7 @@ mod tests {
                     "",
                     "client_secret_post",
                     "scim",
+                true,
                 )
                 .await
                 .expect("client");
@@ -5827,6 +5845,7 @@ mod tests {
                     "",
                     "client_secret_post",
                     "scim",
+                true,
                 )
                 .await
                 .expect("client");
@@ -5899,6 +5918,7 @@ mod tests {
                     "",
                     "client_secret_post",
                     "openid",
+                true,
                 )
                 .await
                 .expect("client");
@@ -5944,6 +5964,7 @@ mod tests {
                     "code",
                     "client_secret_post",
                     "openid scim",
+                true,
                 )
                 .await
                 .expect("client");
@@ -5996,6 +6017,7 @@ mod tests {
                     "",
                     "client_secret_post",
                     "scim",
+                true,
                 )
                 .await
                 .expect("client");
@@ -6145,6 +6167,7 @@ mod tests {
                     "",
                     "none",
                     "",
+                true,
                 )
                 .await
                 .expect("client");
@@ -6902,6 +6925,7 @@ mod tests {
                     "code",
                     "none",
                     "openid",
+                true,
                 )
                 .await
                 .expect("public client");
@@ -7222,6 +7246,7 @@ mod tests {
                     "code",
                     "client_secret_basic",
                     "openid",
+                true,
                 )
                 .await
                 .expect("rp client");
@@ -7423,6 +7448,7 @@ mod tests {
                     "token",
                     "client_secret_post",
                     "openid",
+                true,
                 )
                 .await
                 .expect("oauth2 client");

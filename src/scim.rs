@@ -1020,6 +1020,7 @@ mod tests {
                     // grant only embeds the `scim` role for clients that
                     // carry it here.
                     "scim",
+                true,
                 )
                 .await
                 .expect("machine client");

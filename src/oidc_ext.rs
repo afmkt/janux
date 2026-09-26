@@ -136,6 +136,11 @@ pub(crate) fn validate_dcr_scope(scope: Option<&str>) -> Result<String, String> 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RegisterRequest {
     pub redirect_uris: Vec<String>,
+      /// When `false`, tokens issued to this client use the opaque `client_id`
+      /// as `aud` instead of the resolved tenant domain.  Defaults to `true`
+      /// (domain-based `aud`).
+     #[serde(default)]
+    pub aud_is_domain: Option<bool>,
     #[serde(default)]
     pub token_endpoint_auth_method: Option<String>,
     #[serde(default)]
@@ -155,6 +160,9 @@ pub struct RegisterRequest {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RegisterResponse {
     pub client_id: String,
+     /// Resolved `aud` policy for this client: `true` = domain-based `aud`,
+     /// `false` = opaque `client_id` as `aud`.
+    pub aud_is_domain: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_secret: Option<String>,
     pub client_id_issued_at: i64,
@@ -423,6 +431,7 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
             &validated.response_types.join(" "),
             &validated.auth_method,
             &validated.scope,
+                 body.aud_is_domain.unwrap_or(true),
         )
         .await
     {
@@ -475,6 +484,7 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         } else {
             Some(secret)
         },
+        aud_is_domain: body.aud_is_domain.unwrap_or(true),
         client_id_issued_at: issued_at,
         client_secret_expires_at: 0,
         redirect_uris: body.redirect_uris,
@@ -691,6 +701,7 @@ pub async fn register_update(req: &mut Request, depot: &mut Depot, res: &mut Res
             &validated.auth_method,
             &validated.scope,
             &body.redirect_uris,
+             body.aud_is_domain.unwrap_or(client.aud_is_domain),
         )
         .await
     {
@@ -727,6 +738,7 @@ pub async fn register_update(req: &mut Request, depot: &mut Depot, res: &mut Res
     res.status_code(StatusCode::OK);
     res.render(Json(RegisterResponse {
         client_id: client_id.clone(),
+        aud_is_domain: body.aud_is_domain.unwrap_or(client.aud_is_domain),
         // The secret is never re-exposed; rotation stays an admin surface.
         client_secret: None,
         client_id_issued_at: client.created_at.as_second(),
@@ -1558,6 +1570,7 @@ mod tests {
                     "code",
                     "client_secret_basic",
                     "openid",
+                true,
                 )
                 .await
                 .expect("client A");
@@ -1581,6 +1594,7 @@ mod tests {
                     "code",
                     "client_secret_basic",
                     "openid",
+                true,
                 )
                 .await
                 .expect("client B");
@@ -1594,6 +1608,7 @@ mod tests {
                     "code",
                     "client_secret_basic",
                     "openid",
+                true,
                 )
                 .await
                 .expect("client C");
@@ -2151,6 +2166,7 @@ mod tests {
                     "code",
                     "client_secret_basic",
                     "openid",
+                true,
                 )
                 .await
                 .expect("client");
