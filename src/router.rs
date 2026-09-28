@@ -236,206 +236,254 @@ pub fn api(disable_rate_limits: bool) -> Router {
                     crate::utils::JanuxIssuer,
                     BasicQuota::per_minute(quota(disable_rate_limits, 12)),
                 ))
-                .hoop(crate::verify::protect)
+                   // code tier: each route is guarded by one built-in
+                   // role's middleware; the guard on the route IS the
+                   // grant (no policy row). root -> tenant lifecycle,
+                   // admin -> in-tenant surface, user -> the /self routes.
                 // tenant
                 .push(
                     Router::with_path("tenant/list")
+                         .hoop(crate::verify::protect_root)
                         .hoop(crate::audit::audit)
                         .get(crate::admin::all_tenants),
                 )
                 .push(
                     Router::with_path("tenant/create")
+                         .hoop(crate::verify::protect_root)
                         .hoop(crate::audit::audit)
                         .post(crate::admin::new_tenant),
                 )
                 .push(
                     Router::with_path("tenant/delete")
+                         .hoop(crate::verify::protect_root)
                         .hoop(crate::audit::audit)
                         .post(crate::admin::remove_tenant),
                 )
-                .push(Router::with_path("domain/list").get(crate::admin::all_domains))
+                .push(Router::with_path("domain/list")
+                         .hoop(crate::verify::protect_admin).get(crate::admin::all_domains))
                 .push(
                     Router::with_path("domain/create")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::admin::add_domain),
                 )
                 .push(
                     Router::with_path("domain/delete")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::admin::delete_domain),
                 )
                 // user
                 .push(
                     Router::with_path("user/list")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .get(crate::user::all_users),
                 )
                 .push(
                     Router::with_path("user/create")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::user::add_user),
                 )
                 .push(
                     Router::with_path("user/activate")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::user::activate_user),
                 )
                 .push(
                     Router::with_path("user/activate/self")
+                         .hoop(crate::verify::protect_user)
                         .hoop(crate::audit::audit)
                         .post(crate::user::activate_self),
                 )
                 .push(
                     Router::with_path("user/delete")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::user::delete_user),
                 )
                 .push(
                     Router::with_path("user/delete/self")
+                         .hoop(crate::verify::protect_user)
                         .hoop(crate::audit::audit)
                         .post(crate::user::delete_self),
                 )
                 .push(
                     Router::with_path("user/add_role")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::user::add_role),
                 )
                 .push(
                     Router::with_path("user/remove_role")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::user::remove_role),
                 )
                 .push(
                     Router::with_path("user/remove_email")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::email::remove),
                 )
                 .push(
                     Router::with_path("user/attach_email")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::email::attach),
                 )
                 .push(
                     Router::with_path("user/remove_mobile")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::otp::remove),
                 )
                 .push(
                     Router::with_path("user/remove_passkey")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::passkey::deactivate),
                 )
                 .push(
                     Router::with_path("user/remove_social")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::social::remove),
                 )
-                .push(Router::with_path("user/roles").get(crate::user::user_roles))
+                .push(Router::with_path("user/roles")
+                         .hoop(crate::verify::protect_admin).get(crate::user::user_roles))
                 // role
-                .push(Router::with_path("role/list").get(crate::role::all_roles))
+                .push(Router::with_path("role/list")
+                         .hoop(crate::verify::protect_admin).get(crate::role::all_roles))
                 .push(
                     Router::with_path("role/create")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::role::add_role),
                 )
                 .push(
                     Router::with_path("role/delete")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::role::delete_role),
                 )
                 // social login providers
                 .push(
                     Router::with_path("provider/list")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .get(crate::social::all_providers),
                 )
                 .push(
                     Router::with_path("provider/create")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::social::add_provider),
                 )
                 .push(
                     Router::with_path("provider/delete")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::social::remove_provider),
                 )
                 // policy
-                .push(Router::with_path("policy/list").get(crate::policy::all_policies))
+                .push(Router::with_path("policy/list")
+                         .hoop(crate::verify::protect_admin).get(crate::policy::all_policies))
                 .push(
                     Router::with_path("policy/create")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::policy::add_policy),
                 )
                 .push(
                     Router::with_path("policy/delete")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::policy::delete_policy),
                 )
                 // key
                 .push(
                     Router::with_path("key/list")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .get(crate::key::all_keys),
                 )
                 .push(
                     Router::with_path("key/create")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::key::add_key),
                 )
                 .push(
                     Router::with_path("key/delete")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::key::delete_key),
                 )
                 .push(
                     Router::with_path("key/retire")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::key::retire_key),
                 )
                 // totp
-                .push(Router::with_path("totp/list").post(crate::totp::list_totp))
+                .push(Router::with_path("totp/list")
+                         .hoop(crate::verify::protect_admin).post(crate::totp::list_totp))
                 .push(
                     Router::with_path("totp/remove")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::totp::remove_totp),
                 )
                 // oauth2 client (G8 follow-up)
-                .push(Router::with_path("oauth2client/list").get(crate::idp::list_oauth2clients))
+                .push(Router::with_path("oauth2client/list")
+                         .hoop(crate::verify::protect_admin).get(crate::idp::list_oauth2clients))
                 .push(
                     Router::with_path("oauth2client/create")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::idp::new_oauth2client),
                 )
                 .push(
                     Router::with_path("oauth2client/delete")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::idp::delete_oauth2client),
                 )
                 .push(
                     Router::with_path("oauth2client/reactivate")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::idp::reactivate_oauth2client),
                 )
                 .push(
                     Router::with_path("oauth2client/rotate")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::idp::rotate_oauth2client_secret),
                 )
                 .push(
                     Router::with_path("oauth2client/meta")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::oidc_ext::set_client_meta),
                 )
                 // tenant OIDC feature switches (Dynamic Client Registration)
-                .push(Router::with_path("oidc/config").get(crate::oidc_ext::oidc_config))
+                .push(Router::with_path("oidc/config")
+                         .hoop(crate::verify::protect_admin).get(crate::oidc_ext::oidc_config))
                 .push(
                     Router::with_path("oidc/config")
+                         .hoop(crate::verify::protect_admin)
                         .hoop(crate::audit::audit)
                         .post(crate::oidc_ext::set_oidc_config),
                 )
                 // observability (process-global telemetry, admin-gated)
-                .push(Router::with_path("metrics").get(crate::ops::metrics)),
-        )
+                  .push(Router::with_path("metrics")
+                          .hoop(crate::verify::protect_admin)
+                        .get(crate::ops::metrics)),
+             )
 }
 
 pub fn public_routes(disable_rate_limits: bool) -> Router {

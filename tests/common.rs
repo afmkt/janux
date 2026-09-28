@@ -421,9 +421,11 @@ port = {port}
     config_path
 }
 
-/// TOML rows mirroring `STANDARD_ADMIN_POLICIES` (src/seed.rs) for the
-/// seeded test tenant: root owns tenant lifecycle, admin owns the rest,
-/// user gets the self-service rows.
+/// Legacy TOML policy rows for the seeded test tenant. These mirror the old
+/// per-endpoint RBAC catalog; the built-in admin/scim/self surface is now the
+/// CODE TIER (guarded by role-middleware in router.rs / scim.rs), so these
+/// rows are vestigial for built-in routes — they only exercise the policy
+/// engine, which still owns tenant-DEFINED resources.
 fn seed_policy_rows(domain: &str) -> String {
     const ROOT: &[&str] = &[
         "/api/v1/admin/tenant/list",

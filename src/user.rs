@@ -1465,20 +1465,6 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "downward policy write succeeds");
-
-        // G-129 (resource-power axis): tenant/* is root-powered — an
-        // admin cannot bind it to ANY role, not even one far below it.
-        let status = post_json(
-            &service,
-            "policy/create",
-            policy("/api/v1/admin/tenant/delete", "user"),
-        )
-        .await;
-        assert_eq!(
-            status,
-            StatusCode::FORBIDDEN,
-            "root-powered resource refused for a sub-root caller"
-        );
     }
 
     /// R6 at the endpoint level: policy deletion is bounded the same way.

@@ -79,79 +79,13 @@ impl TenantDTO {
     }
 }
 
-/// The standard admin policy set seeded into runtime-created tenants together
-/// with the builtin catalog. Mirrors
-/// `seed.toml` so a fresh tenant becomes operable by its first admin.
-pub const STANDARD_ADMIN_POLICIES: &[(&str, &str)] = &[
-    // root: cross-tenant lifecycle
-    ("/api/v1/admin/tenant/list", "root"),
-    ("/api/v1/admin/tenant/create", "root"),
-    ("/api/v1/admin/tenant/delete", "root"),
-    // admin: domains
-    ("/api/v1/admin/domain/list", "admin"),
-    ("/api/v1/admin/domain/create", "admin"),
-    ("/api/v1/admin/domain/delete", "admin"),
-    // admin: users
-    ("/api/v1/admin/user/list", "admin"),
-    ("/api/v1/admin/user/create", "admin"),
-    ("/api/v1/admin/user/activate", "admin"),
-    ("/api/v1/admin/user/delete", "admin"),
-    ("/api/v1/admin/user/add_role", "admin"),
-    ("/api/v1/admin/user/remove_role", "admin"),
-    ("/api/v1/admin/user/remove_email", "admin"),
-    ("/api/v1/admin/user/attach_email", "admin"),
-    ("/api/v1/admin/user/remove_mobile", "admin"),
-    ("/api/v1/admin/user/remove_passkey", "admin"),
-    ("/api/v1/admin/user/remove_social", "admin"),
-    ("/api/v1/admin/user/roles", "admin"),
-    // admin: roles
-    ("/api/v1/admin/role/list", "admin"),
-    ("/api/v1/admin/role/create", "admin"),
-    ("/api/v1/admin/role/delete", "admin"),
-    // admin: social providers
-    ("/api/v1/admin/provider/list", "admin"),
-    ("/api/v1/admin/provider/create", "admin"),
-    ("/api/v1/admin/provider/delete", "admin"),
-    // admin: policies
-    ("/api/v1/admin/policy/list", "admin"),
-    ("/api/v1/admin/policy/create", "admin"),
-    ("/api/v1/admin/policy/delete", "admin"),
-    // admin: signing keys
-    ("/api/v1/admin/key/list", "admin"),
-    ("/api/v1/admin/key/create", "admin"),
-    ("/api/v1/admin/key/delete", "admin"),
-    ("/api/v1/admin/key/retire", "admin"),
-    // admin: TOTP administration
-    ("/api/v1/admin/totp/list", "admin"),
-    ("/api/v1/admin/totp/remove", "admin"),
-    // admin: OIDC relying parties
-    ("/api/v1/admin/oauth2client/list", "admin"),
-    ("/api/v1/admin/oauth2client/create", "admin"),
-    ("/api/v1/admin/oauth2client/delete", "admin"),
-    ("/api/v1/admin/oauth2client/meta", "admin"),
-    // admin: OIDC feature switches (Dynamic Client Registration)
-    ("/api/v1/admin/oidc/config", "admin"),
-    // admin: observability (process-global telemetry)
-    ("/api/v1/admin/metrics", "admin"),
-    // user: self-service (handlers act on the caller's own account)
-    ("/api/v1/admin/user/activate/self", "user"),
-    ("/api/v1/admin/user/delete/self", "user"),
-    // scim: machine provisioning. The builtin `scim` role is useless
-    // without these rows (protect is default-deny), so runtime-created
-    // tenants must mirror the seed file. The machine principal itself is
-    // NOT bootstrapped: an admin registers it per IdP connection via
-    // admin/oauth2client/create with default_scopes = "scim" — that
-    // registration is the consent step the client_credentials grant
-    // enforces (requested ∩ registered).
-    ("/scim/v2/Users", "scim"),
-    ("/scim/v2/Users/{id}", "scim"),
-];
-
 /// Bootstrap a runtime-created tenant (`admin/tenant/create`): the builtin
-/// role catalog, the standard admin policy set bound to the tenant's first
-/// domain, and an optional first admin user. Runs as [`Caller::Bootstrap`] —
-/// the one path allowed to establish the apex — so the level gate never
-/// applies to it; every later mutation inside the tenant goes through R1–R6.
+/// role catalog, the first domain, and an optional first admin user. Built-in
+/// admin/scim endpoints are guarded in code (the CODE TIER — see router.rs /
+/// scim.rs), so no standard policy rows are provisioned. Runs as
+/// [`Caller::Bootstrap`] — the one path allowed to establish the apex — so the
+/// level gate never applies to it; every later mutation inside the tenant goes
+/// through R1–R6.
 pub async fn bootstrap_tenant(
     storage: &Storage,
     tenant_name: &str,
@@ -179,29 +113,14 @@ pub async fn bootstrap_tenant(
         }
     }
 
-    // Domain + standard admin policies (skipping root-bound rows that the
-    // absent root role would make dead).
+      // Built-in endpoints are the CODE TIER: the guards in router.rs /
+      // scim.rs admit the caller by role membership, so we provision only
+      // the domain — no policy rows. The admin's `admin` role (added below)
+      // is what the `protect_admin` guard checks.
     if let Some(domain) = domain {
         storage.add_domain(domain, tenant_name).await?;
-        let mut tenant = storage
-            .tenant_by_id(tenant_name)
-            .ok_or_else(|| anyhow::anyhow!("Tenant '{}' not found", tenant_name))?;
-        for (resource, role) in STANDARD_ADMIN_POLICIES.iter().filter(|(_, r)| *r != "root") {
-            tenant
-                .policy_create(
-                    &Caller::Bootstrap,
-                    domain,
-                    None,
-                    resource,
-                    role,
-                    &crate::policy::SourceResolver::Nothing,
-                    &crate::policy::TargetResolver::Nothing,
-                    false,
-                    true,
-                )
-                .await?;
-        }
-    }
+     }
+
 
     // G-131: the first admin must be able to SIGN IN. Created users are
     // credential-less and strict signup refuses the pre-existing
@@ -229,7 +148,6 @@ pub async fn bootstrap_tenant(
 #[cfg(test)]
 mod tests {
 
-    use super::STANDARD_ADMIN_POLICIES;
     use crate::server::JanuxConfig;
     use std::sync::LazyLock;
 
@@ -362,30 +280,11 @@ mod tests {
                 p.resource
             );
         }
-        // Cross-tenant lifecycle stays root-only.
-        assert!(
-            tenant
-                .policies
-                .iter()
-                .any(|p| p.role == "root" && p.resource == "/api/v1/admin/tenant/list")
-        );
+           // Built-in endpoints are the CODE TIER: the admin/scim/tenant/
+            // user surface is guarded in code (router.rs / scim.rs guards by
+            // role membership), so this seed carries NO built-in policy rows
+            // — only the /app forward-auth rows the engine tier validates below.
 
-        // STANDARD_ADMIN_POLICIES claims to mirror the seed file so
-        // runtime-created tenants come up like the seeded one. Pin the
-        // SCIM rows: without them the builtin `scim` role is dead under
-        // default-deny in every tenant created via admin/tenant/create.
-        for p in tenant.policies.iter().filter(|p| p.role == "scim") {
-            assert!(
-                STANDARD_ADMIN_POLICIES.contains(&(p.resource.as_str(), p.role.as_str())),
-                "seed policy {} (role {}) is missing from STANDARD_ADMIN_POLICIES",
-                p.resource,
-                p.role
-            );
-        }
-        assert!(
-            STANDARD_ADMIN_POLICIES.contains(&("/scim/v2/Users", "scim")),
-            "runtime tenants must seed the SCIM collection policy"
-        );
     }
 
     /// Revocation-store harness, mirroring the other modules: the toasty store
@@ -421,7 +320,7 @@ mod tests {
     /// (sessions are domain-bound and the new domain has no signing key
     /// yet), so the bootstrap contract is pinned here.
     #[tokio::test]
-    async fn bootstrap_tenant_provisions_catalog_policies_and_admin() {
+    async fn bootstrap_tenant_provisions_catalog_and_admin() {
         init_revocation_store().await;
         let _ = crate::crypto::setup_encryption_key(&"0".repeat(64));
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -457,32 +356,10 @@ mod tests {
             assert_eq!(role.level, *level, "'{name}' keeps its builtin level");
         }
 
-        // Standard policies bound to the FIRST domain — including the SCIM
-        // rows, without which the `scim` role is dead under default-deny.
-        // `resource` is stored as `/`-split segments; join round-trips the
-        // original path exactly (the leading "" segment restores the slash).
-        let policies = tenant
-            .policies_page(crate::utils::MAX_PAGE_LIMIT, 0)
-            .await
-            .expect("policies")
-            .items;
-        let has_policy = |resource: &str, role: &str| {
-            policies.iter().any(|p| {
-                p.domain_id == "fresh.local"
-                    && p.role_id == role
-                    && p.resource.join("/") == resource
-            })
-        };
-        assert!(
-            has_policy("/api/v1/admin/user/create", "admin"),
-            "standard admin policies must bind to the first domain"
-        );
-        assert!(
-            has_policy("/scim/v2/Users", "scim"),
-            "the scim role must come with its policy rows"
-        );
-
-        // The first admin exists and holds the admin role.
+        // Built-in endpoints are guarded in code (CODE TIER), so the bootstrap
+        // provisions only the role catalog + domain — no policy rows. The engine tier
+          // (validate_jwt_for via /api/v1/verify) still owns tenant-defined resources.
+           // The first admin exists and holds the admin role.
         let admin = tenant.user("admin@fresh").await.expect("first admin");
         let granted = tenant.user_roles(admin.id).await.expect("user roles");
         assert!(

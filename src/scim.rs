@@ -237,35 +237,13 @@ async fn extract_scim<T: serde::de::DeserializeOwned>(req: &mut Request) -> Opti
     serde_json::from_slice(payload.as_ref()).ok()
 }
 
-// ─── RBAC hoop ───────────────────────────────────────────────────────────────
-
-/// Policies match resource paths exactly (no wildcards), so the
-/// dynamic `/scim/v2/Users/{id}` segment is canonicalized to the literal
-/// `/scim/v2/Users/{id}` before the policy engine runs — one policy row
-/// covers every resource instance.
-fn canonical_resource(path: &str) -> String {
-    let path = path.split('?').next().unwrap_or(path);
-    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if segs.len() == 4 && segs[0] == "scim" && segs[1] == "v2" && segs[2] == "Users" {
-        "/scim/v2/Users/{id}".to_string()
-    } else {
-        path.to_string()
-    }
-}
-
-#[handler]
-async fn scim_protect(
-    req: &mut Request,
-    depot: &mut Depot,
-    res: &mut Response,
-    ctrl: &mut FlowCtrl,
-) {
-    let at = (
-        crate::utils::get_method(req),
-        canonical_resource(req.uri().path()),
-    );
-    crate::verify::protect_at(req, depot, res, ctrl, Some(at)).await;
-}
+// ─── RBAC (code tier) ────────────────────────────────────────
+//
+// The SCIM surface is a built-in API, so it is the CODE tier of the
+// two-tier authorization: `protect_scim` is hooped onto every /Users
+// route and the `scim` role's membership in the machine token IS the
+// grant — no tenant policy row needed (unlike the old engine hoop, no
+// canonicalized resource path, no per-path `scim` policy).
 
 // ─── Discovery endpoints (public, static) ────────────────────────────────────
 
@@ -914,8 +892,8 @@ pub fn router(disable_rate_limits: bool) -> Router {
     };
 
     // Discovery documents are static and tenant-free — public per RFC 7644.
-    // Everything under /Users is RBAC-gated by the `scim` role policies
-    // (canonicalized resource paths, see `scim_protect`).
+     // Everything under /Users is guarded by `protect_scim` (code tier): the
+     // `scim` role's membership in the machine token is the grant.
     Router::with_path("scim/v2")
         .push(Router::with_path("ServiceProviderConfig").get(service_provider_config))
         .push(Router::with_path("Schemas").get(schemas))
@@ -923,26 +901,26 @@ pub fn router(disable_rate_limits: bool) -> Router {
         .push(
             Router::with_path("Users")
                 .hoop(limiter())
-                .hoop(scim_protect)
+                .hoop(crate::verify::protect_scim)
                 .get(list_users),
         )
         .push(
             Router::with_path("Users")
                 .hoop(limiter())
-                .hoop(scim_protect)
+                .hoop(crate::verify::protect_scim)
                 .hoop(crate::audit::audit)
                 .post(create_user),
         )
         .push(
             Router::with_path("Users/{id}")
                 .hoop(limiter())
-                .hoop(scim_protect)
+                .hoop(crate::verify::protect_scim)
                 .get(get_user),
         )
         .push(
             Router::with_path("Users/{id}")
                 .hoop(limiter())
-                .hoop(scim_protect)
+                .hoop(crate::verify::protect_scim)
                 .hoop(crate::audit::audit)
                 .put(put_user)
                 .patch(patch_user)
@@ -1024,30 +1002,13 @@ mod tests {
                 )
                 .await
                 .expect("machine client");
-            // protect is default-deny: the test tenant is unseeded, so the
-            // scim role and its policy rows are created explicitly (the
-            // committed seed.toml carries the same rows for real tenants).
-            tenant
-                .role_create(&bootstrap, "scim", 0)
-                .await
-                .expect("scim role");
-            for resource in ["/scim/v2/Users", "/scim/v2/Users/{id}"] {
-                tenant
-                    .policy_create(
-                        &bootstrap,
-                        DOMAIN,
-                        None,
-                        resource,
-                        "scim",
-                        &crate::policy::SourceResolver::Nothing,
-                        &crate::policy::TargetResolver::Nothing,
-                        false,
-                        true,
-                    )
-                    .await
-                    .expect("scim policy");
-            }
-        }
+            // Code tier: just the scim role is needed — the guard on the
+            // route is the grant, so no policy rows are created.
+           tenant
+                 .role_create(&bootstrap, "scim", 0)
+                 .await
+                 .expect("scim role");
+                 }
         let state = crate::server::ServerState::create_with(storage, false, &[], false)
             .await
             .expect("server state");

@@ -68,9 +68,11 @@ mfa = false
 allowed = true
 """
 
-# SCIM machine-provisioning surface, bound to the builtin `scim` role —
-# the same rows STANDARD_ADMIN_POLICIES seeds (G-124: without them the
-# machine principal mints fine but every /scim/v2 call is default-deny).
+# SCIM machine-provisioning surface, bound to the builtin `scim` role. The
+# built-in /scim/v2/* routes are now CODE TIER (guarded by `protect_scim` in
+# scim.rs), so these policy rows are vestigial — kept only to exercise the
+# engine path. G-124: the machine principal carries the `scim` scope so it
+# mints fine; its /scim/v2 calls are admitted by the guard.
 SCIM_RESOURCES = [
     "/scim/v2/Users",
     "/scim/v2/Users/{id}",

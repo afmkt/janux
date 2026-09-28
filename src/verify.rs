@@ -167,71 +167,90 @@ pub async fn refresh(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     );
 }
 
-#[handler]
-pub async fn protect(
-    req: &mut Request,
-    depot: &mut Depot,
-    res: &mut Response,
-    ctrl: &mut FlowCtrl,
-) {
-    protect_at(req, depot, res, ctrl, None).await
-}
+// ├── Built-in role guards (code tier of the two-tier authorization) ──────────
+//
+// Authorization is split into two tiers:
+//
+//     * CODE TIER — these per-role guards, attached *to the built-in routes* in
+//       `router.rs` / `scim.rs`. Hooping a guard onto a route (or subtree) IS
+//       the grant: there is no policy row, no stored allow-list — the very
+//       presence of `protect_admin` on `admin/user/create` is what authorizes
+//       the `admin` role for it, exactly as `protect` used to authorize by
+//       presence. This is the whole built-in surface (`/api/v1/admin/*`,
+//       `/scim/v2/*`), where the rule is just "role X may call endpoint Y" and a
+//       7-field policy row (domain/resource/role/source/target/mfa/allowed, of
+//       which five are constant) is overkill.
+//
+//     * ENGINE TIER — the tenant policy engine (`validate_jwt_for` via the
+//       forward-auth `verify` endpoint, plus operator-published
+//       `admin/policy/*` rows) for tenant-DEFINED resources: the demo `/app`
+//       gate and anything an admin adds at runtime. That tier keeps its full
+//       default-deny + source/target resolver + MFA-step-up semantics.
+//
+// Membership, NOT a level threshold: guarding a route with the `admin` role
+// admits only `admin`. `root` (a higher level, tenant-lifecycle only) is NOT
+// admitted — matching the seed exactly. A higher-level role is not a superset
+// of a lower one here.
 
-/// `protect` with an explicit policy-evaluation target. `at` overrides the
-/// (method, path) the policy engine sees — the SCIM surface uses it to
-/// canonicalize the dynamic `/scim/v2/Users/{id}` segment into the literal
-/// policy resource (matches exactly, no wildcards). `None` authorizes
-/// against the real request, like `protect`.
-pub async fn protect_at(
+/// The one core behind every per-role guard: a valid, non-revoked, domain-
+/// bound session (the engine is skipped on purpose — these are built-in routes,
+/// so default-deny is the guard itself, not a missing policy row), admitted
+/// iff it holds `role`.
+async fn protect_role(
     req: &mut Request,
     depot: &mut Depot,
     res: &mut Response,
     ctrl: &mut FlowCtrl,
-    at: Option<(crate::db::HttpMethod, String)>,
+    role: &str,
 ) {
-    // 1. Take ownership of the result
-    let data = match at {
-        Some((method, path)) => {
-            crate::utils::validate_jwt_for(req, depot, Some((method, &path))).await
+    let data = match crate::utils::validate_session(req, depot).await {
+        Some(data) => data,
+        None => {
+            // No usable session: 401. The 403 below is the logged-in-but-
+            // wrong-role case — G-28 keeps the two distinct.
+            let err = ApiProblem::unauthorized();
+            res.status_code(StatusCode::UNAUTHORIZED);
+            res.render(Json(err));
+            // RFC 6750 §3.1
+            let _ = res.add_header(
+                "WWW-Authenticate",
+                r#"Bearer error="invalid_token",realm="auth""#,
+                true,
+            );
+            return;
         }
-        None => validate_jwt(req, depot).await,
     };
-    if let Some(data) = data {
-        if data.can_access {
-            depot.inject(data);
-            ctrl.call_next(req, depot, res).await;
-            return;
-        }
-        if data.expect_mfa {
-            // Valid session that lacks a required factor: tell the client to
-            // step up instead of failing like a bad token — without this
-            // signal the client cannot discover that an
-            // MFA round via /api/v1/auth/* is what unlocks the resource.
-            res.status_code(StatusCode::FORBIDDEN);
-            let _ = res.add_header("X-MFA-Required", "true", true);
-            return;
-        }
-        // G-28: a VALID session whose roles do not satisfy the policy set
-        // is authenticated-but-forbidden → 403. The 401 below is reserved
-        // for missing/invalid credentials; conflating the two made the
-        // engine's deny path indistinguishable from a bad token.
-        res.status_code(StatusCode::FORBIDDEN);
-        res.render(Json(ApiProblem::forbidden()));
+    // Flat membership — the guard's `role` is the route's grant.
+    if data.jwt_data.roles.contains(role) {
+        depot.inject(data);
+        ctrl.call_next(req, depot, res).await;
         return;
     }
-
-    // Fallback if auth fails
-    let err = ApiProblem::unauthorized();
-    res.status_code(StatusCode::UNAUTHORIZED);
-    res.render(Json(err));
-    // RFC 6750 §3.1 — Bearer token errors in the WWW-Authenticate header
-    let _ = res.add_header(
-        "WWW-Authenticate",
-        r#"Bearer error="invalid_token",realm="auth""#,
-        true,
-    );
+    // G-28: authenticated but not this role -> 403, not 401.
+    res.status_code(StatusCode::FORBIDDEN);
+    res.render(Json(ApiProblem::forbidden()));
 }
 
+/// One guard per built-in role; the role is the middleware's identity, not a
+/// parameter, so `router.rs` reads as "attach `protect_admin` to this route".
+macro_rules! role_guard {
+     ($fn:ident, $role:literal) => {
+        #[handler]
+        pub async fn $fn(
+            req: &mut Request,
+            depot: &mut Depot,
+            res: &mut Response,
+            ctrl: &mut FlowCtrl,
+        ) {
+            protect_role(req, depot, res, ctrl, $role).await;
+        }
+    };
+}
+
+role_guard!(protect_root, "root");
+role_guard!(protect_admin, "admin");
+role_guard!(protect_user, "user");
+role_guard!(protect_scim, "scim");
 #[handler]
 pub async fn session(
     req: &mut Request,
