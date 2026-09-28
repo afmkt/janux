@@ -4,7 +4,7 @@
 // binary at compile time (rust-embed over `frontend/dist`) and served by the
 // same process that answers their API. A real `janux` subprocess is started
 // against a throwaway data dir, exactly like the Rust e2e tier's `TestEnv`, so
-// the browser exercises the genuine serve + protect/policy stack — not a mock.
+// the browser exercises the genuine serve + role-guard stack — not a mock.
 //
 // Magic-link email cannot reach a real inbox in CI, so `resend.base_url` is
 // pointed at a tiny local capture server that records the last email and hands
@@ -124,13 +124,14 @@ async function waitForHealth(baseURL: string, timeoutMs = 30_000): Promise<void>
 }
 
 // ─── Test tenant config ───────────────────────────────────────────────────────
-// Mirrors `STANDARD_ADMIN_POLICIES` from src/seed.rs — the same rows
-// `tests/common.rs` seeds. A tenant with no policies default-denies every
-// admin endpoint (`protect` is default-deny), so the console's data load would
-// 403 and assert nothing. The domain is `localhost` because the policies bind
-// `domain = "localhost"`; the browser therefore talks to
-// `http://localhost:<port>` so the Host header resolves the tenant by that
-// domain.
+// Built-in admin/scim routes are the CODE TIER — they are guarded in
+// `router.rs` / `scim.rs` by role membership, so the admin console is reachable
+// as long as the admin user below holds the `admin`/`root` roles, regardless of
+// the policy engine. The POLICY_ROWS here are therefore vestigial: they are
+// kept only as a harmless exercise of the ENGINE tier (validate_jwt_for via
+// /api/v1/verify) and to keep the seeded tenant shape parallel to a real
+// seed.toml. The domain is `localhost` because the browser talks to
+// `http://localhost:<port>`, so the Host header resolves the tenant by it.
 const POLICY_ROWS: [string, string][] = [
     // root: cross-tenant lifecycle
      ['/api/v1/admin/tenant/list', 'root'],

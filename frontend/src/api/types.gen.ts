@@ -1015,7 +1015,7 @@ export type OpenapiPolicyAddPolicyErrors = {
      */
     400: OpenapiUtilsApiProblem;
     /**
-     * Level or resource-power gate refused
+     * Level gate refused
      */
     403: OpenapiUtilsApiProblem;
 };
@@ -1044,7 +1044,7 @@ export type OpenapiPolicyDeletePolicyErrors = {
      */
     400: OpenapiUtilsApiProblem;
     /**
-     * Level or resource-power gate refused
+     * Level gate refused
      */
     403: OpenapiUtilsApiProblem;
 };

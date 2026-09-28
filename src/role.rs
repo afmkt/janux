@@ -12,8 +12,8 @@ use toasty::*;
 /// Levels are the privilege ladder of the system: higher = more privileged.
 /// They are fixed in code rather than config because the role-administration
 /// gate (rules R1–R6) compares against them — they are the constitution, not
-/// a tunable. Membership in the topmost role (`root`) and the policy set
-/// attached to it can therefore never be altered through the API.
+/// a tunable. Membership in the topmost role (`root`) can therefore never
+/// be altered through the API.
 ///
 /// `scim` (60) is the machine-provisioning principal (SCIM 2.0): strictly
 /// above `user` so the gate lets it deactivate/rename/delete regular

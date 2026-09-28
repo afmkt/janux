@@ -61,7 +61,7 @@ Run one module: `cargo test --test unit_tests crypto_unit`.
 | `amr_unit` | RFC 8176 `amr` derivation, `acr` factor-name vocabulary (G-94), claim round-trips |
 | `crypto_unit` | AES-256-GCM at rest: key validation order, round-trip, unique nonces, tampered/truncated ciphertext rejection, legacy fallback |
 | `key_unit` | `at_hash` (OIDC Core §3.1.3.6): pinned spec vector, reference construction, base64url shape |
-| `policy_unit` | RBAC policy engine: path matching (incl. the G-129 path constraint), source/target resolution, MFA gating, domain/action checks |
+| `policy_unit` | RBAC policy engine: path matching (incl. the path-constraint invariant), source/target resolution, MFA gating, domain/action checks |
 | `cache_unit` | EphemCache (Moka): insert/get, one-shot deletes, cleanup, unicode |
 | `utils_unit` | ApiProblem/ApiResponse shapes, HttpMethod, JWT/JwtVerify construction |
 

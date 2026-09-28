@@ -263,8 +263,10 @@ mod tests {
             }
         }
 
-        // protect is default-deny, so every seeded policy must reference a
-        // seeded built-in role and an absolute admin or SCIM path.
+        // Engine tier: the seed's policies are the tenant-defined /app
+        // forward-auth rows the engine gates. Each must reference a
+        // seeded role and an app path; the built-in admin/scim routes are
+        // guarded in code (CODE TIER), so they are NOT seeded rows.
         assert!(!tenant.policies.is_empty());
         for p in &tenant.policies {
             assert!(
@@ -280,10 +282,10 @@ mod tests {
                 p.resource
             );
         }
-           // Built-in endpoints are the CODE TIER: the admin/scim/tenant/
-            // user surface is guarded in code (router.rs / scim.rs guards by
-            // role membership), so this seed carries NO built-in policy rows
-            // — only the /app forward-auth rows the engine tier validates below.
+        // Built-in endpoints are the CODE TIER: the admin/scim/tenant/user
+        // surface is guarded in code (router.rs / scim.rs guards by role
+        // membership), so this seed carries NO built-in policy rows — only
+        // the /app forward-auth rows the engine tier validates below.
 
     }
 
@@ -314,8 +316,9 @@ mod tests {
 
     /// regression H8: `bootstrap_tenant` — the path `admin/tenant/create`
     /// walks — must produce an immediately operable tenant: the full
-    /// builtin catalog including `scim`, the standard admin policies bound
-    /// to the first domain, and the first admin user holding the role.
+    /// builtin catalog including `scim`, and the first admin user holding
+    /// the role. Built-in endpoints are guarded in code, so the bootstrap
+    /// provisions no policy rows.
     /// The HTTP-level lifecycle test cannot look inside a fresh tenant
     /// (sessions are domain-bound and the new domain has no signing key
     /// yet), so the bootstrap contract is pinned here.
@@ -357,9 +360,11 @@ mod tests {
         }
 
         // Built-in endpoints are guarded in code (CODE TIER), so the bootstrap
-        // provisions only the role catalog + domain — no policy rows. The engine tier
-          // (validate_jwt_for via /api/v1/verify) still owns tenant-defined resources.
-           // The first admin exists and holds the admin role.
+        // provisions only the role catalog + domain; the engine tier
+        // (validate_jwt_for via /api/v1/verify) still owns tenant-defined
+        // resources.
+        //
+        // The first admin exists and holds the admin role.
         let admin = tenant.user("admin@fresh").await.expect("first admin");
         let granted = tenant.user_roles(admin.id).await.expect("user roles");
         assert!(

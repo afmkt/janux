@@ -66,9 +66,10 @@ pub async fn new_tenant(req: &mut Request, depot: &mut Depot, res: &mut Response
     let created = state.storage.new_tenant(&body.name).await.map(|_| ());
     match created {
         Ok(()) => {
-            // Bootstrap the builtin catalog, the standard admin policies and
-            // the first admin as the trust anchor (§4). On failure roll
-            // the tenant back instead of leaving a half-provisioned one.
+            // Bootstrap the builtin role catalog, its domain, and the first admin
+            // as the trust anchor (§4). Built-in routes are guarded in code, so no
+            // admin policy rows are created. On failure the tenant is rolled back
+            // instead of leaving a half-provisioned one.
             if let Err(e) = crate::seed::bootstrap_tenant(
                 &state.storage,
                 &body.name,

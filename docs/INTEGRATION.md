@@ -11,7 +11,7 @@ Janux plays two roles at once:
 1. **Auth server** — passwordless login flows (`/api/v1/auth/*`) that mint JWT sessions, plus a hosted login/consent UI (`/login`, `/consent`).
 2. **OIDC provider (IdP)** — `/.well-known/openid-configuration`, `/authorize`, `/token`, `/userinfo`, JWKS. External services ("relying parties", RPs) redirect users here and receive tokens back.
 
-Tenants are resolved from the request `Host` header. `seed.toml` bootstraps tenant `localhost` with domain `localhost`, users `admin`/`demo`, and RBAC policies. The admin's seed entry vouches an `email` — seeding attaches it as a VERIFIED credential on every boot (G-131), so set it to an inbox you control before first launch; a seeded user *without* an email has no credential and cannot sign in (strict signup refuses the pre-existing username — there is no attach-on-first-verify). The admin API is protected by those policies, so you need a real `admin` session JWT before you can register an OAuth2 client.
+Tenants are resolved from the request `Host` header. `seed.toml` bootstraps tenant `localhost` with domain `localhost`, users `admin`/`demo`. The admin's seed entry vouches an `email` — seeding attaches it as a VERIFIED credential on every boot (G-131), so set it to an inbox you control before first launch; a seeded user *without* an email has no credential and cannot sign in (strict signup refuses the pre-existing username — there is no attach-on-first-verify). The admin API is guarded by role membership (`protect_admin`), so you need a real `admin`-role session JWT before you can register an OAuth2 client.
 
 ---
 
@@ -40,7 +40,7 @@ Tenants are resolved from the request `Host` header. `seed.toml` bootstraps tena
 2. Open the email and click the link → it lands on the hosted `/login` SPA with `token`/`username`/`email` in the query (G-133), which auto-verifies and establishes the session: the JWT lands in the canonical `janux.session` HttpOnly cookie (G-139) and in the response body for non-browser callers.
 3. Save the JWT — it's your Bearer token for the admin API. Decode it (`jwt.io` or `jq` on the base64 parts) and look at the claims: `sub`, `iss`, `exp`, roles. This is the same token format RPs will later validate.
 
-**Checkpoint:** `curl -H "Authorization: Bearer <jwt>" http://localhost:8080/api/v1/admin/oauth2client/list` returns 200 (proves RBAC `protect` + policy gate work).
+**Checkpoint:** `curl -H "Authorization: Bearer <jwt>" http://localhost:8080/api/v1/admin/oauth2client/list` returns 200 (proves the role-membership guard works).
 
 ---
 
@@ -136,7 +136,7 @@ Open `/admin` **in the same tab** you signed in on — the session cookie is bro
 |---|---|
 | Users | See `admin`/`demo`; create a new user; add a role to it; remove it; delete it |
 | Roles | See builtin catalog (`root`=100, `admin`=80, `user`=40, `guest`=20); create a custom role with a level; note builtins can't be deleted |
-| Policies | See the seeded allow-list; create a policy granting your custom role an endpoint; delete it |
+| Policies | See the engine-tier `/app` rows; create a policy granting a custom role a tenant-defined resource; delete it |
 | Domains | See `localhost`; add a domain, then delete it |
 | OAuth2 clients | **Create your `sample-rp` client here** (client id, secret, redirect URIs, grant/response types, auth method, scopes) instead of the curl from Phase 3 |
 | Signing keys | List/create/retire/delete. Rotation lifecycle (G-97, fixed): create the replacement → **retire** the old key (stops signing; keeps verifying outstanding tokens and stays in the JWKS while they drain) → delete it after the drain. Guardrails: an active key refuses deletion, and a domain's last signable key refuses retirement |
@@ -145,7 +145,7 @@ Open `/admin` **in the same tab** you signed in on — the session cookie is bro
 ## 4. RBAC negative checks (worth doing)
 
 1. Open `/admin` in a fresh tab (no session) → every call should fail unauthorized.
-2. Sign in as `demo` (role `user` only) and open `/admin` → lists load nothing/403; this demonstrates the default-deny `protect` gate in the UI.
+2. Sign in as `demo` (role `user` only) and open `/admin` → lists load nothing/403; this demonstrates the default-deny role guard in the UI.
 
 ## 5. Consent & device pages
 

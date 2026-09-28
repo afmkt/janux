@@ -734,14 +734,14 @@ fn test_resolve_target_from_path_non_template_segment_mismatch() {
     assert!(target.is_none());
 }
 
-// ─── 9. Resolver policies stay path-constrained (G-129) ─────────────────────
+// ─── 9. Resolver policies stay path-constrained ──────────────────────────
 
 #[test]
 fn test_query_target_policy_does_not_leak_to_other_paths() {
-    // Before the G-129 engine fix, FromQuery/FromHeader targets skipped
-    // path matching entirely: this policy applied to EVERY path in the
-    // domain (including the root-powered tenant lifecycle surface) as
-    // long as the query condition held.
+    // FromQuery/FromHeader targets must not skip path matching: without it
+    // this policy would apply to EVERY path in the domain as long as the
+    // query condition held, leaking even onto the tenant/* lifecycle
+    // surface — a whole-domain grant hidden behind an innocent resource.
     let policy = make_policy(
         "api.example.com",
         None,
@@ -782,15 +782,15 @@ fn test_query_target_policy_does_not_leak_to_other_paths() {
                 &HashMap::new()
             )
             .is_none(),
-        "it must not leak onto an unrelated (root-powered) path"
+         "it must not leak onto an unrelated path"
     );
 }
 
 #[test]
 fn test_nothing_source_with_query_target_is_path_constrained() {
     // source=Nothing + FromQuery matched every path LACKING the query
-    // param before the fix (s=None ⇒ t.is_none(), resource unchecked) —
-    // a whole-domain grant hiding behind an innocent resource string.
+    // param when path matching was skipped (s=None ⇒ t.is_none(), resource
+    // unchecked) — a whole-domain grant hiding behind an innocent string.
     let policy = make_policy(
         "api.example.com",
         None,

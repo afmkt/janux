@@ -2228,7 +2228,7 @@
                 }
               }
             },
-            "description": "Level or resource-power gate refused"
+            "description": "Level gate refused"
           }
         },
         "summary": "Add policy to tenant"
@@ -2277,7 +2277,7 @@
                 }
               }
             },
-            "description": "Level or resource-power gate refused"
+            "description": "Level gate refused"
           }
         },
         "summary": "Remove a policy from tenant"

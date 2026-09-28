@@ -247,6 +247,10 @@ macro_rules! role_guard {
     };
 }
 
+// INVARIANT: `protect_root` (not any policy row) is what reserves `tenant/*`
+// to root — G-11. Do not make these routes data-driven again without keeping
+// this guard; a stored allow-list would not close the cross-tenant lifecycle
+// surface the way role membership does.
 role_guard!(protect_root, "root");
 role_guard!(protect_admin, "admin");
 role_guard!(protect_user, "user");
