@@ -210,6 +210,13 @@
       },
       "openapi.idp.NewOauth2Client": {
         "properties": {
+          "aud_is_domain": {
+            "description": "When `false`, issued tokens use the opaque `client_id` as `aud`\ninstead of the resolved tenant domain.  Defaults to `true`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "client_id": {
             "type": "string"
           },

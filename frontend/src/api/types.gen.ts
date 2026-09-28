@@ -91,6 +91,11 @@ export type OpenapiIdpDeleteOauth2Client = {
 };
 
 export type OpenapiIdpNewOauth2Client = {
+    /**
+     * When `false`, issued tokens use the opaque `client_id` as `aud`
+     * instead of the resolved tenant domain.  Defaults to `true`.
+     */
+    aud_is_domain?: boolean | null;
     client_id: string;
     default_scopes: string;
     grant_types: string;
