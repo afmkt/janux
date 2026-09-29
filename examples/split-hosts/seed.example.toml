@@ -52,18 +52,15 @@ users = [
 ]
 
 policies = [
-     # ── ENGINE TIER ONLY ─────────────────────────────────────────────────
-     # Built-in admin/scim/tenant/user routes are guarded in code
-     # (CODE TIER) by role membership, so they need NO rows here. The only
-     # tenant-defined resource is the forward_auth-gated app below, gated by
-     # the default-deny engine at validate_jwt_for (/api/v1/verify).
-     #
-     # ── the forward_auth-gated app resource (domain = app.example.com) ────
-     # Exact match (G-43): the browser request path is /app; it needs a row
-     # or every /app 401s regardless of session validity.
-            { domain = "app.example.com", resource = "/app", role = "user", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
-            { domain = "app.example.com", resource = "/app", role = "admin", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
-            { domain = "app.example.com", resource = "/app", role = "root", source = "Nothing", target = "Nothing", mfa = false, allowed = true },
+     { domain = "app.example.com", resource = "/app", role = "user" },
+     { domain = "app.example.com", resource = "/app", role = "admin" },
+     { domain = "app.example.com", resource = "/app", role = "root" },
+     # Every other field defaults: action = all methods; source/target =
+     #  Nothing; mfa = false, allowed = true. To scope /app to the caller,
+     #  opt in to a resolver, e.g. grant a user their own tenant:
+     # { domain = "app.example.com", resource = "/app", role = "user",
+     #  source = "User", target = { FromHeader = { hname = "x-tenant-id" } },
+     #  mfa = true }
 ]
 
 [seed.resend]
