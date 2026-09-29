@@ -169,8 +169,7 @@ impl Tenant {
                 .await
                 .map(|_| ())
                 .map_err(Into::into),
-            Ok(_) => Ok(()),
-            Err(_) => Ok(()),
+            _ => Ok(()),
         }
     }
 
@@ -192,8 +191,7 @@ impl Tenant {
                 .await
                 .map(|_| ())
                 .map_err(Into::into),
-            Ok(_) => Ok(()),
-            Err(_) => Ok(()),
+            _ => Ok(()),
         }
     }
     pub async fn email_delete(&mut self, user_name: &str, email: &str) -> Result<()> {

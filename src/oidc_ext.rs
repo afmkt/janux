@@ -68,7 +68,7 @@ pub(crate) fn validate_client_uri(uri: &str) -> Result<(), String> {
 fn is_loopback_host(host: Option<&str>) -> bool {
     matches!(
         host,
-        Some("127.0.0.1") | Some("localhost") | Some("[::1]") | Some("::1")
+        Some("127.0.0.1" | "localhost" | "[::1]" | "::1")
     )
 }
 
@@ -355,8 +355,7 @@ async fn authenticate_management(
     }
     let secret = presented_client_secret(req).await;
     match (client.token_endpoint_auth_method.as_str(), secret) {
-        ("none", _) => false,
-        (_, None) => false,
+        ("none", _) | (_, None) => false,
         (_, Some(attempt)) => client.verify_password(&attempt).unwrap_or(false),
     }
 }

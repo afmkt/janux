@@ -2058,7 +2058,7 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     match entry["status"].as_str() {
                         // "approving": a user decision is in flight — keep
                         // the RP polling.
-                        Some("pending") | Some("approving") => Poll::Pending,
+                        Some("pending" | "approving") => Poll::Pending,
                         Some("denied") => Poll::Denied,
                         Some("approved") => {
                             // The flip to "consumed" is the atomic commit
