@@ -235,12 +235,11 @@ impl Policy {
                 // Empty resource = match ANY path; otherwise match the path
                 // segments exactly. (resource_matches_path also short-circuits to
                 // `true` on an empty resource, covering the resolver branches below.)
-               let path_match = if self.resource.is_empty() {
+               if self.resource.is_empty() {
                    true
                 } else {
                    path.iter().map(|s| s.to_string()).collect::<Vec<String>>() == self.resource
-                };
-              path_match
+                }
              } else if !resource_matches_path(&self.resource, path) {
                 // The resource constrains the path in EVERY branch. FromQuery/
                 // FromHeader targets must NOT skip the path check, or an innocent
@@ -364,6 +363,7 @@ impl Tenant {
     /// gate (rule R5): API callers may only attach policies to roles
     /// strictly below their own effective level — a role can never expand
     /// its own permission set (or a peer's / superior's).
+    #[allow(clippy::too_many_arguments)]
     pub async fn policy_create(
         &mut self,
         caller: &crate::role::Caller,

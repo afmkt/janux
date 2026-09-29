@@ -430,8 +430,6 @@ fn roles_for_machine_scopes(scopes: &[String]) -> std::collections::HashSet<Stri
 /// default). A client can therefore never confer more than its
 /// registration consents to, and a confidential client without the
 /// `scim` scope gets `invalid_scope` instead of a provisioning token.
-#[allow(clippy::too_many_arguments)]
-
 /// Pick the `aud` value for a token issued to `client`.
 ///
 /// When `aud_is_domain` is set (the default), the tenant domain is used as
@@ -3582,7 +3580,7 @@ pub async fn revoke(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // response must not leak that the token exists (RFC 7009 §2.1). Machine
     // tokens bind through `aud` + the username convention (G-130).
     let token_client_id = data.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
-    let machine_for_caller = machine_token_belongs_to(data, &tkn.claims.aud, &aud_from_client(&client, &domain), &client.id);
+    let machine_for_caller = machine_token_belongs_to(data, &tkn.claims.aud, &aud_from_client(&client, domain), &client.id);
     if tkn.claims.iss != issuer || (token_client_id != client.id.as_str() && !machine_for_caller) {
         revoke_ok(res);
         return;
@@ -3857,7 +3855,7 @@ pub async fn introspect(req: &mut Request, depot: &mut Depot, res: &mut Response
     // was already matched by the validation primitive.) Machine tokens bind
     // through `aud` + the username convention (G-130).
     let token_client_id = data.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
-    let machine_for_caller = machine_token_belongs_to(data, &decision.claims.aud, &aud_from_client(&client, &domain), &client.id);
+    let machine_for_caller = machine_token_belongs_to(data, &decision.claims.aud, &aud_from_client(&client, domain), &client.id);
     if token_client_id != client.id.as_str() && !machine_for_caller {
         introspect_ok(res, IntrospectResponse::default());
         return;
