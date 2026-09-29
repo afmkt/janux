@@ -90,16 +90,19 @@ users = [
       { name = "admin", roles = ["admin"], active = true, email = "admin@example.com" },
 ]
 
+# RBAC is default-deny: gate /app here with exact-match rows. The three
+# progressively richer shapes and the source/target self-scoping engine are
+# documented in ../README.md#writing-policies-rbac-authoring.
 policies = [
-     { domain = "localhost", resource = "/app", role = "user" },
-     { domain = "localhost", resource = "/app", role = "admin" },
-     { domain = "localhost", resource = "/app", role = "root" },
-     # Every other field defaults: action = all methods; source/target =
-     #  Nothing; mfa = false, allowed = true. To scope /app to the caller,
-     #  opt in to a resolver, e.g. grant a user their own tenant:
-     # { domain = "localhost", resource = "/app", role = "user",
-     #  source = "User", target = { FromHeader = { hname = "x-tenant-id" } },
-     #  mfa = true }
+        # Scenario 2 (the workhorse): grant the exact forward-auth path /app to
+        # each built-in role. All other fields default (action = all methods,
+        # source/target = Nothing, mfa = false, allowed = true). Scenario 1
+        # (domain+role) and Scenario 3 (source+target self-scoping, e.g. a user
+        # reaching only their own /app/{owner}) are documented in
+        # ../README.md#writing-policies-rbac-authoring.
+        { domain = "localhost", resource = "/app", role = "user" },
+        { domain = "localhost", resource = "/app", role = "admin" },
+        { domain = "localhost", resource = "/app", role = "root" },
 ]
 
 [seed.resend]
