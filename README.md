@@ -4,7 +4,7 @@ A self-hosted, passwordless **auth server and OIDC provider** you run as a singl
 
 Stack: Rust · Salvo · Toasty (per-tenant schemas) · webauthn-rs · RSA-signed JWT · Vite/React UI.
 
-> **Status**: pre-1.0, single-instance by design (see [docs/DESIGN.md](docs/DESIGN.md) §6).
+
 
 
 ## What it does
@@ -89,6 +89,3 @@ Hand off the signing keys to an external verifier (e.g. PostgREST, which verifie
 
 
 
-## License
-
-Copyright 2026 the Janux authors. Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE).
