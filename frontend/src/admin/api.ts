@@ -88,7 +88,7 @@ export interface PageWalk<T> {
   errorText: string | null
 }
 
-interface PageCallResult {
+export interface PageCallResult {
   data?: unknown
   error?: unknown
   response?: { ok: boolean; status: number }
