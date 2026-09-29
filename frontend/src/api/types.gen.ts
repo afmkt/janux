@@ -262,14 +262,14 @@ export type OpenapiPolicyDeletePolicy = {
  */
 export type OpenapiPolicyPolicyEntry = {
     action?: null | OpenapiDbHttpMethod;
-    allowed: boolean;
+    allowed?: boolean;
     domain: string;
     id?: string | null;
-    mfa: boolean;
-    resource: string;
+    mfa?: boolean;
+    resource?: string;
     role: string;
-    source: OpenapiPolicySourceResolver;
-    target: OpenapiPolicyTargetResolver;
+    source?: OpenapiPolicySourceResolver;
+    target?: OpenapiPolicyTargetResolver;
 };
 
 export type OpenapiPolicySourceResolver = 'Nothing' | 'User' | 'Domain' | 'Role';

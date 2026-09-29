@@ -642,13 +642,8 @@
           }
         },
         "required": [
-          "resource",
           "domain",
-          "role",
-          "source",
-          "target",
-          "mfa",
-          "allowed"
+          "role"
         ],
         "type": "object"
       },
