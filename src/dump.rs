@@ -366,29 +366,6 @@ pub struct DumpReport {
     pub account_warnings: AccountWarnings,
 }
 
-// ─── Options ──────────────────────────────────────────────────────────────
-
-/// Options for the cold dump operation.
-#[derive(Debug, Clone)]
-pub struct DumpOptions {
-   pub data_dir: std::path::PathBuf,
-    /// Decrypt AES-encrypted fields and emit them in the clear.
-    pub secrets: bool,
-    /// Restrict to one domain (its owning tenant).
-    pub domain: Option<String>,
-}
-
-#[allow(dead_code)]
-impl DumpOptions {
-   pub fn new(data_dir: impl Into<std::path::PathBuf>) -> Self {
-      Self {
-         data_dir: data_dir.into(),
-         secrets: false,
-         domain: None,
-          }
-   }
-}
-
 // ─── Entry point ──────────────────────────────────────────────────────────
 
 /// Walk the data dir, build a `janux-dump/1` bundle.
@@ -898,15 +875,17 @@ mod tests {
        /// string with the manifest at the top.
        #[test]
      fn empty_report_serializes() {
-        let mut r = DumpReport::default();
-        r.manifest = DumpManifest {
-           schema: "janux-dump/1",
-           source: "janux",
-           source_user_prefix: "janux:user:",
-           generated_at: jiff::Timestamp::now(),
-           secrets_emit: false,
-           domain: None,
-            };
+        let r = DumpReport {
+           manifest: DumpManifest {
+              schema: "janux-dump/1",
+              source: "janux",
+              source_user_prefix: "janux:user:",
+              generated_at: jiff::Timestamp::now(),
+              secrets_emit: false,
+              domain: None,
+              },
+              ..Default::default()
+           };
         let out = to_toml(&r).expect("serialize");
         assert!(out.contains("schema = \"janux-dump/1\""));
         assert!(out.contains("[manifest]"));
