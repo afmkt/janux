@@ -7,6 +7,7 @@ mod cors;
 mod crypto;
 mod db;
 mod domain;
+mod dump;
 mod email;
 mod idp;
 mod jwt;
@@ -81,6 +82,34 @@ enum Commands {
            /// Omit to export every tenant.
         domain: Option<String>,
         },
+
+     /// Export every tenant's users, credentials and machine config to a
+     /// `janux-dump/1` TOML bundle for migration to another auth system,
+     /// then exit (the server does NOT start). COLD operation: stop the
+     /// server first. The output classifies each factor as portable /
+     /// repro / advisory. With --secrets --yes the encrypted fields are
+     /// decrypted and emitted in the clear; without it every
+     /// secret-bearing field is redacted to a sentinel and the dump is
+     /// still usable -- it just carries the metadata a target needs to
+     /// re-provision.
+    Dump {
+            /// Restrict the dump to one registered domain's owning
+            /// tenant. Omit to dump every tenant in the data dir.
+        #[arg(long)]
+      domain: Option<String>,
+            /// Include decrypted secret material (TOTP shared secrets,
+            /// social provider client secrets, mail / SMS keys).
+            /// Requires --yes.
+        #[arg(long, default_value_t = false)]
+      secrets: bool,
+            /// Confirmation that --secrets may emit plaintext.
+            /// Required when --secrets is set.
+        #[arg(long, default_value_t = false)]
+      yes: bool,
+            /// Write to FILE instead of stdout. Default: stdout.
+        #[arg(long)]
+      output: Option<std::path::PathBuf>,
+      },
 }
 
 #[tokio::main]
@@ -210,6 +239,58 @@ async fn main() {
             }
         }
     }
+
+     // Cold dump: a read-only export of every tenant to a janux-dump/1
+     // bundle for migration to another auth system. With --secrets the
+     // in-process key (installed above) decrypts the at-rest material;
+     // without it the dump is still produced with secrets redacted.
+     // Exits after writing.
+    if let Some(Commands::Dump { domain, secrets, yes, output }) = &cli.command {
+            // --secrets requires --yes so a typo can't silently print secrets
+             // to a logged stdout / redirected file.
+        if *secrets && !*yes {
+            eprintln!("--secrets requires --yes (decrypting and printing secrets is not silent)");
+            std::process::exit(2);
+            }
+        let report = dump::dump_data_dir(
+             Path::new(&server_config.data_dir),
+               *secrets,
+             domain.as_deref(),
+           ).await;
+        let report = match report {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Dump failed: {e:#}");
+                std::process::exit(1);
+               }
+           };
+        let text = match dump::to_toml(&report) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("TOML render failed: {e:#}");
+                std::process::exit(1);
+               }
+           };
+        let warn_groups = report.account_warnings.login_immediately.len()
+                + report.account_warnings.login_after_social.len()
+                + report.account_warnings.locked_out.len()
+                + report.account_warnings.no_factor.len();
+        match output {
+            Some(path) => {
+                std::fs::write(path, &text)
+                      .unwrap_or_else(|e| panic!("failed write {}: {e:#}", path.display()));
+                eprintln!(
+                      "Wrote janux-dump/1 to {} ({} user(s), {} tenant(s), {} warning member(s))",
+                     path.display(),
+                     report.user_entries.len(),
+                     report.tenant_configs.len(),
+                     warn_groups
+                       );
+               }
+            None => print!("{text}"),
+           }
+        return;
+       }
 
     let mut db = db::Storage::init(Path::new(&server_config.data_dir))
         .await

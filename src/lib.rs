@@ -14,6 +14,8 @@ pub mod crypto;
 pub mod db;
 #[path = "domain.rs"]
 pub mod domain;
+#[path = "dump.rs"]
+pub mod dump;
 #[path = "email.rs"]
 pub mod email;
 #[path = "idp.rs"]

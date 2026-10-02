@@ -37,6 +37,7 @@ tera = "2.0.0"
 url = "2.5.8"
 base64 = "*"
 percent-encoding = "2.1"
+toml ="1.0.0"
 dashmap = "6.2.1"
 totp-rs = { version = "5.7.2", features = ["qr", "gen_secret", "otpauth"] }
 jsonwebtoken = "10.4.0"

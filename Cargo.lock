@@ -2954,6 +2954,7 @@ dependencies = [
  "toasty-cli",
  "toasty-driver-turso",
  "tokio",
+ "toml",
  "totp-rs",
  "tracing",
  "tracing-subscriber",
