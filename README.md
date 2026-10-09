@@ -25,7 +25,6 @@ Stack: Rust · Salvo · Toasty (per-tenant schemas) · webauthn-rs · RSA-signed
 
 ## Quickstart (development)
 
-
 The `examples/` directory has two self-contained demos:
 
 ```sh
@@ -37,6 +36,28 @@ open https://localhost/app            # (macOS: run ./up.py single-host trust-ca
 See [examples/README.md](examples/README.md) for details.
 
 With no providers configured in `seed.toml`, the corresponding factors simply don't activate; the server still runs and serves the OIDC/admin/SCIM surfaces. Provider credentials (mail, SMS, social OAuth) are per-tenant seed config — **not** environment variables. The only env vars the server reads are `JANUX_CONFIG_FILE`, `RUN_ENV`, and `JANUX__*` field overrides (documented in `.env.example`); nothing auto-loads a `.env` file.
+
+## Agent / AI-assisted deploy
+
+Coding and ops agents (Pi, Hermes, Codex, Copilot, Claude Code, …) should start from **[AGENTS.md](AGENTS.md)** and load the skill in **[janux-agent/](janux-agent/)** (`SKILL.md` + `REF.md`).
+
+Typical flow:
+
+1. Agent runs the **deployment survey** (topology, domain, backend path, admin email, TLS, …).
+2. **Default is generate-only** — emit a deploy pack, do not start remote hosts without confirmation.
+3. Render a pack with the helper (or follow the skill by hand):
+
+```sh
+python3 scripts/render-deploy.py \
+  --layout single-host \
+  --domain localhost \
+  --resource /app \
+  --admin-email admin@example.com \
+  --out ./deploy-pack
+cd deploy-pack && docker compose up -d
+```
+
+See `python3 scripts/render-deploy.py --help` and [janux-agent/SKILL.md](janux-agent/SKILL.md).
 
 
 
@@ -83,9 +104,10 @@ Hand off the signing keys to an external verifier (e.g. PostgREST, which verifie
 | `src/` | Server: `router.rs`, factors (`email`, `otp`, `totp`, `passkey`, `social`), OIDC IdP (`oidc.rs`, `oidc_ext.rs`), RBAC (`role.rs`, `policy.rs`), tenancy (`db.rs`, `domain.rs`, `seed.rs`) |
 | `frontend/` | Vite + React multi-entry app (`login`, `admin`, `consent`, `device`) with a generated OpenAPI client (`src/api/`) |
 | `examples/` | Caddy + nginx forward-auth demos (single-host, split-hosts) |
+| `janux-agent/` | Agent skill for deploy/ops (`SKILL.md`, `REF.md`) |
 | `tests/` | lib + `unit_tests`, `z_integration_tests`, HTTP-level e2e (`all_tests`), Python conformance suite (`compliant/`) |
-| `docs/` | Design decisions, integration guide, frontend architecture, reference specs |
-| `scripts/` | Operator helpers |
+| `scripts/` | Operator helpers (`render-deploy.py`, …) |
+| `AGENTS.md` | Entry point for AI agents (deploy survey → skill → generate pack) |
 
 
 
