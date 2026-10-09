@@ -64,7 +64,7 @@ All Rust test tiers that share process-wide state **must** run with `--test-thre
 - Do **not** enable `disable_rate_limits` outside demos/`examples/`.
 - Do **not** put real provider credentials or encryption keys in tracked files; use `*.example.toml` as templates and gitignored local copies.
 - Prefer generating assets over remote mutation. Confirm before SSH, `systemctl`, or destructive admin API calls (`tenant/delete`, `key/delete`, etc.).
-- Production-like security testing lives under `pentest/` — use that harness, not ad-hoc attacks against a live operator instance.
+- Do **not** run ad-hoc attack traffic against a live operator instance; use the normal test suite (`just test`, `just compliant`) for regression checks.
 
 ## Repository map
 
@@ -76,7 +76,6 @@ All Rust test tiers that share process-wide state **must** run with `--test-thre
 | `janux-agent/` | **Agent skill** for deploy/ops (`SKILL.md` + `REF.md`) |
 | `scripts/` | Operator helpers (`render-deploy.py`, …) |
 | `tests/` | unit / integration / e2e / conformance |
-| `pentest/` | Production-like security harness |
 | `Dockerfile` | Multi-stage image → `ghcr.io/afmkt/janux` |
 
 ## Quick human/dev path (non-agent)
