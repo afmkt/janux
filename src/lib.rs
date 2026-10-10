@@ -22,6 +22,8 @@ pub mod email;
 pub mod idp;
 #[path = "jwt.rs"]
 pub mod jwt;
+#[path = "jwt_decode.rs"]
+pub mod jwt_decode;
 #[path = "key.rs"]
 pub mod key;
 #[path = "oidc.rs"]
