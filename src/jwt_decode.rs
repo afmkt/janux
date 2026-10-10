@@ -67,9 +67,10 @@ fn map_decode_error(err: &anyhow::Error) -> String {
         "expired".into()
     } else if msg.contains("ImmatureSignature") || lower.contains("immature") {
         "not_yet_valid".into()
-    } else if lower.contains("missing kid") || lower.contains("broken, missing kid") {
-        "unknown_kid".into()
-    } else if lower.contains("key") && (lower.contains("not found") || lower.contains("unknown")) {
+    } else if lower.contains("missing kid")
+        || lower.contains("broken, missing kid")
+        || (lower.contains("key") && (lower.contains("not found") || lower.contains("unknown")))
+    {
         "unknown_kid".into()
     } else {
         "invalid_signature".into()
