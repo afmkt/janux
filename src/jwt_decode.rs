@@ -103,7 +103,6 @@ pub async fn decode_jwt(req: &mut Request, depot: &mut Depot, res: &mut Response
 
     let (header, claims) = insecure_parts(&token);
 
-    // Malformed compact serialization — nothing further to report.
     if header.is_none() && claims.is_none() {
         res.status_code(StatusCode::OK);
         res.render(Json(DecodeResponse {
@@ -125,7 +124,6 @@ pub async fn decode_jwt(req: &mut Request, depot: &mut Depot, res: &mut Response
     let mut signature_ok = false;
     let mut reason: Option<String> = None;
 
-    // Resolve the tenant from Host so we can verify against real keys.
     if let Ok(state) = depot.obtain_mut::<crate::server::ServerState>() {
         if let Some(domain) = get_domain(req, state) {
             if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
@@ -172,4 +170,19 @@ pub async fn decode_jwt(req: &mut Request, depot: &mut Depot, res: &mut Response
         header,
         claims,
     }));
+}
+
+/// Mount path: `POST /api/v1/jwt/decode` with the same per-issuer rate
+/// limit used by the auth factor surface.
+pub fn routes(disable_rate_limits: bool) -> salvo::Router {
+    use salvo::rate_limiter::{BasicQuota, FixedGuard, MokaStore, RateLimiter};
+    let limiter = RateLimiter::new(
+        FixedGuard::new(),
+        MokaStore::new(),
+        crate::utils::JanuxIssuer,
+        BasicQuota::per_minute(crate::router::quota(disable_rate_limits, 6)),
+    );
+    Router::with_path("api/v1/jwt/decode")
+        .hoop(limiter)
+        .post(decode_jwt)
 }
