@@ -75,6 +75,9 @@ mod crypto;
 #[path = "../jwt.rs"]
 mod jwt;
 
+#[path = "../jwt_decode.rs"]
+mod jwt_decode;
+
 #[path = "../oidc.rs"]
 mod oidc;
 
