@@ -11,6 +11,7 @@ mod dump;
 mod email;
 mod idp;
 mod jwt;
+mod jwt_decode;
 mod key;
 mod oidc;
 mod oidc_ext;
