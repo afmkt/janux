@@ -81,19 +81,25 @@ Bootstraps tenant state at startup. Idempotent — safe to re-run.
 
 | Role   | Level | Scope                       |
 |--------|-------|-----------------------------|
-| root   | —     | Tenant lifecycle (create/delete tenant). Seed-only. |
-| admin  | 50    | Full access within its tenant |
+| root   | 100   | Tenant lifecycle (create/delete tenant). Seed-only. |
+| admin  | 80    | Full access within its tenant |
 | scim   | 60    | User provisioning via /scim/v2/* (above user, below admin) |
-| user   | 10    | Self-service endpoints (/self/*) |
-| guest  | 0     | Authenticated, no admin grants |
+| user   | 40    | Self-service endpoints (user/activate\|delete/self, /auth/* add) |
+| guest  | 20    | Authenticated, no admin grants |
 
 Level gate: a lower-level role cannot grant to a higher level.
-A level-50 admin can add role "user" (10) but not "root" (seed-only).
+A level-80 admin can add role "user" (40) but not "root" (seed-only).
+
+`root` (100) is the platform apex: it is created only by the seed tenant
+(`TenantDTO::save`) and excluded from the runtime catalog `admin/role/create`
+(see `role::BUILTIN_ROLES` vs. `BUILTIN_ROLES_TENANT`).
 
 ### Code tier vs. policy tier
 
-**Code tier**: `admin/*` endpoints are guarded in code by `protect_admin`.
-No policy row needed. Any admin-role user can reach them.
+**Code tier**: `admin/*` endpoints are guarded in code by `protect_admin`
+(role `root` for `admin/tenant/*`, role `admin` for the in-tenant surface,
+role `user` for the `/user/.../self` routes). No policy row needed; the guard
+on the route IS the grant.
 
 **Policy tier**: tenant-defined resources (your app paths) use the
 policy engine. Default-deny: if no policy row matches, access is denied.
@@ -126,10 +132,10 @@ policy engine. Default-deny: if no policy row matches, access is denied.
 
 ### Target resolvers
 
-    Nothing          — no identity check (scenarios 1, 2)
-    FromPath{name}  — reads path segment {name} from the request
-    FromQuery{name} — reads ?name=... from the request
-    FromHeader{name}— reads header "name" (lower-cased lookup)
+    Nothing         — no identity check (scenarios 1, 2)
+    FromPath{pname}  — reads path segment {pname} from the request
+    FromQuery{qname} — reads ?{qname}=... from the request
+    FromHeader{hname}— reads header "{hname}" (lower-cased lookup)
 
 ### MFA
 
@@ -184,13 +190,32 @@ a token for an admin-role user in the tenant's home domain.
 ### Users
 
     GET  /api/v1/admin/user/list
-    POST /api/v1/admin/user/create       # body: {name, roles, active, email|mobile}
-    POST /api/v1/admin/user/activate
-    POST /api/v1/admin/user/delete
-    POST /api/v1/admin/user/add_role
-    POST /api/v1/admin/user/remove_role
-    POST /api/v1/admin/user/attach_email
+    POST /api/v1/admin/user/create       # body: {name} — creates a BARE user;
+                                        # roles/active/credentials are applied
+                                        # with the separate endpoints below.
+    POST /api/v1/admin/user/activate     # body: {user, active}
+    POST /api/v1/admin/user/delete        # body: {user}
+    POST /api/v1/admin/user/add_role      # body: {user, role}
+    POST /api/v1/admin/user/remove_role   # body: {user, role}
+    POST /api/v1/admin/user/attach_email  # body: {name, email}
     POST /api/v1/admin/user/remove_email
+    POST /api/v1/admin/user/remove_mobile
+    POST /api/v1/admin/user/remove_passkey
+    POST /api/v1/admin/user/remove_social
+    POST /api/v1/admin/user/activate/self   # self-scoped, role "user" (protect_user)
+    POST /api/v1/admin/user/delete/self     # self-scoped, role "user" (protect_user)
+    GET  /api/v1/admin/user/roles           # caller's own role grants
+
+### Roles (tenant role catalog)
+
+    GET  /api/v1/admin/role/list
+    POST /api/v1/admin/role/create          # body: {name, level}
+    POST /api/v1/admin/role/delete          # body: {name}
+
+### TOTP (admin list / remove)
+
+    POST /api/v1/admin/totp/list            # optional ?name filter
+    POST /api/v1/admin/totp/remove          # body: {name, totp}
 
 ### OIDC Clients
 
@@ -199,6 +224,7 @@ a token for an admin-role user in the tenant's home domain.
     POST /api/v1/admin/oauth2client/delete
     POST /api/v1/admin/oauth2client/reactivate
     POST /api/v1/admin/oauth2client/rotate     # rotate client secret
+    POST /api/v1/admin/oauth2client/meta       # extended OIDC client metadata
 
 ### Social / OIDC Federal Providers
 
@@ -217,6 +243,10 @@ a token for an admin-role user in the tenant's home domain.
 
     GET  /api/v1/admin/oidc/config
     POST /api/v1/admin/oidc/config            # toggle DCR, logout, etc.
+
+### Observability
+
+    GET  /api/v1/admin/metrics               # process telemetry (admin-gated)
 
 ### Health
 
