@@ -589,13 +589,29 @@ async fn connect_tenant(dir: &Path) -> toasty::Result<toasty::Db> {
     let path = PathBuf::from(dir).join("janux.db");
     migrate_email_verified(&path).await;
     migrate_key_retired(&path).await;
-    let driver = toasty_driver_turso::Turso::file(path).concurrent_writes();
     info!("create tenant {}", dir.display());
-    let db = toasty::Db::builder()
-        .models(toasty::models!(crate::*))
-        .build(driver)
-        .await
-        .unwrap();
+    // Retry on transient file-lock contention (a prior toasty/turbo
+    // connection to the same file hasn't released its OS-level lock yet).
+    // 10 attempts × 75 ms = up to 750 ms total wait.
+    let db = loop {
+        let driver = toasty_driver_turso::Turso::file(&path).concurrent_writes();
+        match toasty::Db::builder()
+            .models(toasty::models!(crate::*))
+            .build(driver)
+            .await
+        {
+            Ok(db) => break db,
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("lock") || msg.contains("locked") {
+                    tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+                    continue;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    };
     match db.push_schema().await {
         Ok(_) => Ok(db),
         Err(e) => {

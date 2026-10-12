@@ -180,6 +180,15 @@ impl TestEnv {
                              authenticated integration tests cannot run"
                     )
                 });
+            // Allow the libSQL (turbo/turso) file lock held by the toasty
+            // pool to be released back to the OS before the janux subprocess
+            // opens the same file.  Without this, a race with the test
+            // harness's own storage drop can leave the lock held and the
+            // subprocess panics at `database.rs:598` with "File is locked
+            // by another process".  150 ms on a clean host is more than
+            // enough; on a busy CI the toasty connection drop might take
+            // slightly longer.
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
             println!(
                 "janux-test: provisioned seed + signing key + real admin and user-role sessions"
             );
@@ -323,17 +332,52 @@ fn spawn_server(config_path: &std::path::Path) -> Result<Child, String> {
             .map_err(|e| format!("Failed to build janux: {e}"))?;
     }
 
+        // Forward the child's output to a temp file so server
+    // startup failures are diagnosable.  A real file (instead
+    // of Stdio::piped()) avoids the OS pipe-buffer cap that
+    // previously blocked the janux subprocess on a full pipe,
+    // producing spurious "never became healthy" panics.
+    let tag = uuid::Uuid::new_v4().simple();
+    let out_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(format!(
+            "/tmp/janux-test-{}.out",
+            tag
+        ))
+        .unwrap_or_else(|_|
+            std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open("/tmp/janux-server.out")
+                .unwrap()
+        );
+    let err_file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(format!(
+            "/tmp/janux-test-{}.err",
+            tag
+        ))
+        .unwrap_or_else(|_|
+            std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open("/tmp/janux-server.err")
+                .unwrap()
+        );
     let child = std::process::Command::new("./target/debug/janux")
         .args(["--config", config_path.to_str().unwrap()])
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
         .spawn()
         .map_err(|e| format!("Failed to start janux: {e}"))?;
 
     println!(
-        "janux-test: server started with config {}",
-        config_path.display()
+        "janux-test: server started (log tag {}) {}",
+        tag, config_path.display()
     );
     Ok(child)
 }
@@ -486,16 +530,21 @@ fn seed_policy_rows(domain: &str) -> String {
 }
 
 /// Wait for the server health endpoint.
+///
+/// Polls for up to 30s (60 attempts × 500ms) so that a slow CI host, a
+/// just-killed sibling subprocess that has not closed its port yet, or a
+/// toasty file-lock release that is still in flight cannot masquerade as a
+/// real startup failure. The 15s default was too short on loaded machines.
 async fn wait_for_health(port: u16) -> bool {
     let base = format!("http://127.0.0.1:{port}/api/v1/healthy");
     let client = reqwest::Client::new();
-    for attempt in 0..30u32 {
+    for attempt in 0..60u32 {
         match client.get(&base).send().await {
             Ok(resp) if resp.status().is_success() => return true,
             _ => tokio::time::sleep(tokio::time::Duration::from_millis(500)).await,
         }
-        if attempt % 5 == 4 {
-            eprintln!("janux-test: waiting for health... ({}/30)", attempt + 1);
+        if attempt % 10 == 9 {
+            eprintln!("janux-test: waiting for health... ({}/60)", attempt + 1);
         }
     }
     false
