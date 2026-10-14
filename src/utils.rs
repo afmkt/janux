@@ -846,6 +846,30 @@ pub fn clamped_token_lifetime_minutes(requested_sec: Option<i64>, max_minutes: i
     }
 }
 
+/// Shortest and longest lifetimes a caller may request for a long-lived
+/// API key. Both are compile-time caps, not defaults: a caller may pick any
+/// value in the band, and out-of-band requests clamp to the nearest bound
+/// (see [`clamp_api_key_lifetime_secs`]) rather than being silently ignored.
+pub const API_KEY_MIN_LIFETIME_SECS: i64 = 3600; // 1 hour
+pub const API_KEY_MAX_LIFETIME_SECS: i64 = 31_536_000; // 1 year
+
+/// Resolve a caller-requested API-key lifetime in SECONDS (G: api-key mint).
+///
+/// Unlike [`clamped_token_lifetime_minutes`], which floors at 1 minute for
+/// the short-lived session/OIDC tokens, an API key has a **1-hour floor**:
+/// sub-hour requests clamp UP to the minimum, and requests above the 1-year
+/// ceiling clamp down to it. `None` (or a non-positive request) takes the
+/// minimum. The result is the effective lifetime, echoed back in the mint
+/// response's `expires_in`; divide by 60 only at the `jwt_authenticate`
+/// minute boundary.
+pub fn clamp_api_key_lifetime_secs(requested: Option<i64>) -> i64 {
+    match requested {
+        None => API_KEY_MIN_LIFETIME_SECS,
+        Some(sec) if sec <= 0 => API_KEY_MIN_LIFETIME_SECS,
+        Some(sec) => sec.clamp(API_KEY_MIN_LIFETIME_SECS, API_KEY_MAX_LIFETIME_SECS),
+    }
+}
+
 /// Marker covering every machine token of one OAuth2 client (G-123).
 /// `client_credentials` tokens are stateless 90-day JWTs keyed by the
 /// client's service identity (`sub` = `OAuth2Client.uuid`), so deleting a

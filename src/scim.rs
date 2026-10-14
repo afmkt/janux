@@ -892,8 +892,8 @@ pub fn router(disable_rate_limits: bool) -> Router {
     };
 
     // Discovery documents are static and tenant-free — public per RFC 7644.
-     // Everything under /Users is guarded by `protect_scim` (code tier): the
-     // `scim` role's membership in the machine token is the grant.
+    // Everything under /Users is guarded by `protect_scim` (code tier): the
+    // `scim` role's membership in the machine token is the grant.
     Router::with_path("scim/v2")
         .push(Router::with_path("ServiceProviderConfig").get(service_provider_config))
         .push(Router::with_path("Schemas").get(schemas))
@@ -998,17 +998,17 @@ mod tests {
                     // grant only embeds the `scim` role for clients that
                     // carry it here.
                     "scim",
-                true,
+                    true,
                 )
                 .await
                 .expect("machine client");
             // Code tier: just the scim role is needed — the guard on the
             // route is the grant, so no policy rows are created.
-           tenant
-                 .role_create(&bootstrap, "scim", 0)
-                 .await
-                 .expect("scim role");
-                 }
+            tenant
+                .role_create(&bootstrap, "scim", 0)
+                .await
+                .expect("scim role");
+        }
         let state = crate::server::ServerState::create_with(storage, false, &[], false)
             .await
             .expect("server state");
@@ -1118,7 +1118,7 @@ mod tests {
         let created = scim_json(&mut res).await;
         assert_eq!(
             created["userName"], "mixedcase@example.com",
-             "create canonicalizes the stored userName via user_create"
+            "create canonicalizes the stored userName via user_create"
         );
 
         for queried in [
@@ -1156,25 +1156,25 @@ mod tests {
         let user = match created {
             Ok(u) => u,
             Err(e) => panic!("{e}"),
-         };
+        };
         assert_eq!(
             user.name, "mixedcase@example.com",
-             "admin-path user_create canonicalizes case like the SCIM path"
-         );
+            "admin-path user_create canonicalizes case like the SCIM path"
+        );
         for queried in [
-             "MixedCase@Example.com",
-             "MIXEDCASE@EXAMPLE.COM",
-             "miXeDCase@EXaMpLe.CoM",
-         ] {
+            "MixedCase@Example.com",
+            "MIXEDCASE@EXAMPLE.COM",
+            "miXeDCase@EXaMpLe.CoM",
+        ] {
             match tenant.user(queried).await {
                 Ok(found) => assert_eq!(
-                     found.name, "mixedcase@example.com",
-                      "case-insensitive lookup {queried} resolves the folded user"),
+                    found.name, "mixedcase@example.com",
+                    "case-insensitive lookup {queried} resolves the folded user"
+                ),
                 Err(_) => panic!("lookup {queried} failed"),
-             }
-         }
-     }
-
+            }
+        }
+    }
 
     /// G-146: PATCH `add` APPENDS to a multi-valued attribute and
     /// `remove` is implemented (RFC 7644 §3.5.2) — the old replace-only

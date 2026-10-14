@@ -17,11 +17,11 @@ use toasty::*;
 
 #[derive(Debug, Default, PartialEq, toasty::Embed, Serialize, Deserialize, ToSchema, Clone)]
 pub enum SourceResolver {
-      #[default]
-     Nothing,
-     User,
-     Domain,
-     Role,
+    #[default]
+    Nothing,
+    User,
+    Domain,
+    Role,
 }
 
 pub enum Source {
@@ -32,11 +32,17 @@ pub enum Source {
 
 #[derive(Debug, Default, PartialEq, toasty::Embed, Serialize, Deserialize, ToSchema, Clone)]
 pub enum TargetResolver {
-      #[default]
-     Nothing,
-     FromPath { pname: String },
-     FromQuery { qname: String },
-     FromHeader { hname: String },
+    #[default]
+    Nothing,
+    FromPath {
+        pname: String,
+    },
+    FromQuery {
+        qname: String,
+    },
+    FromHeader {
+        hname: String,
+    },
 }
 
 /// A config/seed policy row. The minimal useful form is just `resource` +
@@ -57,19 +63,19 @@ pub enum TargetResolver {
 /// the grantee, so they have no safe default.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct PolicyDTO {
-     pub domain: String,
-      #[serde(default)]
+    pub domain: String,
+    #[serde(default)]
     pub resource: String,
-     #[serde(default)]
+    #[serde(default)]
     pub action: Option<HttpMethod>,
-     pub role: String,
-      #[serde(default)]
+    pub role: String,
+    #[serde(default)]
     pub source: SourceResolver,
-      #[serde(default)]
+    #[serde(default)]
     pub target: TargetResolver,
-      #[serde(default)]
+    #[serde(default)]
     pub mfa: bool,
-      #[serde(default = "policy_default_allow")]
+    #[serde(default = "policy_default_allow")]
     pub allowed: bool,
 }
 
@@ -206,11 +212,11 @@ pub struct CanAccess {
 /// either equals the path segment or is a `{param}` placeholder covering any value
 /// — the same matching `TargetResolver::FromPath` applies for capture.
 fn resource_matches_path(resource: &[String], path: &[&str]) -> bool {
-       // Empty resource = "match any path in this domain".
-     if resource.is_empty() {
+    // Empty resource = "match any path in this domain".
+    if resource.is_empty() {
         return true;
-      }
-     resource.len() == path.len()
+    }
+    resource.len() == path.len()
         && resource
             .iter()
             .zip(path.iter())
@@ -235,28 +241,28 @@ impl Policy {
                 // Empty resource = match ANY path; otherwise match the path
                 // segments exactly. (resource_matches_path also short-circuits to
                 // `true` on an empty resource, covering the resolver branches below.)
-               if self.resource.is_empty() {
-                   true
+                if self.resource.is_empty() {
+                    true
                 } else {
-                   path.iter().map(|s| s.to_string()).collect::<Vec<String>>() == self.resource
+                    path.iter().map(|s| s.to_string()).collect::<Vec<String>>() == self.resource
                 }
-             } else if !resource_matches_path(&self.resource, path) {
+            } else if !resource_matches_path(&self.resource, path) {
                 // The resource constrains the path in EVERY branch. FromQuery/
                 // FromHeader targets must NOT skip the path check, or an innocent
                 // resource would apply to every path in the domain (a wildcard grant).
-              false
-             } else {
-              let s = self.resolve_source(jwt);
-              let t = self.resolve_target(path, query, header);
-              match s {
-                  None => t.is_none(),
-                  Some(Source::User(name)) => t.is_some_and(|target_name| target_name == name),
-                  Some(Source::Domain(name)) => {
-                       t.is_some_and(|target_domain| target_domain == name)
-                     }
-                  Some(Source::Role(name)) => t.is_some_and(|target_role| target_role == name),
-               }
-             }
+                false
+            } else {
+                let s = self.resolve_source(jwt);
+                let t = self.resolve_target(path, query, header);
+                match s {
+                    None => t.is_none(),
+                    Some(Source::User(name)) => t.is_some_and(|target_name| target_name == name),
+                    Some(Source::Domain(name)) => {
+                        t.is_some_and(|target_domain| target_domain == name)
+                    }
+                    Some(Source::Role(name)) => t.is_some_and(|target_role| target_role == name),
+                }
+            }
         } else {
             false
         };
@@ -376,13 +382,13 @@ impl Tenant {
         mfa: bool,
         allowed: bool,
     ) -> Result<Policy> {
-         // An empty/blank resource matches ANY path in the domain, stored as
-         // an empty segment list so `can_access` / `resource_matches_path` see it.
+        // An empty/blank resource matches ANY path in the domain, stored as
+        // an empty segment list so `can_access` / `resource_matches_path` see it.
         let resource_seg: Vec<String> = if resource.trim().is_empty() {
             Vec::new()
-         } else {
+        } else {
             resource.split('/').map(str::to_string).collect()
-         };
+        };
         let role = self.role(role_name).await?;
         self.require_below(caller, &role).await?;
         let ret = toasty::create!(Policy {
@@ -413,8 +419,8 @@ impl Tenant {
     /// cache consistent with the DB.
     ///
     /// gate (rule R6): symmetric to [`Tenant::policy_create`] — detaching
-     /// policies is bounded by the same level test, so a role cannot
-     /// strip the constraints of a peer's or superior's permission set either.
+    /// policies is bounded by the same level test, so a role cannot
+    /// strip the constraints of a peer's or superior's permission set either.
     pub async fn policy_delete(
         &mut self,
         caller: &crate::role::Caller,
@@ -425,9 +431,9 @@ impl Tenant {
     ) -> Result<()> {
         let resource_seg: Vec<String> = if resource.trim().is_empty() {
             Vec::new()
-         } else {
+        } else {
             resource.split("/").map(|s| s.to_string()).collect()
-         };
+        };
         let role = self.role(role_name).await?;
         self.require_below(caller, &role).await?;
 
@@ -475,21 +481,21 @@ impl Tenant {
 /// rather than the segmented `Vec<String>` stored on the model.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 struct PolicyEntry {
-     #[serde(default)]
+    #[serde(default)]
     pub id: Option<uuid::Uuid>,
-     #[serde(default)]
+    #[serde(default)]
     pub resource: String,
-     pub domain: String,
-     pub role: String,
-      #[serde(default)]
+    pub domain: String,
+    pub role: String,
+    #[serde(default)]
     pub action: Option<HttpMethod>,
-      #[serde(default)]
+    #[serde(default)]
     pub source: SourceResolver,
-      #[serde(default)]
+    #[serde(default)]
     pub target: TargetResolver,
-      #[serde(default)]
+    #[serde(default)]
     pub mfa: bool,
-      #[serde(default = "policy_default_allow")]
+    #[serde(default = "policy_default_allow")]
     pub allowed: bool,
 }
 

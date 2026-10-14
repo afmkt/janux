@@ -131,6 +131,7 @@ fn jwt_data(mfa: HashSet<String>) -> JwtData {
         domain: "example.com".to_string(),
         mfa,
         roles: ["user"].iter().map(|s| s.to_string()).collect(),
+        typ: None,
     }
 }
 

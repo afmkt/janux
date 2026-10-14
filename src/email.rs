@@ -290,20 +290,20 @@ async fn send(config: &ResendDTO, to: &str, subject: &str, content: &str) -> any
     let email =
         CreateEmailBaseOptions::new(config.from.clone(), vec![to], subject).with_html(content);
     let response = resend.emails.send(email).await;
-       // Surface the Resend-side reason (status + body) in the console — the
-      // failure is otherwise swallowed downstream into a bare "Fail to send
-      // email", leaving nothing to act on.
+    // Surface the Resend-side reason (status + body) in the console — the
+    // failure is otherwise swallowed downstream into a bare "Fail to send
+    // email", leaving nothing to act on.
     if let Err(e) = &response {
         tracing::error!(
-             from = %config.from,
-           to,
-          error = %format!("{e:#}"),
-           "Magic-link email failed to send via Resend"
-         );
-     }
+            from = %config.from,
+          to,
+         error = %format!("{e:#}"),
+          "Magic-link email failed to send via Resend"
+        );
+    }
     if let Err(e) = response {
         return Err(anyhow::anyhow!(describe_resend_error(&e)));
-      }
+    }
     Ok(())
 }
 
@@ -315,47 +315,50 @@ fn describe_resend_error(err: &resend_rs::Error) -> String {
     match err {
         resend_rs::Error::Resend(resp) => {
             let hint = match resp.status_code {
-                401 =>
-                   "Invalid or revoked Resend API key - check `resend_key` in your seed/config",
-                403 =>
-                   "Resend refused the send - the `from` domain is usually not verified or not \
-                     authorized on your Resend account",
-                400 | 422 =>
-                   "Resend rejected the request - check `from`/`to` and your account mode (test \
-                   mode only delivers to test@resend.dev)",
+                401 => "Invalid or revoked Resend API key - check `resend_key` in your seed/config",
+                403 => {
+                    "Resend refused the send - the `from` domain is usually not verified or not \
+                     authorized on your Resend account"
+                }
+                400 | 422 => {
+                    "Resend rejected the request - check `from`/`to` and your account mode (test \
+                   mode only delivers to test@resend.dev)"
+                }
                 429 => "Resend rate limit exceeded - send less often or check your plan",
                 500..=599 => "Resend-side error - resend.com may be degraded; try again shortly",
-                 other => return format!("Resend HTTP {other}: {}", resp.message),
-                };
+                other => return format!("Resend HTTP {other}: {}", resp.message),
+            };
             if resp.message.trim().is_empty() {
                 format!("{hint} (HTTP {} {})", resp.status_code, resp.name)
-              } else {
+            } else {
                 format!(
-                      "{hint} (HTTP {} {}): {}",
-                    resp.status_code,
-                  resp.name,
-                  resp.message,
-                  )
-                }
-          }
-        resend_rs::Error::Http(req_err) =>
-            format!("Could not reach Resend - check outbound network / `resend.base_url`: {req_err}"),
+                    "{hint} (HTTP {} {}): {}",
+                    resp.status_code, resp.name, resp.message,
+                )
+            }
+        }
+        resend_rs::Error::Http(req_err) => format!(
+            "Could not reach Resend - check outbound network / `resend.base_url`: {req_err}"
+        ),
         resend_rs::Error::RateLimit {
             ratelimit_limit,
             ratelimit_reset,
-             ..
+            ..
         } => {
-            let limit =
-                 ratelimit_limit.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string());
-            let seconds =
-                ratelimit_reset.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string());
+            let limit = ratelimit_limit
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let seconds = ratelimit_reset
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".to_string());
             format!("Resend rate limit exceeded - {limit} requests / {seconds}s")
         }
-        resend_rs::Error::Parse { message, .. } =>
-            format!("Resend returned an unparseable response: {message}"),
+        resend_rs::Error::Parse { message, .. } => {
+            format!("Resend returned an unparseable response: {message}")
+        }
         resend_rs::Error::Other(msg) => msg.clone(),
-      }
- }
+    }
+}
 
 #[derive(RustEmbed)]
 #[folder = "./template/email/"]
@@ -1058,7 +1061,8 @@ async fn deliver_add_email_ceremony(
         &prepared.subject,
         prepared.content.as_ref(),
     )
-    .await {
+    .await
+    {
         return Err(format!("Fail to send email: {e:#}"));
     }
     MLINK_CACHE
@@ -1284,53 +1288,53 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-       // regression: a failed Resend send must surface an *actionable* hint and
-     // the *raw* Resend response (status + name + body), not just the bare
-     // "Fail to send email" the login "Send Link" path returned with no
-      // console error. This is the unverified-`from`-domain case.
-     #[test]
-     fn describe_resend_error_keeps_hint_and_raw_body() {
+    // regression: a failed Resend send must surface an *actionable* hint and
+    // the *raw* Resend response (status + name + body), not just the bare
+    // "Fail to send email" the login "Send Link" path returned with no
+    // console error. This is the unverified-`from`-domain case.
+    #[test]
+    fn describe_resend_error_keeps_hint_and_raw_body() {
         use resend_rs::types::ErrorResponse;
         let err = resend_rs::Error::Resend(ErrorResponse {
             status_code: 403,
             message: "The gmail.com domain is not verified. Please, add and verify your domain."
-                 .to_string(),
-             name: "validation_error".to_string(),
-            });
+                .to_string(),
+            name: "validation_error".to_string(),
+        });
 
         let msg = describe_resend_error(&err);
-          // actionable: points at the likely cause
+        // actionable: points at the likely cause
         assert!(
-             msg.contains("not verified"),
-             "actionable hint missing from: {msg}"
-         );
-         // raw: the actual Resend status + name + body are preserved
+            msg.contains("not verified"),
+            "actionable hint missing from: {msg}"
+        );
+        // raw: the actual Resend status + name + body are preserved
         assert!(msg.contains("HTTP 403"), "status missing from: {msg}");
         assert!(
-             msg.contains("validation_error"),
-             "resend 'name' missing from: {msg}"
-         );
+            msg.contains("validation_error"),
+            "resend 'name' missing from: {msg}"
+        );
         assert!(
             msg.contains("gmail.com domain is not verified"),
-             "resend body missing from: {msg}"
-         );
-      }
+            "resend body missing from: {msg}"
+        );
+    }
 
-      #[test]
+    #[test]
     fn describe_resend_error_maps_401_to_key_hint() {
         use resend_rs::types::ErrorResponse;
         let err = resend_rs::Error::Resend(ErrorResponse {
             status_code: 401,
             message: "API key is invalid".to_string(),
             name: "invalid_api_key".to_string(),
-          });
+        });
         let msg = describe_resend_error(&err);
         assert!(msg.contains("API key"), "401 hint missing from: {msg}");
         assert!(
-             msg.contains("API key is invalid"),
-              "raw body missing from: {msg}"
-         );
-      }
+            msg.contains("API key is invalid"),
+            "raw body missing from: {msg}"
+        );
+    }
 
     fn query_map(link: &Url) -> std::collections::HashMap<String, String> {
         link.query_pairs().into_owned().collect()
@@ -1743,6 +1747,7 @@ mod tests {
                 domain: DOMAIN.to_string(),
                 mfa: HashSet::from([AuthType::TOTP.as_str().to_string()]),
                 roles: HashSet::new(),
+                typ: None,
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
@@ -1767,6 +1772,7 @@ mod tests {
                 domain: DOMAIN.to_string(),
                 mfa: HashSet::from([AuthType::TOTP.as_str().to_string()]),
                 roles: HashSet::new(),
+                typ: None,
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
@@ -1921,6 +1927,7 @@ mod tests {
                 domain: DOMAIN.to_string(),
                 mfa: HashSet::new(),
                 roles: HashSet::new(),
+                typ: None,
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
@@ -1984,6 +1991,7 @@ mod tests {
                 domain: DOMAIN.to_string(),
                 mfa: HashSet::new(),
                 roles: HashSet::from(["admin".to_string()]),
+                typ: None,
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
@@ -2373,6 +2381,7 @@ mod tests {
                 domain: DOMAIN.to_string(),
                 mfa: HashSet::from([AuthType::Email.as_str().to_string()]),
                 roles: HashSet::new(),
+                typ: None,
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
@@ -2396,6 +2405,7 @@ mod tests {
                 domain: DOMAIN.to_string(),
                 mfa: HashSet::from([AuthType::Email.as_str().to_string()]),
                 roles: HashSet::new(),
+                typ: None,
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),

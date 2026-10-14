@@ -1,5 +1,6 @@
 mod admin;
 mod aliclient;
+mod apikey;
 mod audit;
 mod cache;
 mod config;

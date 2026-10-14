@@ -48,6 +48,47 @@ export type OpenapiAdminNewTenant = {
     name: string;
 };
 
+/**
+ * `data` of the mint response.
+ */
+export type OpenapiApikeyApiKeyData = {
+    /**
+     * The minted API-key JWT.
+     */
+    access_token: string;
+    /**
+     * Effective lifetime in seconds, after clamping.
+     */
+    expires_in: number;
+    /**
+     * Always `"Bearer"`.
+     */
+    token_type: string;
+    /**
+     * The payload `typ` marker, `"api_key+jwt"`.
+     */
+    typ: string;
+};
+
+/**
+ * Request body for `POST /api/v1/auth/api-key`.
+ */
+export type OpenapiApikeyApiKeyRequest = {
+    /**
+     * Requested lifetime in seconds. Clamped into
+     * `[API_KEY_MIN_LIFETIME_SECS, API_KEY_MAX_LIFETIME_SECS]`; the effective
+     * value is echoed back as `expires_in`. Omitted / non-positive → the
+     * minimum.
+     */
+    lifetime_seconds?: number | null;
+    /**
+     * Roles the key should carry. Omitted / null / empty → the full session
+     * role set. Non-empty → must be a subset of the session's roles (no
+     * escalation); any role the session does not hold is a 400.
+     */
+    roles?: Array<string> | null;
+};
+
 export type OpenapiDbHttpMethod = 'GET' | 'POST' | 'PUT' | 'OPTIONS' | 'DELETE' | 'PATCH' | 'CONNECT' | 'HEAD' | 'TRACE';
 
 export type OpenapiEmailAttachEmailRequest = {
@@ -433,6 +474,11 @@ export type OpenapiUtilsApiResponse_String_ = {
 
 export type OpenapiUtilsApiResponse_allocVecVec_String__ = {
     data: Array<string>;
+    ok: boolean;
+};
+
+export type OpenapiUtilsApiResponse_openapiApikeyApiKeyData_ = {
+    data: OpenapiApikeyApiKeyData;
     ok: boolean;
 };
 
@@ -1873,6 +1919,43 @@ export type OpenapiUserUserRolesResponses = {
 };
 
 export type OpenapiUserUserRolesResponse = OpenapiUserUserRolesResponses[keyof OpenapiUserUserRolesResponses];
+
+export type OpenapiApikeyMintData = {
+    body: OpenapiApikeyApiKeyRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/api-key';
+};
+
+export type OpenapiApikeyMintErrors = {
+    /**
+     * Bad request / role escalation
+     */
+    400: OpenapiUtilsApiProblem;
+    /**
+     * No valid session
+     */
+    401: OpenapiUtilsApiProblem;
+    /**
+     * API keys cannot mint other API keys
+     */
+    403: OpenapiUtilsApiProblem;
+    /**
+     * Signing failure
+     */
+    500: OpenapiUtilsApiProblem;
+};
+
+export type OpenapiApikeyMintError = OpenapiApikeyMintErrors[keyof OpenapiApikeyMintErrors];
+
+export type OpenapiApikeyMintResponses = {
+    /**
+     * API key minted
+     */
+    200: OpenapiUtilsApiResponse_openapiApikeyApiKeyData_;
+};
+
+export type OpenapiApikeyMintResponse = OpenapiApikeyMintResponses[keyof OpenapiApikeyMintResponses];
 
 export type OpenapiEmailAddData = {
     body: OpenapiEmailEmailAddRequest;

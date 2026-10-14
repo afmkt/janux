@@ -113,14 +113,13 @@ pub async fn bootstrap_tenant(
         }
     }
 
-      // Built-in endpoints are the CODE TIER: the guards in router.rs /
-      // scim.rs admit the caller by role membership, so we provision only
-      // the domain — no policy rows. The admin's `admin` role (added below)
-      // is what the `protect_admin` guard checks.
+    // Built-in endpoints are the CODE TIER: the guards in router.rs /
+    // scim.rs admit the caller by role membership, so we provision only
+    // the domain — no policy rows. The admin's `admin` role (added below)
+    // is what the `protect_admin` guard checks.
     if let Some(domain) = domain {
         storage.add_domain(domain, tenant_name).await?;
-     }
-
+    }
 
     // G-131: the first admin must be able to SIGN IN. Created users are
     // credential-less and strict signup refuses the pre-existing
@@ -286,7 +285,6 @@ mod tests {
         // surface is guarded in code (router.rs / scim.rs guards by role
         // membership), so this seed carries NO built-in policy rows — only
         // the /app forward-auth rows the engine tier validates below.
-
     }
 
     /// Revocation-store harness, mirroring the other modules: the toasty store

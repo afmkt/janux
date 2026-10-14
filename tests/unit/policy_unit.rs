@@ -39,6 +39,7 @@ fn make_jwt(user: &str, domain: &str, mfa_factors: &[&str], roles: &[&str]) -> J
         domain: domain.to_string(),
         mfa: mfa_factors.iter().map(|s| s.to_string()).collect(),
         roles: roles.iter().map(|s| s.to_string()).collect(),
+        typ: None,
     }
 }
 
@@ -782,7 +783,7 @@ fn test_query_target_policy_does_not_leak_to_other_paths() {
                 &HashMap::new()
             )
             .is_none(),
-         "it must not leak onto an unrelated path"
+        "it must not leak onto an unrelated path"
     );
 }
 
@@ -926,75 +927,78 @@ fn test_empty_mfa_set_without_mfa_flag_allows() {
 // grant. This is the escape hatch behind the simplified PolicyDTO defaults.
 #[test]
 fn test_empty_resource_matches_any_path() {
-     let policy = make_policy(
-           "api.example.com",
-           None,             // all methods
-           &[],              // empty resource = match ANY path
-           "user",
-           SourceResolver::Nothing,
-           TargetResolver::Nothing,
-            false,
-           true,         // allow
-       );
-     let jwt = make_jwt("alice", "api.example.com", &["pwd"], &["user"]);
-      // Any path, any depth, is allowed.
-     for path in [vec![] as Vec<&str>, vec!["posts"], vec!["a", "b", "c"]] {
-         let r = policy.can_access(
-               &HttpMethod::GET,
-               "api.example.com",
-               &jwt,
-               &path,
-               &HashMap::new(),
-               &HashMap::new(),
-           );
-         assert!(r.is_some_and(|a| a.can_access), "empty resource should allow {path:?}");
-       }
+    let policy = make_policy(
+        "api.example.com",
+        None, // all methods
+        &[],  // empty resource = match ANY path
+        "user",
+        SourceResolver::Nothing,
+        TargetResolver::Nothing,
+        false,
+        true, // allow
+    );
+    let jwt = make_jwt("alice", "api.example.com", &["pwd"], &["user"]);
+    // Any path, any depth, is allowed.
+    for path in [vec![] as Vec<&str>, vec!["posts"], vec!["a", "b", "c"]] {
+        let r = policy.can_access(
+            &HttpMethod::GET,
+            "api.example.com",
+            &jwt,
+            &path,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(
+            r.is_some_and(|a| a.can_access),
+            "empty resource should allow {path:?}"
+        );
+    }
 }
 
 // Domain / role / method gates still hold for an empty-resource row — empty
 // only removes the *path* constraint.
 #[test]
 fn test_empty_resource_stills_respects_domain_role_method() {
-     let policy = make_policy(
-           "api.example.com",
-           Some(HttpMethod::GET),
-           &[],
-           "user",
-           SourceResolver::Nothing,
-           TargetResolver::Nothing,
-            false,
-           true,         // allow
-       );
-     let jwt = make_jwt("alice", "api.example.com", &["pwd"], &["user"]);
-      // POST is not the policy's method → no match.
-     assert!(
-          policy
-                .can_access(
-                   &HttpMethod::POST,
-                   "api.example.com",
-                   &jwt,
-                   &vec!["anything"],
-                   &HashMap::new(),
-                   &HashMap::new(),
-                )
-                .is_none(),
-           "empty resource must still honour the action (method) gate",
-       );
-      // Wrong domain → no match.
-     let other = make_jwt("bob", "other.example.com", &["pwd"], &["user"]);
-     assert!(
-          policy
-                .can_access(
-                   &HttpMethod::GET,
-                   "other.example.com",
-                   &other,
-                   &vec!["anything"],
-                   &HashMap::new(),
-                   &HashMap::new(),
-                )
-                .is_none(),
-           "empty resource must still honour the domain gate",
-       );
+    let policy = make_policy(
+        "api.example.com",
+        Some(HttpMethod::GET),
+        &[],
+        "user",
+        SourceResolver::Nothing,
+        TargetResolver::Nothing,
+        false,
+        true, // allow
+    );
+    let jwt = make_jwt("alice", "api.example.com", &["pwd"], &["user"]);
+    // POST is not the policy's method → no match.
+    assert!(
+        policy
+            .can_access(
+                &HttpMethod::POST,
+                "api.example.com",
+                &jwt,
+                &vec!["anything"],
+                &HashMap::new(),
+                &HashMap::new(),
+            )
+            .is_none(),
+        "empty resource must still honour the action (method) gate",
+    );
+    // Wrong domain → no match.
+    let other = make_jwt("bob", "other.example.com", &["pwd"], &["user"]);
+    assert!(
+        policy
+            .can_access(
+                &HttpMethod::GET,
+                "other.example.com",
+                &other,
+                &vec!["anything"],
+                &HashMap::new(),
+                &HashMap::new(),
+            )
+            .is_none(),
+        "empty resource must still honour the domain gate",
+    );
 }
 
 // An empty-resource row with a non-Nothing source/target still constrains the
@@ -1003,65 +1007,76 @@ fn test_empty_resource_stills_respects_domain_role_method() {
 // a valid self-scoped row with no path template at all.
 #[test]
 fn test_empty_resource_with_resolver_constraint() {
-     let policy = make_policy(
-           "api.example.com",
-           Some(HttpMethod::GET),
-           &[],                                    // any path
-           "user",
-           SourceResolver::User,                    // source = JWT username
-           TargetResolver::FromQuery { qname: "self".to_string() },   // target = ?self=
-            false,
-           true,         // allow
-       );
-     let jwt = make_jwt("alice", "api.example.com", &["pwd"], &["user"]);
+    let policy = make_policy(
+        "api.example.com",
+        Some(HttpMethod::GET),
+        &[], // any path
+        "user",
+        SourceResolver::User, // source = JWT username
+        TargetResolver::FromQuery {
+            qname: "self".to_string(),
+        }, // target = ?self=
+        false,
+        true, // allow
+    );
+    let jwt = make_jwt("alice", "api.example.com", &["pwd"], &["user"]);
 
-       // The path is arbitrary; the claim must still line up.
-     let query_ok = HashMap::from([("self".to_string(), "alice".to_string())]);
-     let r = policy.can_access(
-           &HttpMethod::GET,
-           "api.example.com",
-           &jwt,
-           &vec!["any", "arbitrary", "path"],
-           &query_ok,
-           &HashMap::new(),
-       );
-     assert!(r.is_some_and(|a| a.can_access), "empty resource + matching target should allow");
+    // The path is arbitrary; the claim must still line up.
+    let query_ok = HashMap::from([("self".to_string(), "alice".to_string())]);
+    let r = policy.can_access(
+        &HttpMethod::GET,
+        "api.example.com",
+        &jwt,
+        &vec!["any", "arbitrary", "path"],
+        &query_ok,
+        &HashMap::new(),
+    );
+    assert!(
+        r.is_some_and(|a| a.can_access),
+        "empty resource + matching target should allow"
+    );
 
-       // Claim mismatch → no match, regardless of path.
-     let query_bad = HashMap::from([("self".to_string(), "mallory".to_string())]);
-     let r = policy.can_access(
-           &HttpMethod::GET,
-           "api.example.com",
-           &jwt,
-           &vec!["any", "path"],
-           &query_bad,
-           &HashMap::new(),
-       );
-     assert!(r.is_none(), "empty resource must still honour the source/target constraint");
+    // Claim mismatch → no match, regardless of path.
+    let query_bad = HashMap::from([("self".to_string(), "mallory".to_string())]);
+    let r = policy.can_access(
+        &HttpMethod::GET,
+        "api.example.com",
+        &jwt,
+        &vec!["any", "path"],
+        &query_bad,
+        &HashMap::new(),
+    );
+    assert!(
+        r.is_none(),
+        "empty resource must still honour the source/target constraint"
+    );
 }
 
 // An empty-resource deny covers every path.
 #[test]
 fn test_empty_resource_deny() {
-     let policy = make_policy(
-           "api.example.com",
-           None,
-           &[],
-           "user",
-           SourceResolver::Nothing,
-           TargetResolver::Nothing,
-            false,
-           false,         // deny
-       );
-     let jwt = make_jwt("alice", "api.example.com", &["pwd"], &["user"]);
-     let r = policy.can_access(
-           &HttpMethod::GET,
-           "api.example.com",
-           &jwt,
-           &vec!["anything", "at", "all"],
-           &HashMap::new(),
-           &HashMap::new(),
-       );
-     assert!(r.is_some(), "deny row should produce a verdict");
-     assert!(!r.unwrap().can_access, "empty-resource deny denies any path");
+    let policy = make_policy(
+        "api.example.com",
+        None,
+        &[],
+        "user",
+        SourceResolver::Nothing,
+        TargetResolver::Nothing,
+        false,
+        false, // deny
+    );
+    let jwt = make_jwt("alice", "api.example.com", &["pwd"], &["user"]);
+    let r = policy.can_access(
+        &HttpMethod::GET,
+        "api.example.com",
+        &jwt,
+        &vec!["anything", "at", "all"],
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    assert!(r.is_some(), "deny row should produce a verdict");
+    assert!(
+        !r.unwrap().can_access,
+        "empty-resource deny denies any path"
+    );
 }

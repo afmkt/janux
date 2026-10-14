@@ -63,6 +63,9 @@ mod passkey;
 #[path = "../totp.rs"]
 mod totp;
 
+#[path = "../apikey.rs"]
+mod apikey;
+
 #[path = "../idp.rs"]
 mod idp;
 

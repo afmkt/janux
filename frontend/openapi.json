@@ -81,6 +81,59 @@
         ],
         "type": "object"
       },
+      "openapi.apikey.ApiKeyData": {
+        "description": "`data` of the mint response.",
+        "properties": {
+          "access_token": {
+            "description": "The minted API-key JWT.",
+            "type": "string"
+          },
+          "expires_in": {
+            "description": "Effective lifetime in seconds, after clamping.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "token_type": {
+            "description": "Always `\"Bearer\"`.",
+            "type": "string"
+          },
+          "typ": {
+            "description": "The payload `typ` marker, `\"api_key+jwt\"`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in",
+          "typ"
+        ],
+        "type": "object"
+      },
+      "openapi.apikey.ApiKeyRequest": {
+        "description": "Request body for `POST /api/v1/auth/api-key`.",
+        "properties": {
+          "lifetime_seconds": {
+            "description": "Requested lifetime in seconds. Clamped into\n`[API_KEY_MIN_LIFETIME_SECS, API_KEY_MAX_LIFETIME_SECS]`; the effective\nvalue is echoed back as `expires_in`. Omitted / non-positive → the\nminimum.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "roles": {
+            "description": "Roles the key should carry. Omitted / null / empty → the full session\nrole set. Non-empty → must be a subset of the session's roles (no\nescalation); any role the session does not hold is a 400.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "openapi.db.HttpMethod": {
         "enum": [
           "GET",
@@ -1125,6 +1178,21 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      "openapi.utils.ApiResponse<openapi.apikey.ApiKeyData>": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/openapi.apikey.ApiKeyData"
           },
           "ok": {
             "type": "boolean"
@@ -3553,6 +3621,74 @@
           }
         },
         "summary": "List all roles of the user"
+      }
+    },
+    "/api/v1/auth/api-key": {
+      "post": {
+        "operationId": "openapi.apikey.mint",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/openapi.apikey.ApiKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiResponse<openapi.apikey.ApiKeyData>"
+                }
+              }
+            },
+            "description": "API key minted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Bad request / role escalation"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "No valid session"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "API keys cannot mint other API keys"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/openapi.utils.ApiProblem"
+                }
+              }
+            },
+            "description": "Signing failure"
+          }
+        },
+        "summary": "Mint a long-lived API key for the current session"
       }
     },
     "/api/v1/auth/email/add": {

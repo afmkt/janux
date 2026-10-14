@@ -63,11 +63,11 @@ pub struct OAuth2Client {
     #[default(true)]
     pub active: bool,
 
-            /// When `true` (default), `aud` resolves to the tenant
-            /// domain (`domain_id`), matching the internal session path.
-            /// Set `false` for opaque `client_id` behavior (legacy).
-            #[default(true)]
-      pub aud_is_domain: bool,
+    /// When `true` (default), `aud` resolves to the tenant
+    /// domain (`domain_id`), matching the internal session path.
+    /// Set `false` for opaque `client_id` behavior (legacy).
+    #[default(true)]
+    pub aud_is_domain: bool,
 
     #[auto]
     pub updated_at: jiff::Timestamp,
@@ -535,7 +535,7 @@ impl crate::db::Tenant {
             .response_types(response_types.to_string())
             .token_endpoint_auth_method(auth_method.to_string())
             .scope(scope.to_string())
-             .aud_is_domain(aud_is_domain)
+            .aud_is_domain(aud_is_domain)
             .exec(&mut self.database)
             .await
             .map_err(Into::<anyhow::Error>::into)?;
@@ -866,7 +866,7 @@ pub async fn new_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut Re
                 &body.response_types,
                 &body.token_endpoint_auth_method,
                 &body.default_scopes,
-               body.aud_is_domain.unwrap_or(true),
+                body.aud_is_domain.unwrap_or(true),
             )
             .await
         {
@@ -1152,7 +1152,7 @@ mod oauth2_client_lifecycle {
             "code",
             "client_secret_post",
             "openid",
-        true,
+            true,
         )
         .await
         .expect("create client-a");
@@ -1165,7 +1165,7 @@ mod oauth2_client_lifecycle {
             "code",
             "client_secret_post",
             "openid",
-        true,
+            true,
         )
         .await
         .expect("client-b shares the callback — G-143");
@@ -1200,7 +1200,7 @@ mod oauth2_client_lifecycle {
             "code",
             "client_secret_post",
             "openid",
-        true,
+            true,
         )
         .await
         .expect("delete+recreate is idempotent over the dead slot");
@@ -1227,7 +1227,7 @@ mod oauth2_client_lifecycle {
                 "code",
                 "client_secret_post",
                 "openid",
-            true,
+                true,
             )
             .await;
         assert!(
@@ -1257,7 +1257,7 @@ mod oauth2_client_lifecycle {
                 "code",
                 "client_secret_post",
                 "openid",
-            true,
+                true,
             )
             .await
             .expect("create");
@@ -1304,7 +1304,7 @@ mod oauth2_client_lifecycle {
                 "code",
                 "client_secret_post",
                 "openid",
-            true,
+                true,
             )
             .await
             .expect("create v1");
@@ -1345,7 +1345,7 @@ mod oauth2_client_lifecycle {
                 "code",
                 "none",
                 "openid",
-            true,
+                true,
             )
             .await
             .expect("create public client");

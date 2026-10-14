@@ -9,7 +9,7 @@
 //! Always returns HTTP 200 with a structured body; only a missing `token`
 //! field is a 400.
 
-use crate::utils::{get_domain, ApiProblem};
+use crate::utils::{ApiProblem, get_domain};
 use base64::Engine;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};

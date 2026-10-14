@@ -158,7 +158,7 @@ impl std::fmt::Display for HttpMethod {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct JwtData {
     /// The user's surrogate key (`User.id`, UUID) as a string — matches
     /// the token `sub`. Stable across renames.
@@ -169,7 +169,20 @@ pub struct JwtData {
     pub domain: String,
     pub mfa: HashSet<String>,
     pub roles: HashSet<String>,
+    /// Token-type marker in the payload: `None` for ordinary sessions;
+    /// `Some(API_KEY_TYP)` for a long-lived API key. Read via
+    /// `TokenPayload::typ()` so `ValidateOpts::reject_typ` can refuse the
+    /// type on session-only flows (refresh, credential mutation). Absent
+    /// from the wire for sessions (`skip_serializing_if`), so existing
+    /// tokens verify unchanged and `serde(default)` keeps them deserializable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typ: Option<String>,
 }
+
+/// The payload `typ` marker stamped on a long-lived API key (see
+/// `apikey::mint`). An API key is a session JWT carrying this marker; every
+/// accept/reject path discriminates on it via `TokenPayload::typ()`.
+pub const API_KEY_TYP: &str = "api_key+jwt";
 
 pub trait TokenPayload {
     fn bound_domain(&self) -> Option<&str>;
@@ -190,7 +203,7 @@ impl TokenPayload for JwtData {
         Some(&self.domain)
     }
     fn typ(&self) -> Option<&str> {
-        None
+        self.typ.as_deref()
     }
     fn jwt_data(&self) -> Option<&JwtData> {
         Some(self)
@@ -325,6 +338,7 @@ impl Tenant {
             mfa: mfa.clone(),
             domain: domain.to_string(),
             roles: HashSet::from_iter(roles.into_iter().map(|a| a.id)),
+            typ: None,
         };
         let jwt = jwt_authenticate(
             issuer,
@@ -345,6 +359,56 @@ impl Tenant {
         crate::ops::token_issued("session");
         Ok(jwt)
     }
+
+    /// Mint a long-lived API key: a session-shaped JWT stamped with
+    /// [`API_KEY_TYP`], carrying the minting session's identity (with `mfa`
+    /// frozen at mint time) and an optional role subset. The caller supplies
+    /// the requested lifetime in seconds; it is clamped into
+    /// [`crate::utils::API_KEY_MIN_LIFETIME_SECS`,
+    /// `crate::utils::API_KEY_MAX_LIFETIME_SECS`] and the EFFECTIVE value is
+    /// returned alongside the token so the handler can echo it as
+    /// `expires_in`. Signing uses the domain's current key, exactly like a
+    /// session; `amr`/`acr` are left unset (an API key is not an OIDC token
+    /// presented to a relying party).
+    pub async fn mint_api_key(
+        &mut self,
+        issuer: &str,
+        domain: &str,
+        session: &JwtData,
+        requested_secs: Option<i64>,
+        roles: HashSet<String>,
+    ) -> Result<(String, i64)> {
+        let secs = crate::utils::clamp_api_key_lifetime_secs(requested_secs);
+        let minutes = (secs / 60) as i32;
+        let ekey = self.current_key(domain)?;
+        let data = JwtData {
+            user: session.user.clone(),
+            username: session.username.clone(),
+            domain: domain.to_string(),
+            mfa: session.mfa.clone(),
+            roles,
+            typ: Some(API_KEY_TYP.to_string()),
+        };
+        let jwt = jwt_authenticate(
+            issuer,
+            &data.user,
+            &data,
+            &ekey,
+            minutes,
+            JwtOidcParams {
+                client_id: domain.to_string(),
+                nonce: Some(uuid::Uuid::new_v4().to_string()),
+                amr: None,
+                acr: None,
+                access_token: None,
+                // Mint time; inert for an API key (it cannot refresh and is
+                // refused on session-only flows).
+                auth_time: None,
+            },
+        )?;
+        crate::ops::token_issued("api_key");
+        Ok((jwt, secs))
+    }
     pub async fn refresh_jwt(
         &mut self,
         issuer: &str,
@@ -352,12 +416,20 @@ impl Tenant {
         jwt: &str,
         minutes: i32,
     ) -> Result<String> {
+        // API keys live until `exp` or explicit revoke — they are NOT
+        // refreshed. `reject_typ` refuses the marker here so a stolen or
+        // long-lived API key can never enter the rotation chain (and the
+        // `Revoked` arm below won't poison an interactive session family on
+        // its behalf — a `TypeMismatch` is a plain refusal, not a replay).
         let decision = match crate::utils::validate_token::<JwtData>(
             self,
             issuer,
             domain,
             jwt,
-            crate::utils::ValidateOpts::default(),
+            crate::utils::ValidateOpts {
+                reject_typ: Some(API_KEY_TYP),
+                ..Default::default()
+            },
         )
         .await
         {
@@ -1153,51 +1225,48 @@ pub async fn export_jwks(data_dir: &Path, domain: Option<&str>) -> Result<()> {
 
     let tenant_names: Vec<String> = match domain {
         Some(dom) => {
-            let tenant = storage
-                 .tenant_by_domain(dom)
-                 .ok_or_else(|| {
-                    anyhow::anyhow!(
-                         "domain '{}' is not registered to any tenant in '{}'",
-                        dom,
-                        data_dir.display()
-                    )
-                 })?;
+            let tenant = storage.tenant_by_domain(dom).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "domain '{}' is not registered to any tenant in '{}'",
+                    dom,
+                    data_dir.display()
+                )
+            })?;
             eprintln!(
-                 "Exporting the JWKS of tenant '{}' (owner of domain '{}').",
-                tenant.name,
-                dom
-             );
+                "Exporting the JWKS of tenant '{}' (owner of domain '{}').",
+                tenant.name, dom
+            );
             vec![tenant.name.clone()]
-         }
+        }
         None => {
             eprintln!(
-                 "WARNING: no domain given - exporting the JWKS of EVERY tenant in \
+                "WARNING: no domain given - exporting the JWKS of EVERY tenant in \
                  '{}'. A combined multi-tenant set mixes key namespaces (a key \\`kid\\` \
                  is unique within a tenant, not globally); do not point a single-tenant \
                  verifier at it. Pass a domain name to export one tenant's set instead.",
                 data_dir.display()
-             );
+            );
             storage.all_tenants().await?
-         }
-     };
+        }
+    };
 
     let mut jwk_set = jsonwebtoken::jwk::JwkSet { keys: Vec::new() };
     let mut key_count = 0usize;
     for name in tenant_names {
         let Some(mut tenant) = storage.tenant_by_id(&name) else {
             continue;
-         };
+        };
         let built = tenant.build_jwks().await?;
         key_count += built.keys.len();
         jwk_set.keys.extend(built.keys);
-     }
+    }
 
     if key_count == 0 {
         anyhow::bail!(
-             "no signing keys found to export in data dir '{}'; create one first",
+            "no signing keys found to export in data dir '{}'; create one first",
             data_dir.display()
-         );
-     }
+        );
+    }
 
     let json = serde_json::to_string_pretty(&jwk_set)?;
     println!("{json}");
@@ -1394,6 +1463,7 @@ mod tests {
             domain: DOMAIN.into(),
             mfa: HashSet::new(),
             roles: HashSet::new(),
+            typ: None,
         };
         let token = crate::jwt::jwt_authenticate(
             TEST_ISSUER,
@@ -1438,6 +1508,7 @@ mod tests {
             domain: DOMAIN.into(),
             mfa: HashSet::new(),
             roles: HashSet::new(),
+            typ: None,
         };
         let token = crate::jwt::jwt_authenticate(
             TEST_ISSUER,
@@ -1675,6 +1746,7 @@ mod tests {
             domain: DOMAIN.to_string(),
             mfa: HashSet::new(),
             roles: roles.iter().map(|s| s.to_string()).collect(),
+            typ: None,
         })
     }
 
@@ -2556,6 +2628,7 @@ mod tests {
                     domain: DOMAIN.into(),
                     mfa: HashSet::new(),
                     roles: HashSet::new(),
+                    typ: None,
                 },
                 &key,
                 15,
@@ -3196,6 +3269,211 @@ mod tests {
         assert!(
             err.to_string().contains("already exists"),
             "duplicate tenant must report 'already exists', got: {err}"
+        );
+    }
+
+    // ── Long-lived API keys ────────────────────────────────────────────────
+    //
+    // An API key is a session-shaped JWT carrying `typ = API_KEY_TYP`, minted
+    // from a live session. It must verify like a session but be refused on
+    // refresh (no self-extension) and honored on revocation (no separate
+    // registry — the full string is blacklisted, like any token).
+
+    /// A minted API key carries the marker, a NARROWED role set, and the
+    /// session's `mfa` frozen at mint time.
+    #[tokio::test]
+    async fn api_key_mint_carries_typ_and_subset_roles() {
+        let (storage, _tmp) = refresh_test_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let alice = tenant.user("alice").await.expect("alice");
+        let session = JwtData {
+            user: alice.id.to_string(),
+            username: "alice".into(),
+            domain: DOMAIN.into(),
+            mfa: HashSet::from(["email".to_string()]),
+            roles: HashSet::from(["user".to_string(), "admin".to_string()]),
+            typ: None,
+        };
+        let (jwt, secs) = tenant
+            .mint_api_key(
+                TEST_ISSUER,
+                DOMAIN,
+                &session,
+                None,
+                HashSet::from(["user".to_string()]),
+            )
+            .await
+            .expect("mint");
+        assert_eq!(
+            secs,
+            crate::utils::API_KEY_MIN_LIFETIME_SECS,
+            "an omitted lifetime takes the 1-hour minimum"
+        );
+
+        let decision = crate::utils::validate_token::<JwtData>(
+            &mut tenant,
+            TEST_ISSUER,
+            DOMAIN,
+            &jwt,
+            crate::utils::ValidateOpts::default(),
+        )
+        .await
+        .expect("an API key verifies like a session");
+        assert_eq!(decision.claims.data.typ.as_deref(), Some(API_KEY_TYP));
+        assert_eq!(
+            decision.claims.data.roles,
+            HashSet::from(["user".to_string()])
+        );
+        assert!(
+            decision.claims.data.mfa.contains("email"),
+            "mfa is frozen from the session"
+        );
+    }
+
+    /// The lifetime band clamps both ways: sub-hour rises to the floor,
+    /// absurd falls to the ceiling, in-band is untouched, omitted takes the
+    /// floor. This is the value the handler echoes as `expires_in`.
+    #[test]
+    fn api_key_lifetime_clamps_into_the_band() {
+        assert_eq!(
+            crate::utils::clamp_api_key_lifetime_secs(Some(300)),
+            crate::utils::API_KEY_MIN_LIFETIME_SECS,
+            "below the floor clamps up"
+        );
+        assert_eq!(
+            crate::utils::clamp_api_key_lifetime_secs(Some(999_999_999)),
+            crate::utils::API_KEY_MAX_LIFETIME_SECS,
+            "above the ceiling clamps down"
+        );
+        assert_eq!(
+            crate::utils::clamp_api_key_lifetime_secs(Some(2_592_000)),
+            2_592_000,
+            "an in-band value is untouched"
+        );
+        assert_eq!(
+            crate::utils::clamp_api_key_lifetime_secs(None),
+            crate::utils::API_KEY_MIN_LIFETIME_SECS,
+            "omitted takes the minimum"
+        );
+    }
+
+    /// An API key is accepted wherever a session is — the marker is
+    /// transparent to a plain (non-`reject_typ`) session-style validation.
+    #[tokio::test]
+    async fn api_key_is_accepted_as_a_session() {
+        let (storage, _tmp) = refresh_test_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let alice = tenant.user("alice").await.expect("alice");
+        let session = JwtData {
+            user: alice.id.to_string(),
+            username: "alice".into(),
+            domain: DOMAIN.into(),
+            mfa: HashSet::new(),
+            roles: HashSet::from(["user".to_string()]),
+            typ: None,
+        };
+        let (jwt, _) = tenant
+            .mint_api_key(TEST_ISSUER, DOMAIN, &session, None, HashSet::new())
+            .await
+            .expect("mint");
+        let decision = crate::utils::validate_token::<JwtData>(
+            &mut tenant,
+            TEST_ISSUER,
+            DOMAIN,
+            &jwt,
+            crate::utils::ValidateOpts {
+                domain_bound: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("an API key passes session-style validation");
+        assert!(decision.can_access);
+    }
+
+    /// An API key must never enter the refresh chain — `refresh_jwt` refuses
+    /// the marker, so a long-lived token can neither rotate nor extend.
+    #[tokio::test]
+    async fn api_key_is_refused_on_refresh() {
+        let (storage, _tmp) = refresh_test_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let alice = tenant.user("alice").await.expect("alice");
+        let session = JwtData {
+            user: alice.id.to_string(),
+            username: "alice".into(),
+            domain: DOMAIN.into(),
+            mfa: HashSet::new(),
+            roles: HashSet::from(["user".to_string()]),
+            typ: None,
+        };
+        let (jwt, _) = tenant
+            .mint_api_key(TEST_ISSUER, DOMAIN, &session, None, HashSet::new())
+            .await
+            .expect("mint");
+        assert!(
+            tenant
+                .refresh_jwt(TEST_ISSUER, DOMAIN, &jwt, 15)
+                .await
+                .is_err(),
+            "an API key must not rotate"
+        );
+        assert!(
+            matches!(
+                crate::utils::validate_token::<JwtData>(
+                    &mut tenant,
+                    TEST_ISSUER,
+                    DOMAIN,
+                    &jwt,
+                    crate::utils::ValidateOpts {
+                        reject_typ: Some(API_KEY_TYP),
+                        ..Default::default()
+                    },
+                )
+                .await,
+                Err(crate::utils::TokenReject::TypeMismatch)
+            ),
+            "reject_typ must refuse the marker"
+        );
+    }
+
+    /// Revocation (the RFC 7009 / logout path) blacklists the full API-key
+    /// string exactly like any token — no separate registry.
+    #[tokio::test]
+    async fn api_key_revocation_blocks_it() {
+        let (storage, _tmp) = refresh_test_env().await;
+        let mut tenant = storage.tenant_by_domain(DOMAIN).expect("tenant");
+        let alice = tenant.user("alice").await.expect("alice");
+        let session = JwtData {
+            user: alice.id.to_string(),
+            username: "alice".into(),
+            domain: DOMAIN.into(),
+            mfa: HashSet::new(),
+            roles: HashSet::from(["user".to_string()]),
+            typ: None,
+        };
+        let (jwt, _) = tenant
+            .mint_api_key(TEST_ISSUER, DOMAIN, &session, None, HashSet::new())
+            .await
+            .expect("mint");
+        assert!(
+            crate::utils::revoke_token(&mut tenant, &jwt, None, "test revoke")
+                .await
+                .is_ok(),
+            "record the revocation"
+        );
+        assert!(
+            matches!(
+                crate::utils::validate_token::<JwtData>(
+                    &mut tenant,
+                    TEST_ISSUER,
+                    DOMAIN,
+                    &jwt,
+                    crate::utils::ValidateOpts::default(),
+                )
+                .await,
+                Err(crate::utils::TokenReject::Revoked)
+            ),
+            "a revoked API key must fail validation"
         );
     }
 }

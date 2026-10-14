@@ -18,6 +18,7 @@ use std::sync::Mutex;
 #[path = "../common.rs"]
 mod common;
 
+mod apikey_flow;
 pub mod auth_config;
 pub mod fixtures;
 mod host_resolution;

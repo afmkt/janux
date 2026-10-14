@@ -234,7 +234,7 @@ async fn protect_role(
 /// One guard per built-in role; the role is the middleware's identity, not a
 /// parameter, so `router.rs` reads as "attach `protect_admin` to this route".
 macro_rules! role_guard {
-     ($fn:ident, $role:literal) => {
+    ($fn:ident, $role:literal) => {
         #[handler]
         pub async fn $fn(
             req: &mut Request,
@@ -521,6 +521,7 @@ mod tests {
                 domain: "example.com".into(),
                 mfa: HashSet::new(),
                 roles: HashSet::from(["user".to_string()]),
+                typ: None,
             },
             expect_mfa: false,
             domain: "example.com".into(),

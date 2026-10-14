@@ -66,10 +66,7 @@ pub(crate) fn validate_client_uri(uri: &str) -> Result<(), String> {
 }
 
 fn is_loopback_host(host: Option<&str>) -> bool {
-    matches!(
-        host,
-        Some("127.0.0.1" | "localhost" | "[::1]" | "::1")
-    )
+    matches!(host, Some("127.0.0.1" | "localhost" | "[::1]" | "::1"))
 }
 
 /// Grant types a dynamically registered client may request. Machine
@@ -136,10 +133,10 @@ pub(crate) fn validate_dcr_scope(scope: Option<&str>) -> Result<String, String> 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RegisterRequest {
     pub redirect_uris: Vec<String>,
-      /// When `false`, tokens issued to this client use the opaque `client_id`
-      /// as `aud` instead of the resolved tenant domain.  Defaults to `true`
-      /// (domain-based `aud`).
-     #[serde(default)]
+    /// When `false`, tokens issued to this client use the opaque `client_id`
+    /// as `aud` instead of the resolved tenant domain.  Defaults to `true`
+    /// (domain-based `aud`).
+    #[serde(default)]
     pub aud_is_domain: Option<bool>,
     #[serde(default)]
     pub token_endpoint_auth_method: Option<String>,
@@ -160,8 +157,8 @@ pub struct RegisterRequest {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RegisterResponse {
     pub client_id: String,
-     /// Resolved `aud` policy for this client: `true` = domain-based `aud`,
-     /// `false` = opaque `client_id` as `aud`.
+    /// Resolved `aud` policy for this client: `true` = domain-based `aud`,
+    /// `false` = opaque `client_id` as `aud`.
     pub aud_is_domain: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_secret: Option<String>,
@@ -430,7 +427,7 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
             &validated.response_types.join(" "),
             &validated.auth_method,
             &validated.scope,
-                 body.aud_is_domain.unwrap_or(true),
+            body.aud_is_domain.unwrap_or(true),
         )
         .await
     {
@@ -700,7 +697,7 @@ pub async fn register_update(req: &mut Request, depot: &mut Depot, res: &mut Res
             &validated.auth_method,
             &validated.scope,
             &body.redirect_uris,
-             body.aud_is_domain.unwrap_or(client.aud_is_domain),
+            body.aud_is_domain.unwrap_or(client.aud_is_domain),
         )
         .await
     {
@@ -1569,7 +1566,7 @@ mod tests {
                     "code",
                     "client_secret_basic",
                     "openid",
-                true,
+                    true,
                 )
                 .await
                 .expect("client A");
@@ -1593,7 +1590,7 @@ mod tests {
                     "code",
                     "client_secret_basic",
                     "openid",
-                true,
+                    true,
                 )
                 .await
                 .expect("client B");
@@ -1607,7 +1604,7 @@ mod tests {
                     "code",
                     "client_secret_basic",
                     "openid",
-                true,
+                    true,
                 )
                 .await
                 .expect("client C");
@@ -2165,7 +2162,7 @@ mod tests {
                     "code",
                     "client_secret_basic",
                     "openid",
-                true,
+                    true,
                 )
                 .await
                 .expect("client");

@@ -439,9 +439,9 @@ fn roles_for_machine_scopes(scopes: &[String]) -> std::collections::HashSet<Stri
 fn aud_from_client(client: &OAuth2Client, domain: &str) -> String {
     if client.aud_is_domain {
         domain.to_string()
-     } else {
+    } else {
         client.id.clone()
-     }
+    }
 }
 
 async fn handle_client_credentials(
@@ -532,6 +532,7 @@ async fn handle_client_credentials(
         domain: domain.to_string(),
         mfa: std::collections::HashSet::new(),
         roles,
+        typ: None,
     };
     // G-90: a machine client may request a SHORTER principal lifetime;
     // the 90-day constant is the ceiling (the G-123 kill-chain marker
@@ -3441,7 +3442,12 @@ pub struct RevokeRequest {
 /// the 90-day SCIM principals revocable and introspectable by their own
 /// client — the documented "off switch" (`CLIENT_CREDENTIALS_TOKEN_LIFETIME_
 /// MINUTES`) was a silent no-op without it.
-fn machine_token_belongs_to(data: &serde_json::Value, aud: &str, expected_aud: &str, client_id: &str) -> bool {
+fn machine_token_belongs_to(
+    data: &serde_json::Value,
+    aud: &str,
+    expected_aud: &str,
+    client_id: &str,
+) -> bool {
     data.get("client_id")
         .and_then(|v| v.as_str())
         .unwrap_or("")
@@ -3580,7 +3586,12 @@ pub async fn revoke(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // response must not leak that the token exists (RFC 7009 §2.1). Machine
     // tokens bind through `aud` + the username convention (G-130).
     let token_client_id = data.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
-    let machine_for_caller = machine_token_belongs_to(data, &tkn.claims.aud, &aud_from_client(&client, domain), &client.id);
+    let machine_for_caller = machine_token_belongs_to(
+        data,
+        &tkn.claims.aud,
+        &aud_from_client(&client, domain),
+        &client.id,
+    );
     if tkn.claims.iss != issuer || (token_client_id != client.id.as_str() && !machine_for_caller) {
         revoke_ok(res);
         return;
@@ -3855,7 +3866,12 @@ pub async fn introspect(req: &mut Request, depot: &mut Depot, res: &mut Response
     // was already matched by the validation primitive.) Machine tokens bind
     // through `aud` + the username convention (G-130).
     let token_client_id = data.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
-    let machine_for_caller = machine_token_belongs_to(data, &decision.claims.aud, &aud_from_client(&client, domain), &client.id);
+    let machine_for_caller = machine_token_belongs_to(
+        data,
+        &decision.claims.aud,
+        &aud_from_client(&client, domain),
+        &client.id,
+    );
     if token_client_id != client.id.as_str() && !machine_for_caller {
         introspect_ok(res, IntrospectResponse::default());
         return;
@@ -4712,7 +4728,7 @@ mod tests {
                         "code",
                         "client_secret_post",
                         "openid offline_access",
-                    true,
+                        true,
                     )
                     .await
                     .expect("oauth2 client");
@@ -5028,7 +5044,7 @@ mod tests {
                     "",
                     "client_secret_post",
                     "scim",
-                true,
+                    true,
                 )
                 .await
                 .expect("client");
@@ -5240,7 +5256,7 @@ mod tests {
                     "",
                     "client_secret_post",
                     "scim",
-                true,
+                    true,
                 )
                 .await
                 .expect("client");
@@ -5843,7 +5859,7 @@ mod tests {
                     "",
                     "client_secret_post",
                     "scim",
-                true,
+                    true,
                 )
                 .await
                 .expect("client");
@@ -5916,7 +5932,7 @@ mod tests {
                     "",
                     "client_secret_post",
                     "openid",
-                true,
+                    true,
                 )
                 .await
                 .expect("client");
@@ -5962,7 +5978,7 @@ mod tests {
                     "code",
                     "client_secret_post",
                     "openid scim",
-                true,
+                    true,
                 )
                 .await
                 .expect("client");
@@ -6015,7 +6031,7 @@ mod tests {
                     "",
                     "client_secret_post",
                     "scim",
-                true,
+                    true,
                 )
                 .await
                 .expect("client");
@@ -6165,7 +6181,7 @@ mod tests {
                     "",
                     "none",
                     "",
-                true,
+                    true,
                 )
                 .await
                 .expect("client");
@@ -6923,7 +6939,7 @@ mod tests {
                     "code",
                     "none",
                     "openid",
-                true,
+                    true,
                 )
                 .await
                 .expect("public client");
@@ -7244,7 +7260,7 @@ mod tests {
                     "code",
                     "client_secret_basic",
                     "openid",
-                true,
+                    true,
                 )
                 .await
                 .expect("rp client");
@@ -7290,6 +7306,7 @@ mod tests {
                         domain: "localhost".into(),
                         mfa: std::collections::HashSet::new(),
                         roles: std::collections::HashSet::new(),
+                        typ: None,
                     },
                     &key,
                     15,
@@ -7446,7 +7463,7 @@ mod tests {
                     "token",
                     "client_secret_post",
                     "openid",
-                true,
+                    true,
                 )
                 .await
                 .expect("oauth2 client");

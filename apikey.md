@@ -92,10 +92,12 @@ Reuse `validate_token` / `InvalidJwt`.
 |------------|------------------------|
 | Forward-auth / RBAC (`/api/v1/auth/verify`, policy engine) | **Yes** (treat like a session for role checks) |
 | Built-in role guards (`protect_admin`, `protect_user`, `protect_scim`, …) | **Yes**, if roles in the token match |
-| Session-only flows (`/api/v1/auth/refresh`, credential add/remove, sudo / reauth) | **No** — use `ValidateOpts::reject_typ` (or equivalent) for `"api_key+jwt"` |
+| Credential add/remove (factor add/remove, sudo / reauth) | **Yes** — an API key is a full session for these; same principal, same roles |
+| `/api/v1/auth/refresh` | **No** — `reject_typ` refuses the marker, so a key cannot rotate or extend itself past its `exp` |
+| Self-mint (an API key calling `POST /api/v1/auth/api-key`) | **No** — the `reject_if_apikey` hoop blocks it; a key that could mint a successor would escape its `exp` via an unbounded rotation chain |
 | OIDC `/userinfo`, introspect, etc. | Follow existing token-type rules; do not treat API keys as OIDC access tokens unless explicitly desired |
 
-API keys **must not** participate in internal session refresh chains or session-family poison markers keyed on `auth_time` in a way that confuses them with interactive sessions. Prefer: no `/auth/refresh` for this `typ`; revoke or wait for `exp`.
+API keys **must not** participate in internal session refresh chains or session-family poison markers keyed on `auth_time` in a way that confuses them with interactive sessions. Exactly two self-propagating paths are refused: `/auth/refresh` (via `reject_typ` in `refresh_jwt`) and self-mint (via the `reject_if_apikey` hoop on the `api-key` endpoint). Both exist because a key that could rotate or mint a successor would escape its `exp` and live forever. **Every other path — including credential add/remove — accepts the key like a session**; there is no per-route `typ` gate for them.
 
 ## Revocation
 
@@ -128,14 +130,15 @@ Do not conflate the two issuance paths. API keys are for session holders; `clien
 1. **Payload + `typ`** — ensure minted API-key JWTs expose `typ == "api_key+jwt"` via `TokenPayload::typ()`.
 2. **Handler** — `POST /api/v1/auth/api-key`: session gate, parse body, clamp lifetime, subset-check roles, `jwt_authenticate` (or shared mint helper) with the new lifetime and payload.
 3. **Router** — mount under the existing `/api/v1/auth` tree with the `session` (or equivalent) hoop; rate-limit like other auth writes.
-4. **Reject on session-only routes** — `/auth/refresh`, factor add/remove, sudo-gated mutations must reject `api_key+jwt`.
+4. **Reject only the self-propagating paths** — `/auth/refresh` (in `refresh_jwt`, via `reject_typ`) and self-mint (the `api-key` endpoint's `reject_if_apikey` hoop). Credential add/remove and sudo/reauth **accept** the key like a session; there is deliberately no per-route `typ` gate for those.
 5. **Revoke** — confirm existing revoke/logout accepts and blacklists the full API-key string.
 6. **Tests**
    - Mint with default roles and with a legal subset
    - Reject role escalation
    - Lifetime below min / above max
-   - API key accepted on verify / role guard
+   - API key accepted on verify / role guard / credential add-remove
    - API key rejected on refresh
+   - API key rejected on self-mint
    - Revoke then reject
 7. **OpenAPI / frontend** — regenerate client if the project’s OpenAPI pipeline requires it; admin UI for “create API key” is optional follow-up.
 

@@ -158,13 +158,13 @@ impl Tenant {
     pub async fn build_jwks(&mut self) -> Result<JwkSet> {
         let mut jwk_set = JwkSet { keys: vec![] };
         for key_model in self.all_keys().await? {
-                  // Convert stored PEM public key into a jsonwebtoken JWK
+            // Convert stored PEM public key into a jsonwebtoken JWK
             if let Ok(public_pem) = key_model.public_pem()
-                   && let Ok(jwk) = pem_to_jwk(&public_pem, &key_model.id)
-               {
+                && let Ok(jwk) = pem_to_jwk(&public_pem, &key_model.id)
+            {
                 jwk_set.keys.push(jwk);
-               }
-           }
+            }
+        }
         Ok(jwk_set)
     }
 
@@ -536,10 +536,10 @@ pub async fn jwks_endpoint(req: &mut Request, depot: &mut Depot, res: &mut Respo
     let mut jwk_set = JwkSet { keys: vec![] };
 
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
-           && let Ok(built) = tenant.build_jwks().await
-      {
+        && let Ok(built) = tenant.build_jwks().await
+    {
         jwk_set = built;
-      }
+    }
 
     res.render(Json(jwk_set));
 }
@@ -677,6 +677,7 @@ mod tests {
                         roles: std::collections::HashSet::from([
                             $($role.to_string()),*
                         ]),
+                        typ: None,
                     },
                     expect_mfa: false,
                     domain: DOMAIN_A.to_string(),
@@ -940,6 +941,7 @@ mod tests {
                 domain: DOMAIN_A.into(),
                 mfa: std::collections::HashSet::new(),
                 roles: std::collections::HashSet::new(),
+                typ: None,
             },
             &k1,
             15,
@@ -1010,34 +1012,36 @@ mod tests {
             "b1 is now the last signable key"
         );
     }
-     /// G-97 export contract: `build_jwks` publishes EVERY key of the
-     /// domain's tenant - retired keys included (they must keep verifying
-     /// outstanding tokens until deleted) - and exposes public material
-     /// only (no private key surface can leak through the verifier input).
+    /// G-97 export contract: `build_jwks` publishes EVERY key of the
+    /// domain's tenant - retired keys included (they must keep verifying
+    /// outstanding tokens until deleted) - and exposes public material
+    /// only (no private key surface can leak through the verifier input).
     #[tokio::test]
     async fn build_jwks_publishes_every_key_including_retired() {
         let (state, _tmp) = key_test_env().await;
-        let mut tenant = state.storage
-             .tenant_by_domain(DOMAIN_A)
-             .expect("DOMAIN_A tenant");
+        let mut tenant = state
+            .storage
+            .tenant_by_domain(DOMAIN_A)
+            .expect("DOMAIN_A tenant");
         tenant.key_create(DOMAIN_A, "k1").await.expect("k1");
         tenant.key_create(DOMAIN_A, "k2").await.expect("k2");
         tenant.key_retire("k1").await.expect("retire k1");
 
         let set = tenant.build_jwks().await.expect("build jwks");
         let mut kids: Vec<&str> = set
-             .keys
-             .iter()
-             .map(|k| k.common.key_id.as_deref().unwrap_or(""))
-             .collect();
+            .keys
+            .iter()
+            .map(|k| k.common.key_id.as_deref().unwrap_or(""))
+            .collect();
         kids.sort();
         assert_eq!(kids, ["k1", "k2"], "retired keys stay in the export");
 
         // No private material: a JWK carries only the public `n`/`e`; the
         // serialized set must never contain a private exponent (`d`).
         let json = serde_json::to_string(&set).expect("serialize jwks");
-        assert!(!json.contains("\"d\":"),
-             "the export must expose public keys only: {json}");
+        assert!(
+            !json.contains("\"d\":"),
+            "the export must expose public keys only: {json}"
+        );
     }
-
 }

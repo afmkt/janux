@@ -48,6 +48,8 @@ pub mod utils;
 pub mod admin;
 #[path = "aliclient.rs"]
 pub mod aliclient;
+#[path = "apikey.rs"]
+pub mod apikey;
 #[path = "audit.rs"]
 pub mod audit;
 #[path = "config.rs"]

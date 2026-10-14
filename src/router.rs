@@ -224,6 +224,16 @@ pub fn api(disable_rate_limits: bool) -> Router {
                         .hoop(crate::audit::audit)
                         .post(crate::totp::verify)
                         .get(crate::totp::verify),
+                )
+                .push(
+                    // Long-lived API key: session-gated, but an API key may
+                    // NOT mint one — `reject_if_apikey` refuses it, so a leaked
+                    // key cannot grow a delegation chain. Rate-limited and
+                    // audited like the other auth writes.
+                    Router::with_path("api-key")
+                        .hoop(crate::apikey::reject_if_apikey)
+                        .hoop(crate::audit::audit)
+                        .post(crate::apikey::mint),
                 ),
         )
         .push(

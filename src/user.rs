@@ -318,7 +318,7 @@ impl Tenant {
         let new_name = new_name.to_lowercase();
         if new_name != user.name {
             anyhow::ensure!(!new_name.is_empty(), "user name must not be empty");
-        if self.user(&new_name).await.is_ok() {
+            if self.user(&new_name).await.is_ok() {
                 return Err(anyhow::anyhow!("user name '{new_name}' already exists"));
             }
             User::update_by_id(user.id)
@@ -1074,6 +1074,7 @@ mod tests {
                 domain: DOMAIN.to_string(),
                 mfa: HashSet::new(),
                 roles: HashSet::new(),
+                typ: None,
             },
             expect_mfa: false,
             domain: DOMAIN.to_string(),
@@ -1238,6 +1239,7 @@ mod tests {
                         domain: DOMAIN.to_string(),
                         mfa: HashSet::new(),
                         roles: HashSet::from([$($role.to_string()),+]),
+                        typ: None,
                     },
                     expect_mfa: false,
                     domain: DOMAIN.to_string(),
@@ -1880,6 +1882,7 @@ mod tests {
             domain: DOMAIN.to_string(),
             mfa: HashSet::new(),
             roles: HashSet::new(),
+            typ: None,
         });
         assert!(
             tenant

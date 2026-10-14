@@ -145,6 +145,7 @@ fn test_jwt_data_with_multiple_roles() {
             .iter()
             .map(|s| s.to_string())
             .collect(),
+        typ: None,
     };
 
     assert_eq!(jwt.user, "admin@example.com");
@@ -161,6 +162,7 @@ fn test_jwt_data_empty_mfa() {
         domain: "example.com".to_string(),
         mfa: HashSet::new(),
         roles: ["user"].iter().map(|s| s.to_string()).collect(),
+        typ: None,
     };
 
     assert!(jwt.mfa.is_empty());
@@ -178,6 +180,7 @@ fn test_jwt_verify_data_complete() {
             domain: "example.com".into(),
             mfa: ["pwd", "totp"].iter().map(|s| s.to_string()).collect(),
             roles: ["admin"].iter().map(|s| s.to_string()).collect(),
+            typ: None,
         },
         expect_mfa: false,
         domain: "example.com".to_string(),
@@ -199,6 +202,7 @@ fn test_jwt_verify_expect_mfa_flag() {
             domain: "example.com".into(),
             mfa: ["pwd"].iter().map(|s| s.to_string()).collect(),
             roles: HashSet::new(),
+            typ: None,
         },
         expect_mfa: true,
         domain: "example.com".to_string(),

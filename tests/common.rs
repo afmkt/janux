@@ -332,7 +332,7 @@ fn spawn_server(config_path: &std::path::Path) -> Result<Child, String> {
             .map_err(|e| format!("Failed to build janux: {e}"))?;
     }
 
-        // Forward the child's output to a temp file so server
+    // Forward the child's output to a temp file so server
     // startup failures are diagnosable.  A real file (instead
     // of Stdio::piped()) avoids the OS pipe-buffer cap that
     // previously blocked the janux subprocess on a full pipe,
@@ -342,31 +342,25 @@ fn spawn_server(config_path: &std::path::Path) -> Result<Child, String> {
         .create(true)
         .write(true)
         .truncate(true)
-        .open(format!(
-            "/tmp/janux-test-{}.out",
-            tag
-        ))
-        .unwrap_or_else(|_|
+        .open(format!("/tmp/janux-test-{}.out", tag))
+        .unwrap_or_else(|_| {
             std::fs::OpenOptions::new()
                 .append(true)
                 .create(true)
                 .open("/tmp/janux-server.out")
                 .unwrap()
-        );
+        });
     let err_file = std::fs::OpenOptions::new()
         .append(true)
         .create(true)
-        .open(format!(
-            "/tmp/janux-test-{}.err",
-            tag
-        ))
-        .unwrap_or_else(|_|
+        .open(format!("/tmp/janux-test-{}.err", tag))
+        .unwrap_or_else(|_| {
             std::fs::OpenOptions::new()
                 .append(true)
                 .create(true)
                 .open("/tmp/janux-server.err")
                 .unwrap()
-        );
+        });
     let child = std::process::Command::new("./target/debug/janux")
         .args(["--config", config_path.to_str().unwrap()])
         .stdin(Stdio::null())
@@ -377,7 +371,8 @@ fn spawn_server(config_path: &std::path::Path) -> Result<Child, String> {
 
     println!(
         "janux-test: server started (log tag {}) {}",
-        tag, config_path.display()
+        tag,
+        config_path.display()
     );
     Ok(child)
 }
@@ -445,6 +440,10 @@ endpoint = "dysmsapi.aliyuncs.com"
         r#"data_dir = "{data_dir}"
 encryption_key = "{encryption_key}"
 trust_forwarded_headers = {trust_forwarded_headers}
+# Test-only knob: widen the per-IP quotas so the single-IP shared-server
+# suite does not 429 itself as it exercises the auth subtree (the
+# rate-limiter is still wired and reachable, just not tripped by the run).
+disable_rate_limits = true
 
 [bind]
 address = "127.0.0.1"
