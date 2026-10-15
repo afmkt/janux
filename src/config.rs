@@ -305,6 +305,248 @@ impl OTPDTO {
     }
 }
 
+// ── Mailer backends (G-mailer) ──────────────────────────────────────────────
+// The email factor is delivered through one of three pluggable backends
+// selected by `crate::mailer::build_mailer`: Resend (the existing SaaS path),
+// Zonemail (the self-hosted DNS+SMTP stack, by afmkt), and a built-in SMTP
+// relay fallback. Each backend is a self-contained config DTO mirroring the
+// ResendDTO / OTPDTO pattern; `mail.backend` forces one, else the first
+// configured wins (resend -> zonemail -> smtp).
+
+/// Outbound SMTP transport security for the built-in relay fallback, mirroring
+/// Zonemail's `[outbound]` table. Defaults to `Required` (STARTTLS on the
+/// submission port) — the secure posture for an auth server that ships magic
+/// links; a local/dev relay that speaks no TLS sets `tls = "plain"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SmtpTls {
+    /// Clear text, no TLS. Dev/localhost relays only — never for production.
+    Plain,
+    /// STARTTLS if the peer advertises it, else clear text. MITM-risky.
+    Opportunistic,
+    #[default]
+    /// STARTTLS is mandatory; a non-TLS peer fails the send (MITM-safe).
+    Required,
+    /// Implicit TLS from connect (SMTPS, conventionally :465).
+    Implicit,
+}
+
+impl SmtpTls {
+    pub fn parse(name: &str) -> Option<SmtpTls> {
+        Some(match name.trim().to_ascii_lowercase().as_str() {
+            "plain" => SmtpTls::Plain,
+            "opportunistic" => SmtpTls::Opportunistic,
+            "required" => SmtpTls::Required,
+            "implicit" => SmtpTls::Implicit,
+            _ => return None,
+        })
+    }
+}
+
+impl std::fmt::Display for SmtpTls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SmtpTls::Plain => "plain",
+            SmtpTls::Opportunistic => "opportunistic",
+            SmtpTls::Required => "required",
+            SmtpTls::Implicit => "implicit",
+        })
+    }
+}
+
+/// The Zonemail backend: a self-hosted DNS+SMTP stack
+/// (github.com/afmkt/zonemail). Janux POSTs `/{base_url}/mail`, which enqueues
+/// a durable delivery job — the fast, non-blocking path. Its wire contract is
+/// janux's own `{ ok, data }` envelope, so parsing is trivial.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ZonemailDTO {
+    pub base_url: String,
+    pub from: String,
+    pub template: String,
+    pub verify_url: String,
+    /// Bearer token presented when Zonemail's API auth is enabled. Absent by
+    /// default (the Zonemail API is open unless `auth.enabled` is flipped).
+    #[serde(default)]
+    pub api_token: Option<String>,
+}
+
+const ZONEMAIL_BASE_URL: &str = "zonemail.base_url";
+pub const ZONEMAIL_API_TOKEN: &str = "zonemail.api_token";
+const ZONEMAIL_FROM: &str = "zonemail.from";
+const ZONEMAIL_TEMPLATE: &str = "zonemail.template";
+const ZONEMAIL_VERIFY_URL: &str = "zonemail.verify_url";
+
+impl ZonemailDTO {
+    pub async fn load(tenant: &mut Tenant) -> Option<Self> {
+        let base_url = tenant.config_get(ZONEMAIL_BASE_URL).await?;
+        let from = tenant.config_get(ZONEMAIL_FROM).await?;
+        let template = tenant.config_get(ZONEMAIL_TEMPLATE).await?;
+        let verify_url = tenant.config_get(ZONEMAIL_VERIFY_URL).await?;
+        // Optional bearer — a send-capable credential, encrypted at rest like
+        // the Resend key, with the legacy fallback for pre-encryption values.
+        let api_token = tenant.config_get(ZONEMAIL_API_TOKEN).await.and_then(|v| {
+            v.as_str()
+                .map(|s| crate::crypto::decrypt_secret_or_legacy(s))
+        });
+        Some(Self {
+            base_url: base_url.as_str()?.to_string(),
+            from: from.as_str()?.to_string(),
+            template: template.as_str()?.to_string(),
+            verify_url: verify_url.as_str()?.to_string(),
+            api_token,
+        })
+    }
+    pub async fn save(&self, tenant: &mut Tenant) -> Result<()> {
+        tenant
+            .config_set(ZONEMAIL_BASE_URL, serde_json::json!(&self.base_url))
+            .await?;
+        tenant
+            .config_set(ZONEMAIL_FROM, serde_json::json!(&self.from))
+            .await?;
+        tenant
+            .config_set(ZONEMAIL_TEMPLATE, serde_json::json!(&self.template))
+            .await?;
+        tenant
+            .config_set(ZONEMAIL_VERIFY_URL, serde_json::json!(&self.verify_url))
+            .await?;
+        if let Some(token) = &self.api_token {
+            tenant
+                .config_set(
+                    ZONEMAIL_API_TOKEN,
+                    serde_json::json!(crate::crypto::encrypt_secret(token)?),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+/// The built-in fallback: a relay-only SMTP client (`lettre`). It hands the
+/// message to an operator-configured `host:port` (optionally authenticated),
+/// never to a recipient's MX — MX resolution + delivery reputation belong to a
+/// Zonemail instance, not to an auth server.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SmtpRelayDTO {
+    pub host: String,
+    #[serde(default = "default_smtp_port")]
+    pub port: u16,
+    pub from: String,
+    pub template: String,
+    pub verify_url: String,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub tls: SmtpTls,
+    /// Accept certificates that fail verification — a dev/localhost relay only.
+    #[serde(default)]
+    pub insecure: bool,
+}
+
+fn default_smtp_port() -> u16 {
+    587
+}
+
+const SMTP_HOST: &str = "smtp.host";
+const SMTP_PORT: &str = "smtp.port";
+const SMTP_FROM: &str = "smtp.from";
+const SMTP_TEMPLATE: &str = "smtp.template";
+const SMTP_VERIFY_URL: &str = "smtp.verify_url";
+const SMTP_USER: &str = "smtp.user";
+const SMTP_PASSWORD: &str = "smtp.password";
+const SMTP_TLS: &str = "smtp.tls";
+const SMTP_INSECURE: &str = "smtp.insecure";
+
+/// Selects a single mailer backend explicitly (overriding the priority
+/// fallback). One of `"resend"`, `"zonemail"`, `"smtp"`.
+pub const MAIL_BACKEND: &str = "mail.backend";
+
+impl SmtpRelayDTO {
+    pub async fn load(tenant: &mut Tenant) -> Option<Self> {
+        // `host` is the presence signal — a relay configured without a host
+        // is not configured at all.
+        let host = tenant.config_get(SMTP_HOST).await?;
+        let port = tenant
+            .config_get(SMTP_PORT)
+            .await
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u16)
+            .unwrap_or_else(default_smtp_port);
+        let from = tenant.config_get(SMTP_FROM).await?;
+        let template = tenant.config_get(SMTP_TEMPLATE).await?;
+        let verify_url = tenant.config_get(SMTP_VERIFY_URL).await?;
+        let user = tenant
+            .config_get(SMTP_USER)
+            .await
+            .and_then(|v| v.as_str().map(str::to_string));
+        // Send-capable credential, encrypted at rest with the legacy fallback.
+        let password = tenant.config_get(SMTP_PASSWORD).await.and_then(|v| {
+            v.as_str()
+                .map(|s| crate::crypto::decrypt_secret_or_legacy(s))
+        });
+        let tls = match tenant.config_get(SMTP_TLS).await {
+            Some(v) => v.as_str().and_then(SmtpTls::parse).unwrap_or_default(),
+            None => SmtpTls::default(),
+        };
+        let insecure = tenant
+            .config_get(SMTP_INSECURE)
+            .await
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        Some(Self {
+            host: host.as_str()?.to_string(),
+            port,
+            from: from.as_str()?.to_string(),
+            template: template.as_str()?.to_string(),
+            verify_url: verify_url.as_str()?.to_string(),
+            user,
+            password,
+            tls,
+            insecure,
+        })
+    }
+    pub async fn save(&self, tenant: &mut Tenant) -> Result<()> {
+        tenant
+            .config_set(SMTP_HOST, serde_json::json!(&self.host))
+            .await?;
+        tenant
+            .config_set(SMTP_PORT, serde_json::json!(&self.port))
+            .await?;
+        tenant
+            .config_set(SMTP_FROM, serde_json::json!(&self.from))
+            .await?;
+        tenant
+            .config_set(SMTP_TEMPLATE, serde_json::json!(&self.template))
+            .await?;
+        tenant
+            .config_set(SMTP_VERIFY_URL, serde_json::json!(&self.verify_url))
+            .await?;
+        if let Some(user) = &self.user {
+            tenant
+                .config_set(SMTP_USER, serde_json::json!(user))
+                .await?;
+        }
+        if let Some(password) = &self.password {
+            tenant
+                .config_set(
+                    SMTP_PASSWORD,
+                    serde_json::json!(crate::crypto::encrypt_secret(password)?),
+                )
+                .await?;
+        }
+        tenant
+            .config_set(SMTP_TLS, serde_json::json!(&self.tls.to_string()))
+            .await?;
+        if self.insecure {
+            tenant
+                .config_set(SMTP_INSECURE, serde_json::json!(&self.insecure))
+                .await?;
+        }
+        Ok(())
+    }
+}
+
 #[endpoint(
     summary = "List all configuraions in a tenant",
     responses(

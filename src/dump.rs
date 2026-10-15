@@ -231,14 +231,40 @@ pub struct TenantConfig {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MailEntry {
-    pub from: String,
+pub struct SmtpMailEntry {
+    pub host: String,
+    pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
     /// Decrypted when `--secrets` is set; otherwise [`REDACTED`].
-    pub resend_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    pub tls: String,
+    pub insecure: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MailEntry {
+    /// The selected backend: "resend", "zonemail", or "smtp". Only that
+    /// backend's transport fields are populated.
+    pub backend: String,
+    pub from: String,
     pub template: String,
     pub verify_url: String,
+    /// Resend: the API key, encrypted at rest; decrypted when `--secrets`
+    /// is set, otherwise [`REDACTED`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resend_key: Option<String>,
+    /// API base URL: Resend's optional override, or Zonemail's API URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Zonemail: bearer token when its API auth is enabled; encrypted at
+    /// rest, gated like the Resend key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_token: Option<String>,
+    /// SMTP relay: the relay transport config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smtp: Option<SmtpMailEntry>,
     pub status: Class,
 }
 
@@ -468,17 +494,58 @@ async fn build_tenant_config(
 
 // ─── Tenant-level loaders ─────────────────────────────────────────────────
 
-/// Load the tenant's Resend (mail) config, if any.
+/// Load the tenant's mail config, if any. Reports the *first configured*
+/// backend in the same priority order `build_mailer` uses
+/// (resend → zonemail → smtp); only that backend's transport fields are
+/// populated.
 async fn load_mail(tenant: &mut crate::db::Tenant, secrets: bool) -> Option<MailEntry> {
-    let dto = ResendDTO::load(tenant).await?;
-    Some(MailEntry {
-        from: dto.from,
-        resend_key: redacted_or(dto.resend_key, secrets),
-        template: dto.template,
-        verify_url: dto.verify_url,
-        base_url: dto.base_url,
-        status: Class::Portable,
-    })
+    if let Some(dto) = ResendDTO::load(tenant).await {
+        return Some(MailEntry {
+            backend: "resend".to_string(),
+            from: dto.from,
+            resend_key: Some(redacted_or(dto.resend_key, secrets)),
+            template: dto.template,
+            verify_url: dto.verify_url,
+            base_url: dto.base_url,
+            api_token: None,
+            smtp: None,
+            status: Class::Portable,
+        });
+    }
+    if let Some(dto) = crate::config::ZonemailDTO::load(tenant).await {
+        return Some(MailEntry {
+            backend: "zonemail".to_string(),
+            from: dto.from,
+            resend_key: None,
+            template: dto.template,
+            verify_url: dto.verify_url,
+            base_url: Some(dto.base_url),
+            api_token: dto.api_token.map(|t| redacted_or(t, secrets)),
+            smtp: None,
+            status: Class::Portable,
+        });
+    }
+    if let Some(dto) = crate::config::SmtpRelayDTO::load(tenant).await {
+        return Some(MailEntry {
+            backend: "smtp".to_string(),
+            from: dto.from,
+            resend_key: None,
+            template: dto.template,
+            verify_url: dto.verify_url,
+            base_url: None,
+            api_token: None,
+            smtp: Some(SmtpMailEntry {
+                host: dto.host,
+                port: dto.port,
+                user: dto.user,
+                password: dto.password.map(|p| redacted_or(p, secrets)),
+                tls: dto.tls.to_string(),
+                insecure: dto.insecure,
+            }),
+            status: Class::Portable,
+        });
+    }
+    None
 }
 
 /// Load the tenant's SMS (OTP) config, if any.

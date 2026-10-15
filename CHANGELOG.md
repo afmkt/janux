@@ -1,0 +1,35 @@
+# Changelog
+
+All notable changes to Janux. The format follows [Keep a Changelog](https://keepachangelog.com/).
+
+## [Unreleased]
+
+### Added
+- **Mailer abstraction** (`src/mailer.rs`): email delivery is now behind a
+  `Mailer` trait with three backends, so a self-hosted Janux no longer depends
+  on the Resend SaaS.
+  - `Resend` — the existing `resend-rs` path (unchanged behaviour).
+  - `Zonemail` — a self-hosted DNS+SMTP stack
+    ([`github.com/afmkt/zonemail`](https://github.com/afmkt/zonemail)); Janux
+    calls its `POST /mail` (a janux-style `{ ok, data }` envelope).
+  - `SmtpRelay` — a built-in `lettre` relay client (STARTTLS by default; the
+    lightest self-hosted option, no second process).
+- **Config** (`src/config.rs`): per-backend DTOs — `[seed.zonemail]`
+  (`base_url`, `from`, `api_token`) and `[seed.smtp]` (`host`, `port`, `from`,
+  `user`, `password`, `tls`, `insecure`) — plus an optional `mail.backend`
+  selector. Send-capable secrets (`zonemail.api_token`, `smtp.password`) are
+  encrypted at rest like `resend_key`.
+- **Selection**: the email factor turns on with *any* configured backend.
+  Without an explicit `mail.backend`, the first configured backend wins by
+  fixed priority `resend → zonemail → smtp`. An existing tenant with only
+  `[seed.resend]` keeps using Resend — migration-free.
+- **Dump** (`src/dump.rs`): `[[tenants.mail]]` now reports the active backend
+  and redacts the new secrets unless `--secrets`.
+- **Docs**: `docs/mailer.md` (design, now implemented); `janux-agent/REF.md`
+  seed reference; `examples/*/seed.example.toml` show the Zonemail / SMTP
+  alternatives.
+
+### Changed
+- `Resend` is now **one optional backend**, not a hard dependency. The email
+  magic-link factor is available via Resend **or** Zonemail **or** a built-in
+  SMTP relay.

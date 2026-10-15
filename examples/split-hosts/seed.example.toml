@@ -74,6 +74,35 @@ template = "./email/verify.html"
 # existed, so every emailed link 404'd).
 verify_url = "https://app.example.com/login"
 
+# ── Alternative mail backends ────────────────────────────────────────────────
+# The email factor uses the FIRST configured backend in priority order
+# resend -> zonemail -> smtp, or whichever `mail_backend` names below.
+# Resend (above) is the hosted default; to run self-hosted, comment it out
+# and enable one of these.
+#
+# Zonemail — a self-hosted DNS+SMTP stack (github.com/afmkt/zonemail):
+# [seed.zonemail]
+# base_url = "http://localhost:8787"   # the Zonemail HTTP API
+# from = "noreply@example.com"
+# template = "./email/verify.html"
+# verify_url = "https://app.example.com/login"
+# api_token = "..."                     # only when Zonemail's API auth is on
+#
+# Built-in SMTP relay — hands off to a relay you control (no Zonemail):
+# [seed.smtp]
+# host = "smtp.example.com"
+# port = 587                           # STARTTLS submission port
+# from = "noreply@example.com"
+# template = "./email/verify.html"
+# verify_url = "https://app.example.com/login"
+# user = "you@example.com"             # optional relay auth
+# password = "app-password"
+# tls = "required"                     # plain|opportunistic|required|implicit
+# insecure = false                    # dev only: accept unverified certs
+#
+# Force one backend regardless of priority:
+# mail_backend = "zonemail"
+
 
 [seed.alisms]
 api_secret = "your-sms-api-secret"

@@ -16,6 +16,9 @@ pub mod scim;
 
 #[path = "../email.rs"]
 pub mod email;
+
+#[path = "../mailer.rs"]
+pub mod mailer;
 #[path = "../server.rs"]
 pub mod server;
 #[path = "../verify.rs"]

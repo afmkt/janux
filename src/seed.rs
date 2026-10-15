@@ -1,5 +1,7 @@
 use crate::config::OTPDTO;
 use crate::config::ResendDTO;
+use crate::config::SmtpRelayDTO;
+use crate::config::ZonemailDTO;
 use crate::db::Storage;
 use crate::domain::DomainDTO;
 use crate::policy::PolicyDTO;
@@ -17,7 +19,20 @@ pub struct TenantDTO {
     roles: Vec<String>,
     policies: Vec<PolicyDTO>,
     users: Vec<UserDTO>,
-    resend: ResendDTO,
+    /// Resend SaaS backend (optional — a tenant may use Zonemail or the SMTP
+    /// relay instead, or no mail backend at all).
+    #[serde(default)]
+    resend: Option<ResendDTO>,
+    /// Zonemail self-hosted DNS+SMTP backend (optional).
+    #[serde(default)]
+    zonemail: Option<ZonemailDTO>,
+    /// Built-in SMTP relay backend (optional).
+    #[serde(default)]
+    smtp: Option<SmtpRelayDTO>,
+    /// Forces one mail backend ("resend"/"zonemail"/"smtp"); absent lets the
+    /// priority order pick the first configured.
+    #[serde(default)]
+    mail_backend: Option<String>,
     alisms: OTPDTO,
 }
 
@@ -73,7 +88,20 @@ impl TenantDTO {
         for p in self.policies.iter() {
             p.save(&mut tenant).await?;
         }
-        self.resend.save(&mut tenant).await?;
+        if let Some(resend) = &self.resend {
+            resend.save(&mut tenant).await?;
+        }
+        if let Some(zonemail) = &self.zonemail {
+            zonemail.save(&mut tenant).await?;
+        }
+        if let Some(smtp) = &self.smtp {
+            smtp.save(&mut tenant).await?;
+        }
+        if let Some(backend) = &self.mail_backend {
+            tenant
+                .config_set(crate::config::MAIL_BACKEND, serde_json::json!(backend))
+                .await?;
+        }
         self.alisms.save(&mut tenant).await?;
         Ok(())
     }
@@ -242,7 +270,14 @@ mod tests {
         // G-133: magic links must land on a route that EXISTS — the
         // hosted /login SPA consumes token/username/email from the query.
         // The old /api/v1/auth/email/landing value 404'd out of the box.
-        let verify_url = url::Url::parse(&tenant.resend.verify_url).expect("verify_url must parse");
+        let verify_url = url::Url::parse(
+            &tenant
+                .resend
+                .as_ref()
+                .expect("seed carries a [seed.resend] block")
+                .verify_url,
+        )
+        .expect("verify_url must parse");
         assert_eq!(
             verify_url.path(),
             "/login",

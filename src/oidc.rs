@@ -764,7 +764,7 @@ pub async fn well_known(req: &mut Request, depot: &mut Depot, res: &mut Response
     if provisioned {
         if let Some(mut tenant) = state.storage.tenant_by_domain(&domain) {
             dcr_enabled = tenant.dcr_enabled().await;
-            if crate::config::ResendDTO::load(&mut tenant).await.is_some() {
+            if crate::mailer::build_mailer(&mut tenant).await.is_some() {
                 acr_values.push("email".into());
                 factors.insert(
                     "email".into(),

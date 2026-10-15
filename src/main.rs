@@ -14,6 +14,7 @@ mod idp;
 mod jwt;
 mod jwt_decode;
 mod key;
+mod mailer;
 mod oidc;
 mod oidc_ext;
 mod ops;

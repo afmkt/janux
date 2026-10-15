@@ -59,11 +59,33 @@ Bootstraps tenant state at startup. Idempotent — safe to re-run.
      # see RBAC section below
       ]
 
-    [seed.resend]            # email delivery via Resend (required if
-    from = "no-reply@..."    # enabling email magic-link sign-in)
+    # Email delivery: the email factor turns on with ANY one of the
+    # backends below (priority resend -> zonemail -> smtp; force one
+    # with `mail.backend = "..."`). Resend is OPTIONAL - a self-hoster
+    # uses Zonemail or a built-in SMTP relay instead, no SaaS needed.
+
+    [seed.resend]            # optional: the Resend SaaS
+    from = "no-reply@..."
     resend_key = "re_..."    # RECOVERY-CRITICAL if real
     template = "./email/verify.html"   # optional, Tera template
     verify_url = "http://localhost/login"    # where magic links land
+
+    [seed.zonemail]          # optional: a self-hosted Zonemail stack
+    base_url = "http://localhost:8787"
+    # from = "noreply@..."    # MUST be a provisioned Zonemail mailbox
+    # api_token = "..."       # only when Zonemail's API auth is enabled
+    # template = "./email/verify.html"
+    # verify_url = "http://localhost/login"
+
+    [seed.smtp]             # optional: a built-in SMTP relay (no Zonemail)
+    host = "smtp.example.com"
+    # port = 587            # STARTTLS default
+    from = "noreply@..."
+    # user = "..."          # optional auth
+    # password = "..."      # encrypted at rest, like resend_key
+    # tls = "required"      # plain | opportunistic | required | implicit
+    # template = "./email/verify.html"
+    # verify_url = "http://localhost/login"
 
     [seed.alisms]            # optional, Aliyun SMS delivery
     api_key = "..."
@@ -292,7 +314,8 @@ Two key kinds; **only the encryption key is operator-provided**:
         example key. Process-wide, once-only (`OnceLock`): stable across
         every restart or the data dir won't decrypt.
       - Encrypts at rest: signing-key privates, social/OIDC provider
-        secrets, TOTP secrets, stored Resend/Aliyun credentials.
+        secrets, TOTP secrets, stored Resend/Zonemail/SMTP/Aliyun
+        credentials (Zonemail `api_token`, SMTP `password`).
       - Rotation is a COLD op: stop the server, then
         `janux rekey <new-key>` (old key from config/env, new is the arg;
         upgrades legacy plaintext rows). Then set `encryption_key` to the

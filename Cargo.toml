@@ -45,6 +45,11 @@ rcgen = "0.14.8"
 aes-gcm = "0.10"
 argon2 = "0.5.3"
 prometheus = { version = "0.13", default-features = false }
+# Built-in SMTP relay mail backend (G-mailer): relay-only, relay-agnostic
+# TLS via the operator's `host:port`. The `builder` feature enables
+# `builder_dangerous` (no MX/DNS resolution — we hand to a relay, not a
+# recipient's MX); `tokio1` wires the async transport to the server runtime.
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1", "tokio1-native-tls", "builder"] }
 
 # ─── Windows-only: build OpenSSL from source ────────────────────
 # salvo (tokio-openssl) and webauthn-attestation-ca require OpenSSL on

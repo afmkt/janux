@@ -26,6 +26,8 @@ pub mod jwt;
 pub mod jwt_decode;
 #[path = "key.rs"]
 pub mod key;
+#[path = "mailer.rs"]
+pub mod mailer;
 #[path = "oidc.rs"]
 pub mod oidc;
 #[path = "oidc_ext.rs"]
