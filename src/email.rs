@@ -389,7 +389,7 @@ async fn dispatch_magic_link(
     email: &str,
     token: &str,
     user_name: &str,
-    mailer: &Box<dyn Mailer>,
+    mailer: &dyn Mailer,
     subject: &str,
     content: &str,
 ) -> Result<(), String> {
@@ -494,7 +494,7 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                             &req_request.email,
                             &token,
                             &user_name,
-                            &mailer,
+                            &*mailer,
                             &subject,
                             &content,
                         )

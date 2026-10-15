@@ -386,7 +386,7 @@ impl ZonemailDTO {
         // the Resend key, with the legacy fallback for pre-encryption values.
         let api_token = tenant.config_get(ZONEMAIL_API_TOKEN).await.and_then(|v| {
             v.as_str()
-                .map(|s| crate::crypto::decrypt_secret_or_legacy(s))
+                .map(crate::crypto::decrypt_secret_or_legacy)
         });
         Some(Self {
             base_url: base_url.as_str()?.to_string(),
@@ -483,7 +483,7 @@ impl SmtpRelayDTO {
         // Send-capable credential, encrypted at rest with the legacy fallback.
         let password = tenant.config_get(SMTP_PASSWORD).await.and_then(|v| {
             v.as_str()
-                .map(|s| crate::crypto::decrypt_secret_or_legacy(s))
+                .map(crate::crypto::decrypt_secret_or_legacy)
         });
         let tls = match tenant.config_get(SMTP_TLS).await {
             Some(v) => v.as_str().and_then(SmtpTls::parse).unwrap_or_default(),
