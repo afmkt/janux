@@ -1119,6 +1119,7 @@
         "type": "object"
       },
       "openapi.utils.ApiProblem": {
+        "description": "The RFC 7807-style error body every failure endpoint renders.\n\n`detail` is the human-readable reason. For the security-sensitive\n[`unauthorized`](ApiProblem::unauthorized) /\n[`forbidden`](ApiProblem::forbidden) failures it is exposed to the client\nONLY while the server runs in debug mode ([`crate::ops::debug`]); in\nproduction the field is omitted so a 401/403 reveals *that* a client was\nrefused but never *why* (which token check failed, which role was\nmissing). The other constructors (bad request, validation, conflict, 429,\n500) always carry `detail` — those are client-caused or already\nnon-secret, and surfacing them is standard and helpful.",
         "properties": {
           "detail": {
             "type": [
