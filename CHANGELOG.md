@@ -28,6 +28,14 @@ All notable changes to Janux. The format follows [Keep a Changelog](https://keep
 - **Docs**: `docs/mailer.md` (design, now implemented); `janux-agent/REF.md`
   seed reference; `examples/*/seed.example.toml` show the Zonemail / SMTP
   alternatives.
+- **Debug diagnostics** (`debug` config / `JANUX__debug`): when on, 401/403
+  failure responses carry the full reason in their `detail` field (which token
+  check failed, which role is missing) so a developer sees *why* a request was
+  refused. Off by default in production — the reason stays server-side so a
+  client learns only *that* it was refused, never *why* (the secure,
+  fail-closed behavior). Resolves to `true` under `RUN_ENV=development` (the
+  default) and `false` under `RUN_ENV=production`; set `debug`/`JANUX__debug`
+  to override. A loud boot warning flags a reachable host running with it on.
 
 ### Changed
 - `Resend` is now **one optional backend**, not a hard dependency. The email

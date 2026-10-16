@@ -203,11 +203,10 @@ async fn protect_role(
     ctrl: &mut FlowCtrl,
     role: &str,
 ) {
-    let data = match crate::utils::validate_session(req, depot).await {
-        Some(data) => data,
+    let data = match crate::utils::validate_session_diag(req, depot).await {
+        // No token presented (or no tenant for the host): a bare 401 with no
+        // reason — the generic "no session" case.
         None => {
-            // No usable session: 401. The 403 below is the logged-in-but-
-            // wrong-role case — G-28 keeps the two distinct.
             let err = ApiProblem::unauthorized();
             res.status_code(StatusCode::UNAUTHORIZED);
             res.render(Json(err));
@@ -219,6 +218,22 @@ async fn protect_role(
             );
             return;
         }
+        // A token was presented but rejected (expired / revoked / wrong
+        // issuer / domain / typ): 401 carrying the cause in debug mode.
+        Some(Err(reason)) => {
+            let err = ApiProblem::unauthorized_reason(&reason);
+            res.status_code(StatusCode::UNAUTHORIZED);
+            res.render(Json(err));
+            // RFC 6750 §3.1
+            let _ = res.add_header(
+                "WWW-Authenticate",
+                r#"Bearer error="invalid_token",realm="auth""#,
+                true,
+            );
+            return;
+        }
+        // G-28: a valid session that lacks this role is 403, not 401.
+        Some(Ok(data)) => data,
     };
     // Flat membership — the guard's `role` is the route's grant.
     if data.jwt_data.roles.contains(role) {
@@ -226,9 +241,12 @@ async fn protect_role(
         ctrl.call_next(req, depot, res).await;
         return;
     }
-    // G-28: authenticated but not this role -> 403, not 401.
+    // G-28: authenticated but not this role -> 403, not 401. The reason names
+    // the missing role in debug mode.
     res.status_code(StatusCode::FORBIDDEN);
-    res.render(Json(ApiProblem::forbidden()));
+    res.render(Json(ApiProblem::forbidden_reason(&format!(
+        "session is authenticated but does not hold the '{role}' role"
+    ))));
 }
 
 /// One guard per built-in role; the role is the middleware's identity, not a

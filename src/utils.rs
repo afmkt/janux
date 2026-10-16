@@ -12,6 +12,17 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+/// The RFC 7807-style error body every failure endpoint renders.
+///
+/// `detail` is the human-readable reason. For the security-sensitive
+/// [`unauthorized`](ApiProblem::unauthorized) /
+/// [`forbidden`](ApiProblem::forbidden) failures it is exposed to the client
+/// ONLY while the server runs in debug mode ([`crate::ops::debug`]); in
+/// production the field is omitted so a 401/403 reveals *that* a client was
+/// refused but never *why* (which token check failed, which role was
+/// missing). The other constructors (bad request, validation, conflict, 429,
+/// 500) always carry `detail` — those are client-caused or already
+/// non-secret, and surfacing them is standard and helpful.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ApiProblem {
     pub status: u16,
@@ -22,6 +33,13 @@ pub struct ApiProblem {
 }
 
 impl ApiProblem {
+    /// Expose a failure reason to the client only in debug mode; otherwise the
+    /// reason stays server-side. See the struct docs for why the auth /
+    /// forbidden reasons are gated while the others are not.
+    fn gated(reason: &str) -> Option<String> {
+        crate::ops::debug().then(|| reason.to_string())
+    }
+
     pub fn bad_request(msg: &str) -> Self {
         ApiProblem {
             status: StatusCode::BAD_REQUEST.as_u16(),
@@ -43,11 +61,25 @@ impl ApiProblem {
             detail: Some(detail.into()),
         }
     }
+    /// A bare 401 with no reason attached — the generic "no session" case
+    /// (e.g. a per-handler session gate). In debug mode the reason
+    /// "no valid session" is surfaced; use [`unauthorized_reason`] where the
+    /// specific cause (expired, revoked, wrong domain) is known.
     pub fn unauthorized() -> Self {
         ApiProblem {
             status: StatusCode::UNAUTHORIZED.as_u16(),
             r#type: "unauthorized".into(),
-            detail: None,
+            detail: Self::gated("no valid session"),
+        }
+    }
+    /// A 401 carrying its specific reason (token expired / revoked / wrong
+    /// issuer / domain, or the token was absent). The reason is exposed to the
+    /// client only in debug mode.
+    pub fn unauthorized_reason(reason: &str) -> Self {
+        ApiProblem {
+            status: StatusCode::UNAUTHORIZED.as_u16(),
+            r#type: "unauthorized".into(),
+            detail: Self::gated(reason),
         }
     }
     pub fn too_many_requests(detail: &str) -> Self {
@@ -57,11 +89,25 @@ impl ApiProblem {
             detail: Some(detail.into()),
         }
     }
+    /// A bare 403 with no specific reason attached. In debug mode the neutral
+    /// fallback "access denied" is surfaced (it never claims a *wrong* cause,
+    /// unlike a role-specific reason); use [`forbidden_reason`] where the
+    /// specific cause — a cross-domain key, an API-key caller, an expired
+    /// sudo-mode session — is known.
     pub fn forbidden() -> Self {
         ApiProblem {
             status: StatusCode::FORBIDDEN.as_u16(),
             r#type: "forbidden".into(),
-            detail: None,
+            detail: Self::gated("access denied"),
+        }
+    }
+    /// A 403 carrying its specific reason. Exposed to the client only in
+    /// debug mode.
+    pub fn forbidden_reason(reason: &str) -> Self {
+        ApiProblem {
+            status: StatusCode::FORBIDDEN.as_u16(),
+            r#type: "forbidden".into(),
+            detail: Self::gated(reason),
         }
     }
     pub fn conflict(msg: &str) -> Self {
@@ -999,12 +1045,35 @@ pub async fn validate_jwt_for(
 /// session when the token is cryptographically valid, unrevoked, and bound
 /// to this tenant.
 pub async fn validate_session(req: &Request, depot: &mut Depot) -> Option<JwtVerify> {
+    match validate_session_diag(req, depot).await {
+        Some(Ok(session)) => Some(session),
+        _ => None,
+    }
+}
+
+/// Like [`validate_session`], but distinguishes the two ways a session is
+/// absent so the caller can name the cause:
+///
+/// * `None` — no usable session context at all (no token presented, or no
+///   tenant registered for the request host). The caller renders a bare 401.
+/// * `Some(Ok(session))` — a valid, unrevoked, tenant-bound session.
+/// * `Some(Err(reason))` — a token was presented but rejected (expired,
+///   revoked, wrong issuer/domain, wrong `typ`); `reason` is the human-
+///   readable cause ([`TokenReject`]'s `Display`), surfaced only in debug
+///   mode via [`ApiProblem::unauthorized_reason`].
+pub async fn validate_session_diag(
+    req: &Request,
+    depot: &mut Depot,
+) -> Option<Result<JwtVerify, String>> {
+    // No token at all is the anonymous case: `None`, so the caller renders a
+    // bare 401 rather than a "token invalid" reason for a client that held no
+    // token to begin with.
     let jwt = get_jwt(req)?;
     let state = depot.obtain_mut::<ServerState>().ok()?;
     let domain = get_domain(req, state)?;
     let issuer = get_issuer(req, state)?;
     let mut tenant = state.storage.tenant_by_domain(domain)?;
-    let decision = validate_token::<crate::db::JwtData>(
+    match validate_token::<crate::db::JwtData>(
         &mut tenant,
         &issuer,
         domain,
@@ -1015,8 +1084,10 @@ pub async fn validate_session(req: &Request, depot: &mut Depot) -> Option<JwtVer
         },
     )
     .await
-    .ok()?;
-    Some(jwt_verify_from(decision, domain))
+    {
+        Ok(decision) => Some(Ok(jwt_verify_from(decision, domain))),
+        Err(reject) => Some(Err(reject.to_string())),
+    }
 }
 
 pub async fn refresh_jwt(req: &Request, depot: &mut Depot) -> Option<String> {
@@ -2358,5 +2429,67 @@ mod tests {
         let more = Page::from_rows(vec![1, 2], 1, 0);
         let json = serde_json::to_value(&more).expect("serialize");
         assert_eq!(json["next_offset"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn auth_problem_detail_is_gated_by_debug_mode() {
+        // Save/restore the process-global so the toggle cannot leak into other
+        // tests (the suite is single-threaded, but be safe regardless).
+        let prev = crate::ops::debug();
+
+        // OFF (the production posture): the security-sensitive reasons stay
+        // server-side — a client learns only that it was refused, never why.
+        crate::ops::set_debug(false);
+        assert!(ApiProblem::unauthorized().detail.is_none());
+        assert!(ApiProblem::forbidden().detail.is_none());
+        assert!(
+            ApiProblem::unauthorized_reason("token is revoked").detail.is_none(),
+            "a rejected-token reason must not leak in production"
+        );
+        assert!(
+            ApiProblem::forbidden_reason("missing role 'admin'").detail.is_none(),
+            "a missing-role reason must not leak in production"
+        );
+        // The client-caused / non-secret errors are never gated.
+        assert_eq!(
+            ApiProblem::bad_request("bad body").detail.as_deref(),
+            Some("bad body")
+        );
+        assert_eq!(
+            ApiProblem::validation_error("nope").detail.as_deref(),
+            Some("nope")
+        );
+        assert_eq!(
+            ApiProblem::server_error("boom").detail.as_deref(),
+            Some("boom")
+        );
+        // The wire body omits the `detail` key entirely when off.
+        let json = serde_json::to_value(&ApiProblem::unauthorized()).unwrap();
+        assert!(json.get("detail").is_none(), "off omits detail: {json}");
+
+        // ON (development): every auth/forbidden reason is surfaced.
+        crate::ops::set_debug(true);
+        assert_eq!(
+            ApiProblem::unauthorized().detail.as_deref(),
+            Some("no valid session")
+        );
+        assert_eq!(
+            ApiProblem::unauthorized_reason("token is revoked").detail.as_deref(),
+            Some("token is revoked")
+        );
+        assert_eq!(
+            ApiProblem::forbidden_reason("missing role 'admin'").detail.as_deref(),
+            Some("missing role 'admin'")
+        );
+        // Non-gated errors keep their detail regardless of the flag.
+        assert_eq!(
+            ApiProblem::bad_request("bad body").detail.as_deref(),
+            Some("bad body")
+        );
+        let json =
+            serde_json::to_value(&ApiProblem::unauthorized_reason("token is revoked")).unwrap();
+        assert_eq!(json["detail"], serde_json::json!("token is revoked"));
+
+        crate::ops::set_debug(prev);
     }
 }

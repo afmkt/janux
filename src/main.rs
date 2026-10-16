@@ -342,6 +342,22 @@ async fn main() {
         .await
         .expect("Failed to load server config from database");
 
+    // Install the debug switch before the router is built so every handler
+    // sees it. When on, 401/403 responses carry the full failure reason —
+    // invaluable while developing, so warn loudly: it leaks "which check
+    // failed / which role is missing" to any client and must never stay on a
+    // reachable host.
+    let debug = server_config.debug.unwrap_or(false);
+    crate::ops::set_debug(debug);
+    if debug {
+        tracing::warn!(
+            "debug mode ON: error responses carry the full failure reason in \
+             `detail` (which token check failed, which role is missing). This \
+             leaks information to clients — turn it off (`debug = false`, or \
+             `RUN_ENV=production`) before exposing this port."
+        );
+    }
+
     let disable_rate_limits = server_config.disable_rate_limits;
     let result = server_config
         .run(item_config, move || {

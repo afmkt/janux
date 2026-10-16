@@ -427,7 +427,9 @@ pub async fn retire_key(req: &mut Request, depot: &mut Depot, res: &mut Response
             match Tenant::key(&mut tenant, &body.name).await {
                 Ok(key) if key.domain_id != domain => {
                     res.status_code(StatusCode::FORBIDDEN);
-                    res.render(Json(ApiProblem::forbidden()));
+                    res.render(Json(ApiProblem::forbidden_reason(
+                        "key belongs to another domain",
+                    )));
                     return;
                 }
                 Ok(_) => match tenant.key_retire(&body.name).await {
@@ -475,7 +477,9 @@ pub async fn delete_key(req: &mut Request, depot: &mut Depot, res: &mut Response
             match Tenant::key(&mut tenant, &body.name).await {
                 Ok(key) if key.domain_id != domain => {
                     res.status_code(StatusCode::FORBIDDEN);
-                    res.render(Json(ApiProblem::forbidden()));
+                    res.render(Json(ApiProblem::forbidden_reason(
+                        "key belongs to another domain",
+                    )));
                     return;
                 }
                 Ok(_) => match tenant.key_delete(&body.name).await {

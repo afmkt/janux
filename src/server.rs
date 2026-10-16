@@ -351,6 +351,17 @@ pub struct JanuxConfig {
     /// CPU-spend and enumeration brake on unauthenticated endpoints.
     #[serde(default)]
     pub disable_rate_limits: bool,
+    /// Verbose error diagnostics (see [`crate::ops::debug`]). When `true`,
+    /// 401/403 failure responses carry the full reason in their `detail`
+    /// field (which token check failed, which role was missing); when `false`
+    /// the reason stays server-side so a client learns only *that* it was
+    /// refused. Resolved in [`JanuxConfig::load_from`]: an explicit value
+    /// (TOML `debug =` or `JANUX__debug`) wins; otherwise it follows the run
+    /// environment — `RUN_ENV=development` (the default) enables it, so local
+    /// development gets rich diagnostics by default while a `production`
+    /// deployment stays fail-closed.
+    #[serde(default)]
+    pub debug: Option<bool>,
 }
 
 impl JanuxConfig {
@@ -369,7 +380,15 @@ impl JanuxConfig {
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
             .add_source(Environment::with_prefix("JANUX").separator("__"))
             .build()?;
-        s.try_deserialize()
+        let mut cfg: Self = s.try_deserialize()?;
+        // An explicit `debug =` (TOML) or `JANUX__debug` wins; otherwise the
+        // flag follows the run environment — development (the default) enables
+        // rich diagnostics, production keeps them fail-closed.
+        cfg.debug = Some(
+            cfg.debug
+                .unwrap_or(run_mode.eq_ignore_ascii_case("development")),
+        );
+        Ok(cfg)
     }
 
     pub async fn run<F>(&self, config: VHostConfig, factory: F) -> Result<()>

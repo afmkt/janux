@@ -482,7 +482,9 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     // session, not a merely rotated one.
                     if !crate::verify::session_is_fresh(&session) {
                         crate::verify::mark_reauth_required(res);
-                        res.render(Json(ApiProblem::forbidden()));
+                        res.render(Json(ApiProblem::forbidden_reason(
+                            "session too old; re-authenticate and retry",
+                        )));
                         return;
                     }
                     return register(&domain, &origin, &passkey_req, &all_creds, res).await;

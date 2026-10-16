@@ -381,7 +381,9 @@ pub async fn enroll(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         // freshly AUTHENTICATED session, not a merely rotated one.
         Ok(v) if !crate::verify::session_is_fresh(v) => {
             crate::verify::mark_reauth_required(res);
-            res.render(Json(ApiProblem::forbidden()));
+            res.render(Json(ApiProblem::forbidden_reason(
+                "session too old; re-authenticate and retry",
+            )));
             return;
         }
         Ok(v) => v.jwt_data.username.clone(),

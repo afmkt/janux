@@ -89,7 +89,9 @@ pub async fn reject_if_apikey(
     };
     if is_apikey {
         res.status_code(StatusCode::FORBIDDEN);
-        res.render(Json(ApiProblem::forbidden()));
+        res.render(Json(ApiProblem::forbidden_reason(
+            "API keys cannot mint other API keys",
+        )));
         return;
     }
     ctrl.call_next(req, depot, res).await;

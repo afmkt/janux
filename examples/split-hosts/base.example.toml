@@ -50,6 +50,13 @@ trusted_proxies = ["172.29.0.0/16"]
 # valid "denied" answer too); harmless for direct callers. See ../README.md.
 forward_auth_redirect = true
 
+# Verbose error diagnostics. When ON, 401/403 failure responses carry the full
+# reason in `detail` (which token check failed, which role is missing) — a big
+# help while developing, but it lets a client learn how to defeat a gate, so
+# NEVER leave it on a reachable host. Follows RUN_ENV when unset (ON for
+# development, the default; OFF for production); set explicitly to override:
+# debug = false
+
 [bind]
 address = "0.0.0.0"
 port = 8080

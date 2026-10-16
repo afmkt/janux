@@ -18,6 +18,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::server::ServerState;
 
+// ── Debug mode ──────────────────────────────────────────────────────
+
+/// Deployment-wide switch for verbose error diagnostics.
+///
+/// When ON, an [`ApiProblem`](crate::utils::ApiProblem) failure response
+/// carries the full reason (which token check failed, which role was
+/// missing, a raw 5xx message) in its `detail` field. When OFF (the
+/// production default) the reason stays server-side: a client learns only
+/// *that* it was refused, never *why*, so a 401/403 can't reveal which
+/// check failed or which role was absent.
+///
+/// Set once at boot from `JanuxConfig::debug` (see
+/// [`crate::server::JanuxConfig`]); it is not toggled per request.
+static DEBUG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Enable/disable verbose error diagnostics for the whole process.
+pub fn set_debug(on: bool) {
+    DEBUG.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether verbose error diagnostics are currently on.
+pub fn debug() -> bool {
+    DEBUG.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 // ── Health probes ────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, ToSchema)]
