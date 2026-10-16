@@ -2464,7 +2464,7 @@ mod tests {
             Some("boom")
         );
         // The wire body omits the `detail` key entirely when off.
-        let json = serde_json::to_value(&ApiProblem::unauthorized()).unwrap();
+        let json = serde_json::to_value(ApiProblem::unauthorized()).unwrap();
         assert!(json.get("detail").is_none(), "off omits detail: {json}");
 
         // ON (development): every auth/forbidden reason is surfaced.
@@ -2487,7 +2487,7 @@ mod tests {
             Some("bad body")
         );
         let json =
-            serde_json::to_value(&ApiProblem::unauthorized_reason("token is revoked")).unwrap();
+            serde_json::to_value(ApiProblem::unauthorized_reason("token is revoked")).unwrap();
         assert_eq!(json["detail"], serde_json::json!("token is revoked"));
 
         crate::ops::set_debug(prev);
