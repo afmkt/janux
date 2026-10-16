@@ -456,6 +456,19 @@ export type OpenapiUserRemoveRole = {
     user: string;
 };
 
+/**
+ * The RFC 7807-style error body every failure endpoint renders.
+ *
+ * `detail` is the human-readable reason. For the security-sensitive
+ * [`unauthorized`](ApiProblem::unauthorized) /
+ * [`forbidden`](ApiProblem::forbidden) failures it is exposed to the client
+ * ONLY while the server runs in debug mode ([`crate::ops::debug`]); in
+ * production the field is omitted so a 401/403 reveals *that* a client was
+ * refused but never *why* (which token check failed, which role was
+ * missing). The other constructors (bad request, validation, conflict, 429,
+ * 500) always carry `detail` — those are client-caused or already
+ * non-secret, and surfacing them is standard and helpful.
+ */
 export type OpenapiUtilsApiProblem = {
     detail?: string | null;
     status: number;
