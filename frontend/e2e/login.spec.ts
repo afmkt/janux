@@ -68,5 +68,7 @@ test.describe('login SPA', () => {
        //    the session cookie, and the app lands on the "Signed in." alert.
       await expect(page.getByText(/Signed in\./i)).toBeVisible()
       await expect(page.getByRole('button', { name: /Email me a sign-in link/i })).not.toBeVisible()
+      // The no-target login terminal is now actionable, not a bare dead-end.
+      await expect(page.getByRole('button', { name: /Continue to admin console/i })).toBeVisible()
     })
 })

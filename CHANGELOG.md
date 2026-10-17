@@ -41,3 +41,8 @@ All notable changes to Janux. The format follows [Keep a Changelog](https://keep
 - `Resend` is now **one optional backend**, not a hard dependency. The email
   magic-link factor is available via Resend **or** Zonemail **or** a built-in
   SMTP relay.
+- **Login terminal** (`frontend/src/login/App.tsx`): a magic-link login with
+  no parked return target (no `client_id`/`state`/`redirect_uri`) no longer
+  stops on a bare "Signed in." alert. It now renders "Signed in. You can close
+  this tab." plus a **Continue to admin console** button (→ `/admin`), so a
+  user who reaches `/login` without a redirect is no longer stranded.

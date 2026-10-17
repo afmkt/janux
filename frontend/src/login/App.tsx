@@ -400,7 +400,15 @@ function App() {
             </>
           )}
 
-          {phase === 'done' && <Alert color="green">{notice ?? 'Signed in.'}</Alert>}
+          {phase === 'done' && notice && <Alert color="green">{notice}</Alert>}
+          {phase === 'done' && !notice && (
+            <>
+              <Alert color="green">Signed in. You can close this tab.</Alert>
+              <Button fullWidth onClick={() => { window.location.href = '/admin' }}>
+                Continue to admin console
+              </Button>
+            </>
+          )}
         </Stack>
       </Container>
     </MantineProvider>
