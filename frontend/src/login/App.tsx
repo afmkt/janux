@@ -4,13 +4,13 @@ import {
   Button,
   Container,
   Divider,
-  MantineProvider,
   Stack,
   Text,
   TextInput,
   Title,
 } from '@mantine/core'
 import '@mantine/core/styles.css'
+import { ThemeProvider } from '../shared/providers'
 import {
   NOT_PROVISIONED_TEXT,
   SESSION_COOKIE,
@@ -259,7 +259,7 @@ function App() {
   }
 
   return (
-    <MantineProvider>
+    <ThemeProvider>
       <Container size="xs" py="xl">
         <Stack gap="md">
           <div>
@@ -411,7 +411,7 @@ function App() {
           )}
         </Stack>
       </Container>
-    </MantineProvider>
+    </ThemeProvider>
   )
 }
 

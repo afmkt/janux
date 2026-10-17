@@ -46,3 +46,14 @@ All notable changes to Janux. The format follows [Keep a Changelog](https://keep
   stops on a bare "Signed in." alert. It now renders "Signed in. You can close
   this tab." plus a **Continue to admin console** button (→ `/admin`), so a
   user who reaches `/login` without a redirect is no longer stranded.
+- **Admin console shell** (`frontend/src/admin/App.tsx`): the flat 12-item tab
+  strip is replaced by a Mantine `AppShell` — a grouped sidebar
+  (Identity · Directory · Authentication · Security · Insights), a header with the
+  Janux brand, a light/dark theme toggle, and a user menu (roles, MFA status,
+  self-service *Account*, sign out). Navigation is hash-routed (`#users`,
+  `#roles`, …) so deep-links and back/forward work with no new server route.
+- **Unified theme** (`frontend/src/shared/theme.ts`,
+  `frontend/src/shared/providers.tsx`): all four SPAs (admin, login, consent,
+  device) now mount one shared `ThemeProvider` with a brand accent (`grape`) and
+  a persisted light/dark color scheme, so the console and the auth ceremony read
+  as a single product.

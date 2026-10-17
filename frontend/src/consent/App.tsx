@@ -4,12 +4,12 @@ import {
   Button,
   Container,
   List,
-  MantineProvider,
   Stack,
   Text,
   Title,
 } from '@mantine/core'
 import '@mantine/core/styles.css'
+import { ThemeProvider } from '../shared/providers'
 import { clearSession } from '../shared/session'
 
 const consentState = new URLSearchParams(window.location.search).get('state')
@@ -85,7 +85,7 @@ function App() {
   }, [])
 
   return (
-    <MantineProvider>
+    <ThemeProvider>
       <Container size="xs" py="xl">
         <Stack gap="md">
           <div>
@@ -129,7 +129,7 @@ function App() {
           {!info && !error && <Text c="dimmed">Loading…</Text>}
         </Stack>
       </Container>
-    </MantineProvider>
+    </ThemeProvider>
   )
 }
 

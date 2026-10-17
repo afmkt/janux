@@ -4,13 +4,13 @@ import {
   Button,
   Container,
   List,
-  MantineProvider,
   Stack,
   Text,
   TextInput,
   Title,
 } from '@mantine/core'
 import '@mantine/core/styles.css'
+import { ThemeProvider } from '../shared/providers'
 
 const urlCode = new URLSearchParams(window.location.search).get('user_code')
 
@@ -118,7 +118,7 @@ function App() {
   }
 
   return (
-    <MantineProvider>
+    <ThemeProvider>
       <Container size="xs" py="xl">
         <Stack gap="md">
           <div>
@@ -184,7 +184,7 @@ function App() {
           {phase === 'details' && !info && busy && <Text c="dimmed">Loading…</Text>}
         </Stack>
       </Container>
-    </MantineProvider>
+    </ThemeProvider>
   )
 }
 
