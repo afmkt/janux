@@ -1551,7 +1551,7 @@ mod tests {
                 .expect("policies")
                 .items
                 .into_iter()
-                .filter(|p| p.resource.join("/") == RESOURCE)
+                .filter(|p| p.resource == RESOURCE)
                 .collect();
             assert_eq!(stored.len(), 1, "policy lands in the resolved domain");
             assert_eq!(
@@ -1581,7 +1581,7 @@ mod tests {
                     .expect("policies")
                     .items
                     .iter()
-                    .any(|p| p.resource.join("/") == SIBLING_RESOURCE),
+                    .any(|p| p.resource == SIBLING_RESOURCE),
                 "forged-domain delete must not reach the sibling domain's policy"
             );
         }
@@ -1607,7 +1607,7 @@ mod tests {
                     .expect("policies")
                     .items
                     .iter()
-                    .any(|p| p.resource.join("/") == RESOURCE),
+                    .any(|p| p.resource == RESOURCE),
                 "delete is confined to the resolved domain and removes it"
             );
         }

@@ -19,7 +19,7 @@ fn make_policy(
         id: uuid::Uuid::nil(),
         domain_id: domain.to_string(),
         action,
-        resource: resource.iter().map(|s| s.to_string()).collect(),
+        resource: resource.join("/"),
         role_id: role.to_string(),
         source,
         target,

@@ -181,10 +181,11 @@ pub struct Policy {
     /// HTTP method the policy governs. `None` means the rule applies to all
     /// methods for the given resource.
     pub action: Option<HttpMethod>,
-    /// Resource path template as segments, e.g. `["users", "{id}"]` for the
-    /// path `/users/{id}`. Matched against the request path (or a captured
+    /// Resource path template as a slash-joined string, e.g. `/users/{id}`.
+    /// An empty string matches ANY path in the domain. Split into segments at
+    /// match time and compared against the request path (or a captured
     /// parameter) by [`Policy::can_access`].
-    pub resource: Vec<String>,
+    pub resource: String,
     /// Role this policy grants/denies access to.
     #[index]
     pub role_id: String,
@@ -228,13 +229,14 @@ pub struct CanAccess {
 /// matches ANY path; otherwise equal segment counts, and every resource segment
 /// either equals the path segment or is a `{param}` placeholder covering any value
 /// — the same matching `TargetResolver::FromPath` applies for capture.
-fn resource_matches_path(resource: &[String], path: &[&str]) -> bool {
+fn resource_matches_path(resource: &str, path: &[&str]) -> bool {
     // Empty resource = "match any path in this domain".
     if resource.is_empty() {
         return true;
     }
-    resource.len() == path.len()
-        && resource
+    let segs: Vec<&str> = resource.split('/').collect();
+    segs.len() == path.len()
+        && segs
             .iter()
             .zip(path.iter())
             .all(|(r, p)| (r.starts_with('{') && r.ends_with('}')) || r == p)
@@ -261,7 +263,7 @@ impl Policy {
                 if self.resource.is_empty() {
                     true
                 } else {
-                    path.iter().map(|s| s.to_string()).collect::<Vec<String>>() == self.resource
+                    path.join("/") == self.resource
                 }
             } else if !resource_matches_path(&self.resource, path) {
                 // The resource constrains the path in EVERY branch. FromQuery/
@@ -319,9 +321,10 @@ impl Policy {
         match &self.target {
             TargetResolver::Nothing => None,
             TargetResolver::FromPath { pname } => {
+                let res_segs: Vec<&str> = self.resource.split('/').collect();
                 let mut mapping = HashMap::new();
-                if self.resource.len() == path.len() {
-                    for (pat_seg, act_seg) in self.resource.iter().zip(path.iter()) {
+                if res_segs.len() == path.len() {
+                    for (pat_seg, act_seg) in res_segs.iter().zip(path.iter()) {
                         if pat_seg.starts_with('{') && pat_seg.ends_with('}') {
                             // This segment is a named param — capture it
                             let name = &pat_seg[1..pat_seg.len() - 1];
@@ -399,12 +402,13 @@ impl Tenant {
         mfa: bool,
         allowed: bool,
     ) -> Result<Policy> {
-        // An empty/blank resource matches ANY path in the domain, stored as
-        // an empty segment list so `can_access` / `resource_matches_path` see it.
-        let resource_seg: Vec<String> = if resource.trim().is_empty() {
-            Vec::new()
+        // An empty/blank resource matches ANY path in the domain, stored as an
+        // empty string so `can_access` / `resource_matches_path` treat it as a
+        // full-domain grant.
+        let resource_str = if resource.trim().is_empty() {
+            String::new()
         } else {
-            resource.split('/').map(str::to_string).collect()
+            resource.to_string()
         };
         let role = self.role(role_name).await?;
         self.require_below(caller, &role).await?;
@@ -412,7 +416,7 @@ impl Tenant {
             domain_id: domain.to_string(),
             action,
             mfa,
-            resource: resource_seg,
+            resource: resource_str,
             role_id: role.id,
             source,
             target,
@@ -446,10 +450,10 @@ impl Tenant {
         action: Option<HttpMethod>,
         role_name: &str,
     ) -> Result<()> {
-        let resource_seg: Vec<String> = if resource.trim().is_empty() {
-            Vec::new()
+        let resource_str = if resource.trim().is_empty() {
+            String::new()
         } else {
-            resource.split("/").map(|s| s.to_string()).collect()
+            resource.to_string()
         };
         let role = self.role(role_name).await?;
         self.require_below(caller, &role).await?;
@@ -467,7 +471,7 @@ impl Tenant {
         .await
         .map_err(Into::<anyhow::Error>::into)?;
         for p in candidates {
-            if p.resource == resource_seg && p.action == action {
+            if p.resource == resource_str && p.action == action {
                 Policy::delete_by_id(&mut self.database, p.id)
                     .await
                     .map_err(Into::<anyhow::Error>::into)?;
@@ -481,7 +485,7 @@ impl Tenant {
                 // `action` only and silently evicted unrelated policies of
                 // the same role/action with different resources.)
                 ps.get_mut()
-                    .retain(|p| !(p.action == action && p.resource == resource_seg));
+                    .retain(|p| !(p.action == action && p.resource == resource_str));
 
                 // Optional: Clean up empty maps to save memory
                 if ps.get().is_empty() {
@@ -494,8 +498,8 @@ impl Tenant {
 }
 
 /// Wire-format representation of a [`Policy`] for HTTP responses and request
-/// bodies. `resource` is a slash-joined path template (e.g. `"users/{id}"`)
-/// rather than the segmented `Vec<String>` stored on the model.
+/// bodies. `resource` is a slash-joined path template (e.g. `"users/{id}"`);
+/// the model stores it as the same string.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 struct PolicyEntry {
     #[serde(default)]
@@ -519,8 +523,7 @@ struct PolicyEntry {
 /// List all policies belonging to the tenant identified by the request `Host`.
 ///
 /// Policies are read directly from the DB (not the cache) so the caller sees
-/// the latest configuration. The `resource` field is flattened back from its
-/// segmented storage form into a slash-joined path string.
+/// the latest configuration; `resource` is the same string the model stores.
 #[endpoint(
     summary = "List all policies in a tenant",
     parameters(
@@ -543,7 +546,7 @@ pub async fn all_policies(req: &mut Request, depot: &mut Depot, res: &mut Respon
     {
         let page = page.map(|p| PolicyEntry {
             id: Some(p.id),
-            resource: p.resource.join("/"),
+            resource: p.resource,
             domain: p.domain_id,
             role: p.role_id,
             action: p.action,

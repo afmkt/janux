@@ -340,7 +340,7 @@ pub struct PolicyEntry {
     pub domain_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<HttpMethod>,
-    pub resource: Vec<String>,
+    pub resource: String,
     pub role_id: String,
     pub source: SourceResolver,
     pub target: TargetResolver,
@@ -1339,7 +1339,7 @@ mod tests {
         );
         let p = &tc.policies[0];
         assert_eq!(p.role_id, "user");
-        assert_eq!(p.resource, vec!["", "api", "v1", "app"]);
+        assert_eq!(p.resource, "/api/v1/app");
         assert!(matches!(p.action, Some(crate::db::HttpMethod::GET)));
         assert!(p.allowed);
         assert!(!p.mfa);
@@ -1349,8 +1349,8 @@ mod tests {
         // TOML round-trips the policy.
         let toml = to_toml(&report).expect("serialize");
         assert!(toml.contains("user"), "TOML must name the role");
-        // The resource segments are emitted per-segment; assert the
-        // joined path appears in the TOML.
+        // The resource path is emitted as a slash-joined string; assert the
+        // path appears in the TOML.
         assert!(toml.contains("app"), "TOML must carry the resource path");
         assert!(!report.manifest.secrets_emit);
     }
