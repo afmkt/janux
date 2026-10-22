@@ -40,6 +40,11 @@ const authed = setupAuth()
 // switch below, the same lazy-mount behavior the old Mantine <Tabs> had — no
 // panel fetches until it is shown). `account` is self-service, so it lives in
 // the user menu rather than the nav tree.
+//
+// Users is a *directory*: `#users` lists people; `#users/<name>` is the
+// dedicated single-user surface where roles, credentials, status, and (for
+// self) API-key mint all live. Person-centric actions no longer scatter across
+// parallel tabs or a six-button table row.
 type Section =
   | 'users'
   | 'roles'
@@ -76,18 +81,52 @@ const NAV: NavEntry[] = [
 
 const GROUPS = ['Identity', 'Directory', 'Authentication', 'Security', 'Insights']
 
-// Hash routing: the section the URL hash selects, unknown/empty falling back to
-// Users. A hash keeps deep-links and back/forward working without a new server
-// route — the catch-all serves admin.html and the hash never reaches janux.
-// `account` is self-service (in the user menu), so it is a valid target that is
-// not part of the nav tree.
-function sectionFromHash(): Section {
-  const h = window.location.hash.replace(/^#/, '') as Section
-  if (h === 'account') return 'account'
-  return NAV.some((n) => n.section === h) ? h : 'users'
+interface RouteState {
+  section: Section
+  /** When section === 'users', optional username for the detail page. */
+  user: string | null
 }
 
-function SectionContent({ section }: { section: Section }) {
+// Hash routing:
+//   #users           → user directory
+//   #users/alice     → dedicated page for alice
+//   #roles, #account → top-level sections
+// A hash keeps deep-links and back/forward working without a new server route
+// — the catch-all serves admin.html and the hash never reaches janux.
+function routeFromHash(): RouteState {
+  const raw = window.location.hash.replace(/^#/, '')
+  if (!raw) return { section: 'users', user: null }
+  if (raw === 'account') return { section: 'account', user: null }
+
+  // #users/<name> — name is path-segment encoded
+  if (raw === 'users' || raw.startsWith('users/')) {
+    const rest = raw.slice('users'.length)
+    if (!rest) return { section: 'users', user: null }
+    // rest is "/alice" or "/alice/extra" — take the first segment
+    const name = decodeURIComponent(rest.replace(/^\//, '').split('/')[0] ?? '')
+    return { section: 'users', user: name || null }
+  }
+
+  if (NAV.some((n) => n.section === raw)) {
+    return { section: raw as Section, user: null }
+  }
+  return { section: 'users', user: null }
+}
+
+function hashFor(section: Section, user: string | null = null): string {
+  if (section === 'users' && user) return `users/${encodeURIComponent(user)}`
+  return section
+}
+
+function SectionContent({
+  section,
+  user,
+  onSelectUser,
+}: {
+  section: Section
+  user: string | null
+  onSelectUser: (username: string | null) => void
+}) {
   switch (section) {
     case 'roles':
       return <RolesTab />
@@ -113,7 +152,7 @@ function SectionContent({ section }: { section: Section }) {
       return <AccountTab />
     case 'users':
     default:
-      return <UsersTab />
+      return <UsersTab selectedUser={user} onSelectUser={onSelectUser} />
   }
 }
 
@@ -199,7 +238,7 @@ function UserMenu({ me, onAccount }: { me: SessionMe | null; onAccount: () => vo
 }
 
 function Console() {
-  const [section, setSection] = useState<Section>(sectionFromHash)
+  const [route, setRoute] = useState<RouteState>(routeFromHash)
   const [opened, setOpened] = useState(false)
   const [signal, setSignal] = useState<AuthSignal | null>(null)
   const { me } = useWhoami()
@@ -214,19 +253,29 @@ function Console() {
 
   // Keep the section in sync with the URL so back/forward and deep-links work.
   useEffect(() => {
-    const onHash = () => setSection(sectionFromHash())
+    const onHash = () => setRoute(routeFromHash())
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
   const navigate = (next: Section) => {
-    window.location.hash = next
-    setSection(next)
+    window.location.hash = hashFor(next)
+    setRoute({ section: next, user: null })
     // Closing the mobile overlay after a tap keeps the content unobscured.
     setOpened(false)
   }
 
-  const active = NAV.find((n) => n.section === section)
+  const selectUser = (username: string | null) => {
+    window.location.hash = hashFor('users', username)
+    setRoute({ section: 'users', user: username })
+  }
+
+  const active = NAV.find((n) => n.section === route.section)
+  const subtitle = route.section === 'users' && route.user
+    ? `Identity / Users / ${route.user}`
+    : active
+      ? `${active.group} / ${active.label}`
+      : 'Account'
 
   return (
     <AppShell
@@ -265,7 +314,7 @@ function Console() {
       </AppShell.Header>
 
       <AppShell.Navbar p="md">
-        <Sidebar section={section} onNavigate={navigate} />
+        <Sidebar section={route.section} onNavigate={navigate} />
       </AppShell.Navbar>
 
       <AppShell.Main>
@@ -275,11 +324,15 @@ function Console() {
               Admin console
             </Title>
             <Text c="dimmed" size="sm">
-              {active ? `${active.group} / ${active.label}` : 'Account'}
+              {subtitle}
             </Text>
           </div>
           {signal && <SignalPanel kind={signal} onDone={() => setSignal(null)} />}
-          <SectionContent section={section} />
+          <SectionContent
+            section={route.section}
+            user={route.user}
+            onSelectUser={selectUser}
+          />
         </Stack>
       </AppShell.Main>
     </AppShell>
