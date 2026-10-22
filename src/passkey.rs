@@ -436,7 +436,7 @@ pub struct PasskeyResponse {
 pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(passkey_req) = crate::utils::extract::<PasskeyRequest>(req, None).await {
         if !passkey_req.0.is_empty() {
-            let state = depot.obtain_mut::<ServerState>().unwrap();
+            let state = depot.get_typed_mut::<ServerState>().unwrap();
             let domain = crate::utils::get_domain(req, state)
                 .unwrap_or("")
                 .to_string();
@@ -536,7 +536,7 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // Session gate for the *registration* branch, policy-free so MFA
     // step-up is not circular. Login may proceed without a session.
     let session = crate::utils::validate_session(req, depot).await;
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -708,7 +708,7 @@ pub async fn deactivate(req: &mut Request, depot: &mut Depot, res: &mut Response
             return;
         }
     };
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -765,7 +765,7 @@ pub async fn deactivate(req: &mut Request, depot: &mut Depot, res: &mut Response
     )
 )]
 pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let user = match depot.obtain_mut::<JwtVerify>() {
+    let user = match depot.get_typed_mut::<JwtVerify>() {
         // G-132 sudo mode: wiping every passkey of an account requires a
         // freshly AUTHENTICATED session — a stolen-and-rotated session
         // must not be able to strip the victim's factors.
@@ -781,7 +781,7 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             return;
         }
     };
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -1012,7 +1012,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: uuid::Uuid::nil().to_string(),

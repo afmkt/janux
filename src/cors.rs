@@ -13,7 +13,7 @@ pub async fn cors_middleware(
     res: &mut Response,
     ctrl: &mut FlowCtrl,
 ) {
-    let Ok(state) = depot.obtain_mut::<crate::server::ServerState>() else {
+    let Ok(state) = depot.get_typed_mut::<crate::server::ServerState>() else {
         // State not available yet (e.g., during startup or misconfigured).
         // Allow all CORS headers to avoid blocking requests.
         ctrl.call_next(req, depot, res).await;

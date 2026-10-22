@@ -8,7 +8,7 @@ use salvo::rate_limiter::{BasicQuota, FixedGuard, MokaStore, RateLimiter};
 /// an unregistered host never reaches a disk dir — it gets the embedded
 /// frontend.
 fn override_dir(req: &Request, depot: &Depot) -> Option<std::path::PathBuf> {
-    let state = depot.obtain::<crate::server::ServerState>().ok()?;
+    let state = depot.get_typed::<crate::server::ServerState>().ok()?;
     let domain = crate::utils::get_domain(req, state)?;
     state
         .pages_dirs

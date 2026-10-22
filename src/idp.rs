@@ -852,7 +852,7 @@ pub async fn new_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut Re
         ),
     );
 
-    let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+    let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let redirect_uris: Vec<&str> = body.redirect_uris.split_whitespace().collect();
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
@@ -899,7 +899,7 @@ pub async fn new_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut Re
     )
 )]
 pub async fn list_oauth2clients(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+    let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let (limit, offset) = crate::utils::page_params(req);
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
@@ -973,7 +973,7 @@ pub async fn delete_oauth2client(req: &mut Request, depot: &mut Depot, res: &mut
     };
     crate::audit::record_target(res, "client", &body.client_id);
 
-    let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+    let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
         match tenant.oauth2client_delete(domain, &body.client_id).await {
@@ -1030,7 +1030,7 @@ pub async fn reactivate_oauth2client(req: &mut Request, depot: &mut Depot, res: 
     };
     crate::audit::record_target_detail(res, "client", &body.client_id, "reactivated");
 
-    let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+    let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
         match tenant
@@ -1079,7 +1079,7 @@ pub async fn rotate_oauth2client_secret(req: &mut Request, depot: &mut Depot, re
         &format!("secret rotated, grace={}min", body.grace_minutes),
     );
 
-    let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+    let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
         match tenant

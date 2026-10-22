@@ -342,7 +342,7 @@ struct RoleEntry {
 )]
 pub async fn all_roles(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let (limit, offset) = crate::utils::page_params(req);
@@ -397,7 +397,7 @@ pub async fn add_role(req: &mut Request, depot: &mut Depot, res: &mut Response) 
                 return;
             }
         };
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             match tenant.role_create(&caller, &body.name, body.level).await {
@@ -441,7 +441,7 @@ pub async fn delete_role(req: &mut Request, depot: &mut Depot, res: &mut Respons
                 return;
             }
         };
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             match tenant.role_delete(&caller, &body.name).await {

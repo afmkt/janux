@@ -543,7 +543,7 @@ impl Tenant {
 pub async fn all_users(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     crate::audit::record_target(res, "read", "user");
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let (limit, offset) = crate::utils::page_params(req);
@@ -577,7 +577,7 @@ struct AddUser {
 pub async fn add_user(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = extract::<AddUser>(req, None).await {
         crate::audit::record_target(res, "user", &body.name);
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
             && tenant.user_create(&body.name).await.is_ok()
@@ -621,7 +621,7 @@ pub async fn delete_user(req: &mut Request, depot: &mut Depot, res: &mut Respons
                 return;
             }
         };
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             match tenant.user_delete(&caller, &body.user).await {
@@ -668,7 +668,7 @@ pub async fn delete_self(req: &mut Request, depot: &mut Depot, res: &mut Respons
         }
     };
     crate::audit::record_target_detail(res, "user", &user_name, "self delete");
-    let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+    let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
         // self-deletion is identity-checked, not level-gated.
@@ -719,7 +719,7 @@ pub async fn activate_user(req: &mut Request, depot: &mut Depot, res: &mut Respo
                 return;
             }
         };
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             // G-166: read the prior active flag so the trail captures the
@@ -802,7 +802,7 @@ pub async fn activate_self(req: &mut Request, depot: &mut Depot, res: &mut Respo
                 &user_name,
                 &format!("self active={}", body.active),
             );
-            let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+            let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
             let domain = crate::utils::get_domain(req, state).unwrap_or("");
             if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
                 if body.active {
@@ -881,7 +881,7 @@ pub async fn add_role(req: &mut Request, depot: &mut Depot, res: &mut Response) 
                 return;
             }
         };
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             match tenant.user_add_role(&caller, &body.user, &body.role).await {
@@ -931,7 +931,7 @@ pub async fn remove_role(req: &mut Request, depot: &mut Depot, res: &mut Respons
                 return;
             }
         };
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             match tenant.user_del_role(&caller, &body.user, &body.role).await {
@@ -971,7 +971,7 @@ pub struct UserRoleRequest {
 )]
 pub async fn user_roles(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = extract::<UserRoleRequest>(req, None).await {
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain)
             && let Ok(user) = tenant.user(&body.user).await
@@ -1061,12 +1061,12 @@ mod tests {
     ) {
         let user_id = {
             let state = depot
-                .obtain_mut::<crate::server::ServerState>()
+                .get_typed_mut::<crate::server::ServerState>()
                 .expect("ServerState");
             let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
             tenant.user("alice").await.expect("alice").id.to_string()
         };
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: JwtData {
                 user: user_id,
@@ -1219,7 +1219,7 @@ mod tests {
             ) {
                 let user_id = {
                     let state = depot
-                        .obtain_mut::<crate::server::ServerState>()
+                        .get_typed_mut::<crate::server::ServerState>()
                         .expect("ServerState");
                     let mut tenant = state.storage.tenant_by_domain(DOMAIN).expect("tenant");
  // Level-gate tests inject sessions for users that were
@@ -1231,7 +1231,7 @@ mod tests {
                         .map(|u| u.id.to_string())
                         .unwrap_or_else(|_| uuid::Uuid::nil().to_string())
                 };
-                depot.inject(JwtVerify {
+                depot.insert_typed(JwtVerify {
                     can_access: true,
                     jwt_data: JwtData {
                         user: user_id,

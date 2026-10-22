@@ -536,7 +536,7 @@ pub struct ServerStateInner {
 /// Shared server state, cheap to clone (Arc inside) so it can be injected
 /// into every request depot via `affix_state::inject`.
 ///
-/// Handlers access it with `depot.obtain_mut::<ServerState>()` and reach the
+/// Handlers access it with `depot.get_typed_mut::<ServerState>()` and reach the
 /// inner fields through `Deref` (`state.storage`). The revocation store is
 /// NOT carried here — it is the process-wide `InvalidJwt::global()` singleton,
 /// so it never needs to be cloned along with the state.

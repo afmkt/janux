@@ -721,7 +721,7 @@ async fn mint_token_response(
 )]
 pub async fn well_known(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or_default()
@@ -953,7 +953,7 @@ async fn authorize_flow(
     let state = params.state.clone();
 
     let state_h = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state_h).unwrap_or("");
 
@@ -1183,7 +1183,7 @@ async fn authorize_flow(
         });
 
     let state_h = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let mut tenant = match state_h.storage.tenant_by_domain(domain) {
         Some(t) => t,
@@ -1447,7 +1447,7 @@ pub async fn authorize_resume(req: &mut Request, depot: &mut Depot, res: &mut Re
         .map(|c| ("s256", c.to_string()));
 
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     // Owned String: `continuation_tenant` reborrows state mutably, and the
     // domain guard below compares the client against the request domain.
@@ -1741,7 +1741,7 @@ pub async fn consent_submit(req: &mut Request, depot: &mut Depot, res: &mut Resp
     }
 
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     // Owned String: `continuation_tenant` reborrows state mutably, and the
     // domain guard below compares the client against the request domain.
@@ -1921,7 +1921,7 @@ pub async fn token(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     }
 
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
 
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
@@ -3277,7 +3277,7 @@ pub async fn userinfo(req: &mut Request, depot: &mut Depot, res: &mut Response) 
 
     // STEP 1: resolve tenant from Host/X-Forwarded-Host (same pattern as token()).
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
@@ -3502,7 +3502,7 @@ pub async fn revoke(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // pattern as token()). RFC 7009 §2.1 REQUIRES client authentication —
     // without it anyone could revoke tokens by guessing.
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
@@ -3726,7 +3726,7 @@ pub async fn introspect(req: &mut Request, depot: &mut Depot, res: &mut Response
     // the endpoint exists for protected resources only, so unauthenticated
     // callers get 401 without learning anything about any token.
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
@@ -4012,7 +4012,7 @@ pub async fn device_authorization(req: &mut Request, depot: &mut Depot, res: &mu
     };
 
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let issuer = crate::utils::get_issuer(req, state).unwrap_or_default();
@@ -4290,7 +4290,7 @@ pub async fn device_login_approve(req: &mut Request, depot: &mut Depot, res: &mu
         .unwrap_or_else(|| Timestamp::now().as_second() as usize);
 
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let mut tenant = match state.storage.tenant_by_domain(domain) {

@@ -99,7 +99,7 @@ pub struct Domain {
     // vec@([]) -> Forbid CORS
     // vec!(["tenant"]) -> Allow domains within the same tenant
     // vec!([...]) -> Explicit allow list
-    #[default(vec![])]
+    #[default(Vec::<String>::new())]
     pub cors: Vec<String>,
 
     pub acme_email: Option<String>,

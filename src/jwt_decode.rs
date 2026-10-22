@@ -125,7 +125,7 @@ pub async fn decode_jwt(req: &mut Request, depot: &mut Depot, res: &mut Response
     let mut signature_ok = false;
     let mut reason: Option<String> = None;
 
-    if let Ok(state) = depot.obtain_mut::<crate::server::ServerState>() {
+    if let Ok(state) = depot.get_typed_mut::<crate::server::ServerState>() {
         if let Some(domain) = get_domain(req, state) {
             if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
                 match crate::jwt::jwt_decode::<serde_json::Value>(

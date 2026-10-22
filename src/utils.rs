@@ -131,7 +131,7 @@ impl ApiProblem {
 /// when no verified session is present — handlers must fail closed.
 pub fn caller_from_depot(depot: &Depot) -> Option<crate::role::Caller> {
     depot
-        .obtain::<JwtVerify>()
+        .get_typed::<JwtVerify>()
         .ok()
         .map(|v| crate::role::Caller::Jwt(v.jwt_data.clone()))
 }
@@ -995,7 +995,7 @@ pub async fn validate_jwt_for(
 ) -> Option<JwtVerify> {
     let jwt = get_jwt(req)?;
     let _port = req.local_addr().port()?;
-    let state = depot.obtain_mut::<ServerState>().ok()?;
+    let state = depot.get_typed_mut::<ServerState>().ok()?;
     let domain = get_domain(req, state)?;
     let issuer = get_issuer(req, state)?;
     let (method, path) = match at {
@@ -1069,7 +1069,7 @@ pub async fn validate_session_diag(
     // bare 401 rather than a "token invalid" reason for a client that held no
     // token to begin with.
     let jwt = get_jwt(req)?;
-    let state = depot.obtain_mut::<ServerState>().ok()?;
+    let state = depot.get_typed_mut::<ServerState>().ok()?;
     let domain = get_domain(req, state)?;
     let issuer = get_issuer(req, state)?;
     let mut tenant = state.storage.tenant_by_domain(domain)?;
@@ -1093,7 +1093,7 @@ pub async fn validate_session_diag(
 pub async fn refresh_jwt(req: &Request, depot: &mut Depot) -> Option<String> {
     let jwt = get_jwt(req)?;
 
-    let state = depot.obtain_mut::<ServerState>().ok()?;
+    let state = depot.get_typed_mut::<ServerState>().ok()?;
     let domain = get_domain(req, state)?;
     let issuer = get_issuer(req, state)?;
     let mut tenant = state.storage.tenant_by_domain(domain)?;
@@ -1147,7 +1147,7 @@ where
 
 fn client_ip(req: &Request, depot: &Depot) -> String {
     let trusted = depot
-        .obtain::<ServerState>()
+        .get_typed::<ServerState>()
         .map(|state| state.trusts_forwarded(req))
         .unwrap_or(false);
     if trusted
@@ -1977,7 +1977,7 @@ mod tests {
 
     fn depot_with(state: ServerState) -> Depot {
         let mut depot = Depot::new();
-        depot.inject(state);
+        depot.insert_typed(state);
         depot
     }
 

@@ -60,7 +60,7 @@ pub async fn new_tenant(req: &mut Request, depot: &mut Depot, res: &mut Response
         ),
     );
 
-    let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+    let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
 
     // `.map(|_| ())` drops the RefMut before the bootstrap re-borrows.
     let created = state.storage.new_tenant(&body.name).await.map(|_| ());
@@ -124,7 +124,7 @@ pub struct SetCors {
 pub async fn all_tenants(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     crate::audit::record_target(res, "read", "tenant");
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let (limit, offset) = crate::utils::page_params(req);
     if let Ok(data) = state.storage.all_tenants().await {
@@ -146,7 +146,7 @@ pub async fn all_tenants(req: &mut Request, depot: &mut Depot, res: &mut Respons
     )
 )]
 pub async fn set_cors(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+    let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
     if let Some(body) = crate::utils::extract::<SetCors>(req, None).await {
         crate::audit::record_target_detail(res, "domain", &body.domain, "cors");
         if body.share_tenant.is_some() && body.share_tenant.unwrap() {
@@ -185,7 +185,7 @@ pub async fn set_cors(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     )
 )]
 pub async fn all_domains(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+    let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let (limit, offset) = crate::utils::page_params(req);
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain.as_ref()) {
@@ -215,7 +215,7 @@ pub async fn add_domain(req: &mut Request, depot: &mut Depot, res: &mut Response
             &body.domain,
             &format!("tenant={}", body.tenant),
         );
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         let tenant_name = {
             match state.storage.tenant_by_domain(domain) {
@@ -266,7 +266,7 @@ pub async fn remove_tenant(req: &mut Request, depot: &mut Depot, res: &mut Respo
     };
     crate::audit::record_target(res, "tenant", &body.name);
 
-    let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+    let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
 
     match state.storage.delete_tenant(&body.name).await {
         Ok(()) => {
@@ -303,7 +303,7 @@ pub async fn delete_domain(req: &mut Request, depot: &mut Depot, res: &mut Respo
             &body.domain,
             &format!("tenant={}", body.tenant),
         );
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         let tenant_name = {
             match state.storage.tenant_by_domain(domain) {

@@ -648,7 +648,7 @@ fn landing_url(session: &SocialAuthSession, code: &str) -> String {
 )]
 pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain::<ServerState>()
+        .get_typed::<ServerState>()
         .expect("ServerState not found");
 
     // The route segment is `{id}` (see router.rs) — reading any other name
@@ -753,7 +753,7 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 pub async fn link(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // session-gated — the identity the IdP binding attaches to is
     // the session's own user, never anything client-supplied.
-    let user = match depot.obtain_mut::<JwtVerify>() {
+    let user = match depot.get_typed_mut::<JwtVerify>() {
         // G-132 sudo mode: linking an external identity requires a freshly
         // AUTHENTICATED session, not a merely rotated one.
         Ok(v) if !crate::verify::session_is_fresh(v) => {
@@ -770,7 +770,7 @@ pub async fn link(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         }
     };
     let state = depot
-        .obtain::<ServerState>()
+        .get_typed::<ServerState>()
         .expect("ServerState not found");
     let provider_id = req.param::<String>("id").unwrap_or_default();
     crate::audit::record_target_detail(
@@ -869,12 +869,12 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // (passkey pattern). Captured here and filtered once the authenticated
     // identity is known below.
     let prior_session = depot
-        .obtain_mut::<JwtVerify>()
+        .get_typed_mut::<JwtVerify>()
         .ok()
         .map(|a| (a.jwt_data.username.clone(), a.jwt_data.mfa.clone()));
 
     let state = depot
-        .obtain::<ServerState>()
+        .get_typed::<ServerState>()
         .expect("ServerState not found");
 
     // G-166: the legacy social compatibility callback records its audit
@@ -1236,7 +1236,7 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             return;
         }
     };
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -1291,7 +1291,7 @@ struct IdentityEntry {
     )
 )]
 pub async fn all_oauth2(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -1337,7 +1337,7 @@ pub struct AddProvider {
     )
 )]
 pub async fn add_provider(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -1386,7 +1386,7 @@ pub async fn add_provider(req: &mut Request, depot: &mut Depot, res: &mut Respon
 )]
 pub async fn all_providers(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     crate::audit::record_target(res, "read", "provider");
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -1424,7 +1424,7 @@ pub struct RemoveProvider {
     )
 )]
 pub async fn remove_provider(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -2064,7 +2064,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: "alice".to_string(),
@@ -2091,7 +2091,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: "alice".to_string(),

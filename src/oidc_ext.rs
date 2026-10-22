@@ -366,7 +366,7 @@ async fn authenticate_management(
 )]
 pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     // Owned String: `get_domain` borrows `req`, and the body parse below
     // needs it mutably while `domain` stays live until the client row is
@@ -533,7 +533,7 @@ async fn presented_client_secret(req: &mut Request) -> Option<String> {
 )]
 pub async fn register_read(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or_default();
     let issuer = crate::utils::get_issuer(req, state)
@@ -623,7 +623,7 @@ pub async fn register_read(req: &mut Request, depot: &mut Depot, res: &mut Respo
 )]
 pub async fn register_update(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or_default()
@@ -762,7 +762,7 @@ pub async fn register_update(req: &mut Request, depot: &mut Depot, res: &mut Res
 )]
 pub async fn register_delete(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or_default()
@@ -1107,7 +1107,7 @@ pub async fn end_session(req: &mut Request, depot: &mut Depot, res: &mut Respons
         .unwrap_or_default();
 
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let Some(domain) = crate::utils::get_domain(req, state) else {
         res.status_code(StatusCode::BAD_REQUEST);
@@ -1253,7 +1253,7 @@ pub struct OidcTenantConfig {
 )]
 pub async fn oidc_config(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let Some(mut tenant) = state.storage.tenant_by_domain(domain) else {
@@ -1285,7 +1285,7 @@ pub async fn set_oidc_config(req: &mut Request, depot: &mut Depot, res: &mut Res
         return;
     };
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let Some(mut tenant) = state.storage.tenant_by_domain(domain) else {
@@ -1330,7 +1330,7 @@ pub async fn set_client_meta(req: &mut Request, depot: &mut Depot, res: &mut Res
         return;
     };
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let Some(mut tenant) = state.storage.tenant_by_domain(domain) else {

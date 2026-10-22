@@ -282,7 +282,7 @@ pub struct KeyEntry {
 pub async fn all_keys(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     crate::audit::record_target(res, "read", "key");
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let (limit, offset) = crate::utils::page_params(req);
@@ -336,7 +336,7 @@ pub async fn add_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let caller = crate::utils::caller_from_depot(depot);
     if let Some(body) = crate::utils::extract::<Addkey>(req, None).await {
         crate::audit::record_target(res, "key", &body.name);
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             // H9: the authenticated domain is authoritative. A body domain
@@ -404,7 +404,7 @@ pub struct RetireKey {
 pub async fn retire_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<RetireKey>(req, None).await {
         crate::audit::record_target_detail(res, "key", &body.name, "retire");
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             // H9 (same class as delete): one domain's admin must not
@@ -468,7 +468,7 @@ pub async fn retire_key(req: &mut Request, depot: &mut Depot, res: &mut Response
 pub async fn delete_key(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     if let Some(body) = crate::utils::extract::<DeleteKey>(req, None).await {
         crate::audit::record_target_detail(res, "key", &body.name, "delete");
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             // H9 (same class as create): one domain's admin must not
@@ -533,7 +533,7 @@ pub async fn delete_key(req: &mut Request, depot: &mut Depot, res: &mut Response
 )]
 pub async fn jwks_endpoint(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
 
@@ -671,7 +671,7 @@ mod tests {
                 res: &mut Response,
                 ctrl: &mut FlowCtrl,
             ) {
-                depot.inject(crate::db::JwtVerify {
+                depot.insert_typed(crate::db::JwtVerify {
                     can_access: true,
                     jwt_data: crate::db::JwtData {
                         user: uuid::Uuid::nil().to_string(),

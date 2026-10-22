@@ -109,7 +109,7 @@ fn audit_target(res: &Response) -> (String, String, String) {
 /// mutations recorded via [`record_target`] with a subject in the target,
 /// unauthenticated refusals) report "-".
 fn audit_actor(depot: &Depot) -> (String, String, String) {
-    match depot.obtain::<crate::db::JwtVerify>() {
+    match depot.get_typed::<crate::db::JwtVerify>() {
         Ok(v) => (
             v.jwt_data.username.clone(),
             v.jwt_data.user.clone(),
@@ -434,7 +434,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(crate::db::JwtVerify {
+        depot.insert_typed(crate::db::JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: "uuid-1".to_string(),
@@ -567,7 +567,7 @@ mod tests {
             "no session → placeholder actor"
         );
 
-        depot.inject(crate::db::JwtVerify {
+        depot.insert_typed(crate::db::JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: "uuid-1".to_string(),

@@ -362,7 +362,7 @@ async fn resolve_user_ci(tenant: &mut Tenant, name: &str) -> Option<User> {
 #[handler]
 pub async fn list_users(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let Some(mut tenant) = state.storage.tenant_by_domain(domain) else {
@@ -431,7 +431,7 @@ pub async fn list_users(req: &mut Request, depot: &mut Depot, res: &mut Response
 pub async fn get_user(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let id = req.param::<String>("id").unwrap_or_default();
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let Some(mut tenant) = state.storage.tenant_by_domain(domain) else {
@@ -541,7 +541,7 @@ pub async fn create_user(req: &mut Request, depot: &mut Depot, res: &mut Respons
     };
     crate::audit::record_target(res, "scim-user", &name);
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let Some(mut tenant) = state.storage.tenant_by_domain(domain) else {
@@ -592,7 +592,7 @@ pub async fn put_user(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         return;
     };
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let Some(mut tenant) = state.storage.tenant_by_domain(domain) else {
@@ -649,7 +649,7 @@ pub async fn patch_user(req: &mut Request, depot: &mut Depot, res: &mut Response
         return;
     }
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let Some(mut tenant) = state.storage.tenant_by_domain(domain) else {
@@ -853,7 +853,7 @@ pub async fn delete_user(req: &mut Request, depot: &mut Depot, res: &mut Respons
     let id = req.param::<String>("id").unwrap_or_default();
     crate::audit::record_target_detail(res, "scim-user", &id, "delete");
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let Some(mut tenant) = state.storage.tenant_by_domain(domain) else {

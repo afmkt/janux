@@ -419,7 +419,7 @@ pub async fn request(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let mut err_msg: String = String::new();
     // ServerState may not be available if affix_state hasn't injected it yet (e.g.,
     // during server startup). Skip email processing gracefully.
-    let state = match depot.obtain::<ServerState>() {
+    let state = match depot.get_typed::<ServerState>() {
         Ok(s) => s,
         Err(_) => return, // Can't process without ServerState; no valid response to send.
     };
@@ -560,11 +560,11 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // (passkey pattern). The session is captured here and filtered once the
     // ceremony identity is known below.
     let session = depot
-        .obtain_mut::<JwtVerify>()
+        .get_typed_mut::<JwtVerify>()
         .ok()
         .map(|a| (a.jwt_data.username.clone(), a.jwt_data.mfa.clone()));
 
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -678,7 +678,7 @@ pub async fn remove(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             return;
         }
     };
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -749,7 +749,7 @@ pub async fn attach(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             return;
         }
     };
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -843,7 +843,7 @@ struct EmailEntry {
     )
 )]
 pub async fn all_emails(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -991,7 +991,7 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let err_msg: String;
     // session-gated — the identity comes from the validated session
     // (hoop), never from the request body.
-    let user = match depot.obtain_mut::<JwtVerify>() {
+    let user = match depot.get_typed_mut::<JwtVerify>() {
         // G-132 sudo mode: attaching a login credential requires a freshly
         // AUTHENTICATED session, not a merely rotated one — a stolen
         // session must not be able to make the takeover persistent.
@@ -1017,7 +1017,7 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             return;
         }
     };
-    let state = match depot.obtain::<ServerState>() {
+    let state = match depot.get_typed::<ServerState>() {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -1117,7 +1117,7 @@ pub async fn add(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 )]
 pub async fn add_verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let err_msg: String;
-    let user = match depot.obtain_mut::<JwtVerify>() {
+    let user = match depot.get_typed_mut::<JwtVerify>() {
         Ok(v) => v.jwt_data.username.clone(),
         Err(_) => {
             res.status_code(StatusCode::UNAUTHORIZED);
@@ -1130,7 +1130,7 @@ pub async fn add_verify(req: &mut Request, depot: &mut Depot, res: &mut Response
             return;
         }
     };
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -1594,7 +1594,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: "alice".to_string(),
@@ -1619,7 +1619,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: "bob".to_string(),
@@ -1774,7 +1774,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: "alice".to_string(),
@@ -1838,7 +1838,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: uuid::Uuid::nil().to_string(),
@@ -2228,7 +2228,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: "alice".to_string(),
@@ -2252,7 +2252,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: crate::db::JwtData {
                 user: "bob".to_string(),

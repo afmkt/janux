@@ -556,7 +556,7 @@ impl SmtpRelayDTO {
 )]
 pub async fn all_configs(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {

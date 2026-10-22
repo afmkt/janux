@@ -19,11 +19,11 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // (direct calls, untrusted deployments) the real request is evaluated, so
     // a forged header can never steer the authorization decision.
     let at = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .ok()
         .and_then(|state| crate::utils::forwarded_origin(req, state));
     let (is_forwarded, want_redirect) = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .ok()
         .map(|state| {
             let forwarded = crate::utils::forwarded_origin(req, state).is_some();
@@ -71,7 +71,7 @@ pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     )
 )]
 pub async fn logout(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    if let Ok(state) = depot.obtain_mut::<crate::server::ServerState>()
+    if let Ok(state) = depot.get_typed_mut::<crate::server::ServerState>()
         && let Some(domain) = get_domain(req, state)
         && let Some(jwt) = get_jwt(req)
         && let Some(mut tenant) = state.storage.tenant_by_domain(domain)
@@ -237,7 +237,7 @@ async fn protect_role(
     };
     // Flat membership — the guard's `role` is the route's grant.
     if data.jwt_data.roles.contains(role) {
-        depot.inject(data);
+        depot.insert_typed(data);
         ctrl.call_next(req, depot, res).await;
         return;
     }
@@ -288,7 +288,7 @@ pub async fn session(
     // session's own identity and reject a missing injection
     // themselves; unauthenticated first-time logins proceed without one.
     if let Some(data) = crate::utils::validate_session(req, depot).await {
-        depot.inject(data);
+        depot.insert_typed(data);
     }
     ctrl.call_next(req, depot, res).await;
 }
@@ -380,7 +380,7 @@ pub fn set_session_cookie(res: &mut Response, jwt: Option<&str>, domain: Option<
 /// (sub-domain SSO, #1). `None` = the host-only default. Reads the per-domain
 /// `session.cookie_scope` from the tenant Config store.
 async fn session_scope(req: &Request, depot: &mut Depot) -> Option<String> {
-    let Ok(state) = depot.obtain_mut::<crate::server::ServerState>() else {
+    let Ok(state) = depot.get_typed_mut::<crate::server::ServerState>() else {
         return None;
     };
     let domain = get_domain(req, state)?;
@@ -397,7 +397,7 @@ async fn session_scope(req: &Request, depot: &mut Depot) -> Option<String> {
 /// probe to (#5): the domain's configured `session.redirect_url` + `/login`.
 /// `None` (single-host) falls back to the bare relative `/login`.
 async fn auth_redirect(req: &Request, depot: &mut Depot) -> String {
-    let Ok(state) = depot.obtain_mut::<crate::server::ServerState>() else {
+    let Ok(state) = depot.get_typed_mut::<crate::server::ServerState>() else {
         return "/login".to_string();
     };
     let Some(domain) = get_domain(req, state) else {

@@ -83,7 +83,7 @@ pub async fn reject_if_apikey(
     res: &mut Response,
     ctrl: &mut FlowCtrl,
 ) {
-    let is_apikey = match depot.obtain_mut::<JwtVerify>() {
+    let is_apikey = match depot.get_typed_mut::<JwtVerify>() {
         Ok(v) => v.jwt_data.typ.as_deref() == Some(API_KEY_TYP),
         Err(_) => false,
     };
@@ -111,7 +111,7 @@ pub async fn reject_if_apikey(
 pub async fn mint(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // 1. The minting session, injected by the `session` hoop. Absent → 401.
     //    Snapshot the identity out of the depot borrow before touching state.
-    let identity: Option<JwtData> = match depot.obtain_mut::<JwtVerify>() {
+    let identity: Option<JwtData> = match depot.get_typed_mut::<JwtVerify>() {
         Ok(v) => Some(JwtData {
             user: v.jwt_data.user.clone(),
             username: v.jwt_data.username.clone(),
@@ -151,7 +151,7 @@ pub async fn mint(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     };
 
     // 4. Domain / issuer / tenant (mirrors the session-gated handlers).
-    let state = match depot.obtain::<ServerState>() {
+    let state = match depot.get_typed::<ServerState>() {
         Ok(s) => s,
         Err(_) => return,
     };

@@ -90,7 +90,7 @@ pub async fn live() -> Json<HealthyResponse> {
 )]
 pub async fn ready(depot: &mut Depot, res: &mut Response) {
     let ok = depot
-        .obtain_mut::<ServerState>()
+        .get_typed_mut::<ServerState>()
         .map(|state| state.storage.raw_path.is_dir())
         .unwrap_or(false);
     if !ok {
@@ -434,7 +434,7 @@ pub async fn metrics_hoop(
     )
 )]
 pub async fn metrics(depot: &mut Depot, res: &mut Response) {
-    if let Ok(state) = depot.obtain_mut::<ServerState>() {
+    if let Ok(state) = depot.get_typed_mut::<ServerState>() {
         TENANTS_LOADED.set(state.storage.tenants.len() as i64);
     }
     if let Some(store) = crate::jwt::InvalidJwt::try_global()

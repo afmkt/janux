@@ -15,34 +15,51 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use toasty::*;
 
-#[derive(Debug, Default, PartialEq, toasty::Embed, Serialize, Deserialize, ToSchema, Clone)]
-pub enum SourceResolver {
-    #[default]
-    Nothing,
-    User,
-    Domain,
-    Role,
+/// The identity-resolution enums.
+///
+/// They live in an inner module because `toasty::Embed` emits one `&self`
+/// accessor per variant, named after the variant (`from_path`, `from_query`,
+/// `from_header`). clippy's `wrong_self_convention` reads a `from_*` name as a
+/// constructor and complains that it takes `self` — but the method is
+/// generated inside the derive expansion, so an `#[allow]` on the enum itself
+/// does not reach it; the allow has to sit on the enclosing module. The
+/// variant names are also the on-disk discriminants of the `Policy` columns
+/// they are embedded in, so they must not be renamed to dodge the lint.
+#[allow(clippy::wrong_self_convention)]
+mod resolver {
+    use super::*;
+
+    #[derive(Debug, Default, PartialEq, toasty::Embed, Serialize, Deserialize, ToSchema, Clone)]
+    pub enum SourceResolver {
+        #[default]
+        Nothing,
+        User,
+        Domain,
+        Role,
+    }
+
+    #[derive(Debug, Default, PartialEq, toasty::Embed, Serialize, Deserialize, ToSchema, Clone)]
+    pub enum TargetResolver {
+        #[default]
+        Nothing,
+        FromPath {
+            pname: String,
+        },
+        FromQuery {
+            qname: String,
+        },
+        FromHeader {
+            hname: String,
+        },
+    }
 }
+
+pub use resolver::{SourceResolver, TargetResolver};
 
 pub enum Source {
     User(String),
     Domain(String),
     Role(String),
-}
-
-#[derive(Debug, Default, PartialEq, toasty::Embed, Serialize, Deserialize, ToSchema, Clone)]
-pub enum TargetResolver {
-    #[default]
-    Nothing,
-    FromPath {
-        pname: String,
-    },
-    FromQuery {
-        qname: String,
-    },
-    FromHeader {
-        hname: String,
-    },
 }
 
 /// A config/seed policy row. The minimal useful form is just `resource` +
@@ -517,7 +534,7 @@ struct PolicyEntry {
 )]
 pub async fn all_policies(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let state = depot
-        .obtain_mut::<crate::server::ServerState>()
+        .get_typed_mut::<crate::server::ServerState>()
         .expect("ServerState not found");
     let domain = crate::utils::get_domain(req, state).unwrap_or("");
     let (limit, offset) = crate::utils::page_params(req);
@@ -583,7 +600,7 @@ pub async fn add_policy(req: &mut Request, depot: &mut Depot, res: &mut Response
                 return;
             }
         };
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             match tenant
@@ -658,7 +675,7 @@ pub async fn delete_policy(req: &mut Request, depot: &mut Depot, res: &mut Respo
                 return;
             }
         };
-        let state = depot.obtain_mut::<crate::server::ServerState>().unwrap();
+        let state = depot.get_typed_mut::<crate::server::ServerState>().unwrap();
         let domain = crate::utils::get_domain(req, state).unwrap_or("");
         if let Some(mut tenant) = state.storage.tenant_by_domain(domain) {
             match tenant

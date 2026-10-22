@@ -376,7 +376,7 @@ struct EnrollTotpResponse {
     )
 )]
 pub async fn enroll(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let user = match depot.obtain_mut::<JwtVerify>() {
+    let user = match depot.get_typed_mut::<JwtVerify>() {
         // G-132 sudo mode: enrolling a step-up credential requires a
         // freshly AUTHENTICATED session, not a merely rotated one.
         Ok(v) if !crate::verify::session_is_fresh(v) => {
@@ -393,7 +393,7 @@ pub async fn enroll(req: &mut Request, depot: &mut Depot, res: &mut Response) {
             return;
         }
     };
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -664,15 +664,15 @@ async fn verify_totp(
 
 pub async fn verify(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let _err_msg = String::from("");
-    let jwt_verify_wrap = { depot.obtain::<JwtVerify>().ok().cloned() };
+    let jwt_verify_wrap = { depot.get_typed::<JwtVerify>().ok().cloned() };
     if let Some(jwt_verify) = jwt_verify_wrap {
-        let state = depot.obtain_mut::<ServerState>().unwrap();
+        let state = depot.get_typed_mut::<ServerState>().unwrap();
         // the (user, factors) pair is passed through so `verify_totp`
         // can filter inheritance once the authenticated identity is known.
         let session = (jwt_verify.jwt_data.username, jwt_verify.jwt_data.mfa);
         verify_totp(state, Some(&session), &jwt_verify.domain, req, res).await;
     } else {
-        let state = depot.obtain_mut::<ServerState>().unwrap();
+        let state = depot.get_typed_mut::<ServerState>().unwrap();
         let domain = match crate::utils::get_domain(req, state) {
             Some(d) => d.to_string(),
             None => {
@@ -711,7 +711,7 @@ struct TotpEntry {
     )
 )]
 pub async fn list_totp(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -765,7 +765,7 @@ pub async fn remove_totp(req: &mut Request, depot: &mut Depot, res: &mut Respons
             return;
         }
     };
-    let state = depot.obtain_mut::<ServerState>().unwrap();
+    let state = depot.get_typed_mut::<ServerState>().unwrap();
     let domain = crate::utils::get_domain(req, state)
         .unwrap_or("")
         .to_string();
@@ -884,7 +884,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: JwtData {
                 user: "alice".to_string(),
@@ -942,7 +942,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: JwtData {
                 user: "alice".to_string(),
@@ -991,7 +991,7 @@ mod tests {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        depot.inject(JwtVerify {
+        depot.insert_typed(JwtVerify {
             can_access: true,
             jwt_data: JwtData {
                 user: "mallory".to_string(),
