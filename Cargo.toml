@@ -41,15 +41,13 @@ percent-encoding = "2.1"
 toml = "1.0.0"
 dashmap = "6.2.1"
 totp-rs = { version = "5.7.2", features = ["qr", "gen_secret", "otpauth"] }
-jsonwebtoken = "10.4.0"
+jsonwebtoken = { version = "11.1.0", default-features = true, features = [
+    "aws_lc_rs",
+] }
 rcgen = "0.14.8"
 aes-gcm = "0.10"
 argon2 = "0.5.3"
 prometheus = { version = "0.13", default-features = false }
-# Built-in SMTP relay mail backend (G-mailer): relay-only, relay-agnostic
-# TLS via the operator's `host:port`. The `builder` feature enables
-# `builder_dangerous` (no MX/DNS resolution — we hand to a relay, not a
-# recipient's MX); `tokio1` wires the async transport to the server runtime.
 lettre = { version = "0.11", default-features = false, features = [
     "smtp-transport",
     "tokio1",
