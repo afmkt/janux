@@ -38,6 +38,18 @@ All notable changes to Janux. The format follows [Keep a Changelog](https://keep
   to override. A loud boot warning flags a reachable host running with it on.
 
 ### Changed
+- **User detail page** (`frontend/src/admin/tabs/UserDetailTab.tsx`, hash
+  `#users/<name>`): Users is now a directory. Opening a row lands on a dedicated
+  surface with grouped sections — Roles (chips + grant/revoke), Credentials
+  (drop passkeys / remove email / remove mobile), API keys (self only), and a
+  Danger zone (delete). The old six-button action row is gone.
+- **Users list** (`UsersTab.tsx`): thin rows (name · optional role badges ·
+  Open). Create jumps into the new user's detail page.
+- **API key mint UI** on Account and on the self user-detail page: lifetime
+  preset, optional role subset (session roles only), one-time reveal modal with
+  copy. Wires the existing `POST /api/v1/auth/api-key` endpoint; there is still
+  no server-side key registry, so list/revoke-by-id is out of scope.
+
 - `Resend` is now **one optional backend**, not a hard dependency. The email
   magic-link factor is available via Resend **or** Zonemail **or** a built-in
   SMTP relay.
@@ -52,6 +64,7 @@ All notable changes to Janux. The format follows [Keep a Changelog](https://keep
   Janux brand, a light/dark theme toggle, and a user menu (roles, MFA status,
   self-service *Account*, sign out). Navigation is hash-routed (`#users`,
   `#roles`, …) so deep-links and back/forward work with no new server route.
+  User detail deep-links use `#users/<name>`.
 - **Unified theme** (`frontend/src/shared/theme.ts`,
   `frontend/src/shared/providers.tsx`): all four SPAs (admin, login, consent,
   device) now mount one shared `ThemeProvider` with a brand accent (`grape`) and
