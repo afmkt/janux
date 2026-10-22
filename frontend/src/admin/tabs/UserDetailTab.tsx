@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   Alert,
   Badge,
@@ -27,7 +27,7 @@ import {
 } from '../../api'
 import { envelope, pageItems } from '../api'
 import { ErrorAlert } from '../ErrorAlert'
-import { useApi, useWhoami, type RoleRow } from '../common'
+import { useApi, useMount, useWhoami, type RoleRow } from '../common'
 
 /** Lifetime presets for API-key mint (seconds). Clamped server-side to [1h, 1y]. */
 const LIFETIME_OPTIONS = [
@@ -75,10 +75,12 @@ function UserDetailTab({ username, onBack }: UserDetailTabProps) {
     setCatalog(pageItems<RoleRow>(data))
   }, [run])
 
-  useEffect(() => {
+  const loadAll = useCallback(() => {
     void loadRoles()
     void loadCatalog()
   }, [loadRoles, loadCatalog])
+
+  useMount(loadAll)
 
   const activate = async (active: boolean) => {
     setNotice(null)
