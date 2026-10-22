@@ -7,6 +7,8 @@ edition = "2024"
 rsa = "0.9.10"
 salvo = { version = "*", features = ["full"] }
 toasty = { version = "*", features = ["turso", "postgresql", "jiff"] }
+turso = "0.7.2"
+toasty-driver-turso = "*"
 toasty-cli = "*"
 anyhow = "*"
 tokio = { version = "*", features = ["full"] }
@@ -17,9 +19,8 @@ serde_json = "*"
 rust-embed = "*"
 mime_guess = "*"
 webauthn-rs = "*"
-turso = "*"
 jiff = { version = "0.2", features = ["serde"] }
-toasty-driver-turso = "*"
+
 oauth2 = { version = "*", features = ["reqwest"] }
 openidconnect = { version = "*", features = ["reqwest"] }
 config = "*"
@@ -37,7 +38,7 @@ tera = "2.0.0"
 url = "2.5.8"
 base64 = "*"
 percent-encoding = "2.1"
-toml ="1.0.0"
+toml = "1.0.0"
 dashmap = "6.2.1"
 totp-rs = { version = "5.7.2", features = ["qr", "gen_secret", "otpauth"] }
 jsonwebtoken = "10.4.0"
@@ -49,7 +50,12 @@ prometheus = { version = "0.13", default-features = false }
 # TLS via the operator's `host:port`. The `builder` feature enables
 # `builder_dangerous` (no MX/DNS resolution — we hand to a relay, not a
 # recipient's MX); `tokio1` wires the async transport to the server runtime.
-lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1", "tokio1-native-tls", "builder"] }
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "tokio1",
+    "tokio1-native-tls",
+    "builder",
+] }
 
 # ─── Windows-only: build OpenSSL from source ────────────────────
 # salvo (tokio-openssl) and webauthn-attestation-ca require OpenSSL on
@@ -87,5 +93,5 @@ path = "tests/e2e/all_tests.rs"
 
 # ─── Release profile: small production binary ──────────────────────────
 [profile.release]
-strip = true   # drop the symbol table (~tens of MB on a binary this size)
-lto = "thin"   # cross-crate dead-code elimination; cheaper than fat LTO
+strip = true # drop the symbol table (~tens of MB on a binary this size)
+lto = "thin" # cross-crate dead-code elimination; cheaper than fat LTO
