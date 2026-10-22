@@ -1,6 +1,19 @@
 import { useState } from 'react'
-import { Alert, Button, Group, Stack, Text, TextInput, Title } from '@mantine/core'
 import {
+  Alert,
+  Button,
+  Code,
+  Group,
+  Modal,
+  MultiSelect,
+  Select,
+  Stack,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core'
+import {
+  openapiApikeyMint,
   openapiEmailAdd,
   openapiOtpAdd,
   openapiOtpAddVerify,
@@ -9,8 +22,17 @@ import {
 } from '../../api'
 import { SESSION_COOKIE } from '../../shared/session'
 import { base64urlToBytes, bytesToBase64url } from '../../login/webauthn'
+import { envelope } from '../api'
 import { ErrorAlert } from '../ErrorAlert'
 import { useApi, useWhoami } from '../common'
+
+const LIFETIME_OPTIONS = [
+  { value: '3600', label: '1 hour' },
+  { value: '86400', label: '1 day' },
+  { value: '604800', label: '7 days' },
+  { value: '2592000', label: '30 days' },
+  { value: '31536000', label: '1 year' },
+]
 
 function AccountTab() {
   const { me, refresh } = useWhoami()
@@ -21,6 +43,12 @@ function AccountTab() {
   const [otpToken, setOtpToken] = useState<string | null>(null)
   const [otpCode, setOtpCode] = useState('')
 
+  // API key mint
+  const [lifetime, setLifetime] = useState<string | null>('86400')
+  const [keyRoles, setKeyRoles] = useState<string[]>([])
+  const [mintedToken, setMintedToken] = useState<string | null>(null)
+  const [mintedExpires, setMintedExpires] = useState<number | null>(null)
+
   const addEmail = async () => {
     if (!email.trim()) return
     setNotice(null)
@@ -28,32 +56,32 @@ function AccountTab() {
     if (!ok) return
     setEmail('')
     setNotice(
-       'Confirmation link sent — open it in this browser while signed in to finish adding the address.',
-        )
-       }
+      'Confirmation link sent — open it in this browser while signed in to finish adding the address.',
+    )
+  }
 
   const addMobile = async () => {
     if (!mobile.trim()) return
     setNotice(null)
     const { ok, data } = await run(() => openapiOtpAdd({ body: { mobile: mobile.trim() } }))
     if (!ok) return
-       // MobileResponse carries the add-ceremony token in `jwt`.
+    // MobileResponse carries the add-ceremony token in `jwt`.
     const token = (data as { jwt?: string } | null)?.jwt
     if (!token) return setError('No ceremony token in the response')
     setOtpToken(token)
-          }
+  }
 
   const confirmMobile = async () => {
     if (!otpToken || !otpCode.trim()) return
     const { ok } = await run(() =>
       openapiOtpAddVerify({ body: { token: otpToken, code: otpCode.trim() } }),
-        )
+    )
     if (!ok) return
     setOtpToken(null)
     setOtpCode('')
     setMobile('')
     setNotice('Mobile number added — SMS sign-in is now available.')
-            }
+  }
 
   const addPasskey = async () => {
     if (!me) return
@@ -66,23 +94,23 @@ function AccountTab() {
     if (!opts || !token) {
       setError('Unexpected passkey challenge response')
       return
-       }
-       // The server sends the WebAuthn JSON wire shape; convert the
-       // base64url fields to buffers and hand the DOM API its own type
-       // (the JSON↔DOM field types differ only in string-vs-union
-       // strictness, so one localized cast does the conversion).
+    }
+    // The server sends the WebAuthn JSON wire shape; convert the
+    // base64url fields to buffers and hand the DOM API its own type
+    // (the JSON↔DOM field types differ only in string-vs-union
+    // strictness, so one localized cast does the conversion).
     const publicKey = {
       ...opts,
       challenge: base64urlToBytes(opts.challenge),
       user: {
         ...opts.user,
         id: base64urlToBytes(opts.user.id),
-          },
+      },
       excludeCredentials: (opts.excludeCredentials ?? []).map((c) => ({
         id: base64urlToBytes(c.id),
         type: 'public-key',
         transports: c.transports,
-        })),
+      })),
     } as unknown as PublicKeyCredentialCreationOptions
     try {
       const credential = (await navigator.credentials.create({ publicKey })) as
@@ -91,7 +119,7 @@ function AccountTab() {
       if (!credential) {
         setError('Passkey creation was cancelled')
         return
-          }
+      }
       const att = credential.response as AuthenticatorAttestationResponse
       const verify = await run(() =>
         openapiPasskeyVerify({
@@ -104,93 +132,204 @@ function AccountTab() {
               response: {
                 clientDataJSON: bytesToBase64url(att.clientDataJSON),
                 attestationObject: bytesToBase64url(att.attestationObject),
-                  },
               },
+            },
             token,
             cookie: SESSION_COOKIE,
-              },
-            }),
-            )
+          },
+        }),
+      )
       if (!verify.ok) return
       setNotice('Passkey registered — you can now sign in with it.')
       refresh()
-            } catch (e) {
+    } catch (e) {
       setError(e instanceof Error ? e.message : 'Passkey registration failed')
-        }
-        }
+    }
+  }
+
+  const mintApiKey = async () => {
+    setNotice(null)
+    setMintedToken(null)
+    const secs = lifetime ? Number(lifetime) : undefined
+    const { ok, data } = await run(() =>
+      openapiApikeyMint({
+        body: {
+          lifetime_seconds: secs && secs > 0 ? secs : null,
+          roles: keyRoles.length > 0 ? keyRoles : null,
+        },
+      }),
+    )
+    if (!ok) return
+    const payload = envelope<{
+      access_token: string
+      expires_in: number
+      typ: string
+    }>(data).data
+    if (!payload?.access_token) {
+      setError('Mint succeeded but no token was returned')
+      return
+    }
+    setMintedToken(payload.access_token)
+    setMintedExpires(payload.expires_in)
+  }
+
+  const copyToken = async () => {
+    if (!mintedToken) return
+    try {
+      await navigator.clipboard.writeText(mintedToken)
+      setNotice('API key copied to clipboard.')
+    } catch {
+      setError('Could not copy — select the token and copy manually.')
+    }
+  }
+
+  const keyRoleOptions = (me?.roles ?? []).map((r) => ({ value: r, label: r }))
 
   return (
-        <Stack gap="md">
-          <ErrorAlert error={error} />
-          {notice && <Alert color="green" withCloseButton onClose={() => setNotice(null)}>{notice}</Alert>}
+    <Stack gap="md">
+      <ErrorAlert error={error} />
+      {notice && (
+        <Alert color="green" withCloseButton onClose={() => setNotice(null)}>
+          {notice}
+        </Alert>
+      )}
 
-          {me && (
+      {me && (
+        <Text size="sm" c="dimmed">
+          Signed in as <b>{me.username}</b> — roles: {me.roles.join(', ') || '(none)'} — factors
+          proven this session: {me.mfa.length > 0 ? me.mfa.join(', ') : '(single factor)'}
+        </Text>
+      )}
+
+      <Title order={4}>Add an email address</Title>
+      <Group align="flex-end">
+        <TextInput
+          label="Email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => setEmail(e.currentTarget.value)}
+          disabled={busy}
+        />
+        <Button onClick={addEmail} loading={busy} disabled={!email.trim()}>
+          Send confirmation
+        </Button>
+      </Group>
+
+      <Title order={4}>Add a mobile number</Title>
+      {!otpToken ? (
+        <Group align="flex-end">
+          <TextInput
+            label="Mobile"
+            placeholder="13800000000"
+            value={mobile}
+            onChange={(e) => setMobile(e.currentTarget.value)}
+            disabled={busy}
+          />
+          <Button onClick={addMobile} loading={busy} disabled={!mobile.trim()}>
+            Send SMS code
+          </Button>
+        </Group>
+      ) : (
+        <Group align="flex-end">
+          <TextInput
+            label="SMS code"
+            placeholder="123456"
+            value={otpCode}
+            onChange={(e) => setOtpCode(e.currentTarget.value)}
+            disabled={busy}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+          />
+          <Button onClick={confirmMobile} loading={busy} disabled={!otpCode.trim()}>
+            Confirm
+          </Button>
+          <Button variant="subtle" color="gray" onClick={() => setOtpToken(null)} disabled={busy}>
+            Cancel
+          </Button>
+        </Group>
+      )}
+
+      <Title order={4}>Passkeys</Title>
+      <Group>
+        <Button onClick={addPasskey} loading={busy} disabled={!me}>
+          Register a passkey
+        </Button>
+      </Group>
+      <Text size="xs" c="dimmed">
+        Adding credentials requires a recently authenticated session (sudo mode) — if you get a
+        403, sign in again first.
+      </Text>
+
+      <Title order={4}>API keys</Title>
+      <Text size="sm" c="dimmed">
+        Mint a long-lived <Code>api_key+jwt</Code> for automation. The token is shown once; store it
+        securely. Keys cannot refresh or mint further keys.
+      </Text>
+      <Group align="flex-end">
+        <Select
+          label="Lifetime"
+          data={LIFETIME_OPTIONS}
+          value={lifetime}
+          onChange={setLifetime}
+          disabled={busy}
+          style={{ minWidth: 140 }}
+        />
+        <MultiSelect
+          label="Roles (optional subset)"
+          placeholder="All session roles"
+          data={keyRoleOptions}
+          value={keyRoles}
+          onChange={setKeyRoles}
+          disabled={busy}
+          clearable
+          style={{ flex: 1, minWidth: 200 }}
+        />
+        <Button onClick={mintApiKey} loading={busy} disabled={!me}>
+          Mint API key
+        </Button>
+      </Group>
+      <Text size="xs" c="dimmed">
+        Leaving roles empty copies your full session role set. Requested roles must be a subset —
+        escalation is rejected.
+      </Text>
+
+      <Modal
+        opened={!!mintedToken}
+        onClose={() => {
+          setMintedToken(null)
+          setMintedExpires(null)
+        }}
+        title="API key minted"
+        size="lg"
+      >
+        <Stack gap="md">
+          <Alert color="yellow">
+            Copy this token now — it will not be shown again. Treat it like a password.
+          </Alert>
+          {mintedExpires != null && (
             <Text size="sm" c="dimmed">
-              Signed in as <b>{me.username}</b> — roles: {me.roles.join(', ') || '(none)'} — factors
-              proven this session: {me.mfa.length > 0 ? me.mfa.join(', ') : '(single factor)'}
+              Effective lifetime: {mintedExpires} seconds
             </Text>
           )}
-
-          <Title order={4}>Add an email address</Title>
-          <Group align="flex-end">
-            <TextInput
-              label="Email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.currentTarget.value)}
-              disabled={busy}
-            />
-            <Button onClick={addEmail} loading={busy} disabled={!email.trim()}>
-              Send confirmation
-            </Button>
-          </Group>
-
-          <Title order={4}>Add a mobile number</Title>
-          {!otpToken ? (
-            <Group align="flex-end">
-              <TextInput
-                label="Mobile"
-                placeholder="13800000000"
-                value={mobile}
-                onChange={(e) => setMobile(e.currentTarget.value)}
-                disabled={busy}
-              />
-              <Button onClick={addMobile} loading={busy} disabled={!mobile.trim()}>
-                Send SMS code
-              </Button>
-            </Group>
-          ) : (
-            <Group align="flex-end">
-              <TextInput
-                label="SMS code"
-                placeholder="123456"
-                value={otpCode}
-                onChange={(e) => setOtpCode(e.currentTarget.value)}
-                disabled={busy}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-              />
-              <Button onClick={confirmMobile} loading={busy} disabled={!otpCode.trim()}>
-                Confirm
-              </Button>
-              <Button variant="subtle" color="gray" onClick={() => setOtpToken(null)} disabled={busy}>
-                Cancel
-              </Button>
-            </Group>
-          )}
-
-          <Title order={4}>Passkeys</Title>
+          <Code block style={{ wordBreak: 'break-all', maxHeight: 200, overflow: 'auto' }}>
+            {mintedToken}
+          </Code>
           <Group>
-            <Button onClick={addPasskey} loading={busy} disabled={!me}>
-              Register a passkey
+            <Button onClick={copyToken}>Copy to clipboard</Button>
+            <Button
+              variant="default"
+              onClick={() => {
+                setMintedToken(null)
+                setMintedExpires(null)
+              }}
+            >
+              Done
             </Button>
           </Group>
-          <Text size="xs" c="dimmed">
-            Adding credentials requires a recently authenticated session (sudo mode) — if you get a
-            403, sign in again first.
-          </Text>
         </Stack>
-      )
+      </Modal>
+    </Stack>
+  )
 }
 
 export default AccountTab

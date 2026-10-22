@@ -1,179 +1,146 @@
 import { useState } from 'react'
 import { Badge, Button, Group, Stack, Table, Text, TextInput } from '@mantine/core'
-import {
-  openapiEmailRemove,
-  openapiOtpRemove,
-  openapiPasskeyDeactivate,
-  openapiUserActivateUser,
-  openapiUserAddRole,
-  openapiUserAddUser,
-  openapiUserAllUsers,
-  openapiUserDeleteUser,
-  openapiUserRemoveRole,
-  openapiUserUserRoles,
-} from '../../api'
+import { openapiUserAddUser, openapiUserAllUsers, openapiUserUserRoles } from '../../api'
 import { envelope } from '../api'
 import { ErrorAlert } from '../ErrorAlert'
 import { useCrud } from '../common'
+import UserDetailTab from './UserDetailTab'
 
-function UsersTab() {
+interface UsersTabProps {
+  /** Username taken from the hash (`#users/alice`). When set, render the detail surface. */
+  selectedUser?: string | null
+  onSelectUser: (username: string | null) => void
+}
+
+/**
+ * Users is a directory, not a control panel. The list shows identity + a role
+ * preview and one primary action (Open). All person-centric operations live on
+ * the dedicated user detail page (`UserDetailTab`).
+ */
+function UsersTab({ selectedUser, onSelectUser }: UsersTabProps) {
   const { items: users, error, busy, run, load } = useCrud<string>((query) =>
     openapiUserAllUsers({ query }),
-   )
+  )
   const [newUser, setNewUser] = useState('')
-  const [roleUser, setRoleUser] = useState('')
-  const [roleName, setRoleName] = useState('')
-   // G-163: a user's effective roles used to be invisible in the console.
-  const [rolesView, setRolesView] = useState<{ user: string; roles: string[] } | null>(null)
+  // Per-row role cache so we can show badges without a "Show" click.
+  const [roleCache, setRoleCache] = useState<Record<string, string[]>>({})
+  const [loadingRoles, setLoadingRoles] = useState<string | null>(null)
 
   const create = async () => {
     if (!newUser.trim()) return
     const { ok } = await run(() => openapiUserAddUser({ body: { name: newUser.trim() } }))
     if (!ok) return
+    const name = newUser.trim()
     setNewUser('')
     void load()
-   }
+    // Jump straight into the new user so the operator can grant roles next.
+    onSelectUser(name)
+  }
 
-  const activate = async (user: string, active: boolean) => {
-    await run(() => openapiUserActivateUser({ body: { user, active } }))
-   }
-
-  const remove = async (user: string) => {
-    if (!window.confirm(`Delete user "${user}"? The account and its role grants are removed.`)) return
-    const { ok } = await run(() => openapiUserDeleteUser({ body: { user } }))
-    if (!ok) return
-    void load()
-   }
-
-  const changeRole = async (add: boolean) => {
-    if (!roleUser.trim() || !roleName.trim()) return
-    const body = { user: roleUser.trim(), role: roleName.trim() }
-    await run(add ? () => openapiUserAddRole({ body }) : () => openapiUserRemoveRole({ body }))
-   }
-
-  const showRoles = async (user: string) => {
+  const ensureRoles = async (user: string) => {
+    if (roleCache[user] !== undefined) return
+    setLoadingRoles(user)
     const { ok, data } = await run(() => openapiUserUserRoles({ query: { user } }))
+    setLoadingRoles(null)
     if (!ok) return
-    setRolesView({ user, roles: envelope<string[]>(data).data ?? [] })
-   }
+    setRoleCache((prev) => ({ ...prev, [user]: envelope<string[]>(data).data ?? [] }))
+  }
 
-   // G-163/G-101: per-user credential removal — the recovery levers for a
-   // locked-out or compromised account (each is H3-gated server-side).
-  const removePasskeys = async (user: string) => {
-    if (!window.confirm(`Deactivate ALL passkeys of "${user}"? They must re-register afterwards.`)) return
-    await run(() => openapiPasskeyDeactivate({ body: { name: user } }))
-   }
-
-  const removeEmail = async (user: string) => {
-    const email = window.prompt(`Email address to remove from "${user}":`)
-    if (!email?.trim()) return
-    if (!window.confirm(`Remove ${email.trim()} from "${user}"?`)) return
-    await run(() => openapiEmailRemove({ query: { name: user, email: email.trim() } }))
-   }
-
-  const removeMobile = async (user: string) => {
-    const mobile = window.prompt(`Mobile number to remove from "${user}":`)
-    if (!mobile?.trim()) return
-    if (!window.confirm(`Remove ${mobile.trim()} from "${user}"?`)) return
-    await run(() => openapiOtpRemove({ query: { name: user, mobile: mobile.trim() } }))
-   }
+  if (selectedUser) {
+    return <UserDetailTab username={selectedUser} onBack={() => onSelectUser(null)} />
+  }
 
   return (
-     <Stack gap="md">
-       <ErrorAlert error={error} />
-       <Group>
-         <TextInput
+    <Stack gap="md">
+      <ErrorAlert error={error} />
+      <Group>
+        <TextInput
           label="New user"
           placeholder="username"
           value={newUser}
           onChange={(e) => setNewUser(e.currentTarget.value)}
           disabled={busy}
-         />
-         <Button onClick={create} loading={busy} mt="lg">
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void create()
+          }}
+        />
+        <Button onClick={create} loading={busy} mt="lg" disabled={!newUser.trim()}>
           Create
-         </Button>
-       </Group>
-       <Table>
-         <Table.Thead>
-           <Table.Tr>
-             <Table.Th>User</Table.Th>
-             <Table.Th>Roles</Table.Th>
-             <Table.Th>Actions</Table.Th>
-           </Table.Tr>
-         </Table.Thead>
-         <Table.Tbody>
-           {users.map((u) => (
-             <Table.Tr key={u}>
-               <Table.Td>{u}</Table.Td>
-               <Table.Td>
-                 {rolesView?.user === u ? (
-                   <Group gap="xs">
-                     {rolesView.roles.length === 0 && <Text size="xs" c="dimmed">(none)</Text>}
-                     {rolesView.roles.map((r) => (
-                       <Badge key={r} variant="light">
-                         {r}
-                       </Badge>
-                     ))}
-                   </Group>
+        </Button>
+      </Group>
+      <Table highlightOnHover>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>User</Table.Th>
+            <Table.Th>Roles</Table.Th>
+            <Table.Th style={{ width: 100 }} />
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {users.length === 0 && (
+            <Table.Tr>
+              <Table.Td colSpan={3}>
+                <Text size="sm" c="dimmed">
+                  No users yet.
+                </Text>
+              </Table.Td>
+            </Table.Tr>
+          )}
+          {users.map((u) => {
+            const cached = roleCache[u]
+            return (
+              <Table.Tr key={u} style={{ cursor: 'pointer' }} onClick={() => onSelectUser(u)}>
+                <Table.Td>
+                  <Text fw={500}>{u}</Text>
+                </Table.Td>
+                <Table.Td>
+                  {cached !== undefined ? (
+                    <Group gap="xs" wrap="wrap">
+                      {cached.length === 0 && (
+                        <Text size="xs" c="dimmed">
+                          (none)
+                        </Text>
+                      )}
+                      {cached.map((r) => (
+                        <Badge key={r} variant="light" size="sm">
+                          {r}
+                        </Badge>
+                      ))}
+                    </Group>
                   ) : (
-                   <Button size="xs" variant="subtle" disabled={busy} onClick={() => showRoles(u)}>
-                    Show
-                   </Button>
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      loading={loadingRoles === u}
+                      disabled={busy}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void ensureRoles(u)
+                      }}
+                    >
+                      Load roles
+                    </Button>
                   )}
-               </Table.Td>
-               <Table.Td>
-                 <Group gap="xs">
-                   <Button size="xs" variant="default" disabled={busy} onClick={() => activate(u, true)}>
-                    Activate
-                   </Button>
-                   <Button size="xs" variant="default" disabled={busy} onClick={() => activate(u, false)}>
-                    Deactivate
-                   </Button>
-                   <Button size="xs" variant="default" disabled={busy} onClick={() => removePasskeys(u)}>
-                    Drop passkeys
-                   </Button>
-                   <Button size="xs" variant="default" disabled={busy} onClick={() => removeEmail(u)}>
-                    Remove email
-                   </Button>
-                   <Button size="xs" variant="default" disabled={busy} onClick={() => removeMobile(u)}>
-                    Remove mobile
-                   </Button>
-                   <Button size="xs" color="red" variant="default" disabled={busy} onClick={() => remove(u)}>
-                    Delete
-                   </Button>
-                 </Group>
-               </Table.Td>
-             </Table.Tr>
-           ))}
-         </Table.Tbody>
-       </Table>
-       <div>
-         <Text fw={600} mb="xs">
-          Grant / revoke role
-         </Text>
-         <Group>
-           <TextInput
-            label="User"
-            value={roleUser}
-            onChange={(e) => setRoleUser(e.currentTarget.value)}
-            disabled={busy}
-           />
-           <TextInput
-            label="Role"
-            value={roleName}
-            onChange={(e) => setRoleName(e.currentTarget.value)}
-            disabled={busy}
-           />
-           <Button variant="default" onClick={() => changeRole(true)} disabled={busy} mt="lg">
-            Add role
-           </Button>
-           <Button variant="default" onClick={() => changeRole(false)} disabled={busy} mt="lg">
-            Remove role
-           </Button>
-         </Group>
-       </div>
-     </Stack>
-    )
+                </Table.Td>
+                <Table.Td>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSelectUser(u)
+                    }}
+                  >
+                    Open
+                  </Button>
+                </Table.Td>
+              </Table.Tr>
+            )
+          })}
+        </Table.Tbody>
+      </Table>
+    </Stack>
+  )
 }
 
 export default UsersTab
