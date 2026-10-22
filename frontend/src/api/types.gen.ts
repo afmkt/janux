@@ -309,13 +309,13 @@ export type OpenapiPolicyPolicyEntry = {
     mfa?: boolean;
     resource?: string;
     role: string;
-    source?: OpenapiPolicySourceResolver;
-    target?: OpenapiPolicyTargetResolver;
+    source?: OpenapiPolicyResolverSourceResolver;
+    target?: OpenapiPolicyResolverTargetResolver;
 };
 
-export type OpenapiPolicySourceResolver = 'Nothing' | 'User' | 'Domain' | 'Role';
+export type OpenapiPolicyResolverSourceResolver = 'Nothing' | 'User' | 'Domain' | 'Role';
 
-export type OpenapiPolicyTargetResolver = 'Nothing' | {
+export type OpenapiPolicyResolverTargetResolver = 'Nothing' | {
     FromPath: {
         pname: string;
     };

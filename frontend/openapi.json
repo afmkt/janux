@@ -688,10 +688,10 @@
             "type": "string"
           },
           "source": {
-            "$ref": "#/components/schemas/openapi.policy.SourceResolver"
+            "$ref": "#/components/schemas/openapi.policy.resolver.SourceResolver"
           },
           "target": {
-            "$ref": "#/components/schemas/openapi.policy.TargetResolver"
+            "$ref": "#/components/schemas/openapi.policy.resolver.TargetResolver"
           }
         },
         "required": [
@@ -700,7 +700,7 @@
         ],
         "type": "object"
       },
-      "openapi.policy.SourceResolver": {
+      "openapi.policy.resolver.SourceResolver": {
         "enum": [
           "Nothing",
           "User",
@@ -709,7 +709,7 @@
         ],
         "type": "string"
       },
-      "openapi.policy.TargetResolver": {
+      "openapi.policy.resolver.TargetResolver": {
         "oneOf": [
           {
             "enum": [
