@@ -218,8 +218,7 @@ export const openapiPolicyDeletePolicy = <ThrowOnError extends boolean = false>(
  * List all policies in a tenant
  *
  * Policies are read directly from the DB (not the cache) so the caller sees
- * the latest configuration. The `resource` field is flattened back from its
- * segmented storage form into a slash-joined path string.
+ * the latest configuration; `resource` is the same string the model stores.
  */
 export const openapiPolicyAllPolicies = <ThrowOnError extends boolean = false>(options?: Options<OpenapiPolicyAllPoliciesData, ThrowOnError>): RequestResult<OpenapiPolicyAllPoliciesResponses, OpenapiPolicyAllPoliciesErrors, ThrowOnError> => (options?.client ?? client).get<OpenapiPolicyAllPoliciesResponses, OpenapiPolicyAllPoliciesErrors, ThrowOnError>({ url: '/api/v1/admin/policy/list', ...options });
 

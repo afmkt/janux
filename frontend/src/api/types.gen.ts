@@ -298,8 +298,8 @@ export type OpenapiPolicyDeletePolicy = {
 
 /**
  * Wire-format representation of a [`Policy`] for HTTP responses and request
- * bodies. `resource` is a slash-joined path template (e.g. `"users/{id}"`)
- * rather than the segmented `Vec<String>` stored on the model.
+ * bodies. `resource` is a slash-joined path template (e.g. `"users/{id}"`);
+ * the model stores it as the same string.
  */
 export type OpenapiPolicyPolicyEntry = {
     action?: null | OpenapiDbHttpMethod;

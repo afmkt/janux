@@ -653,7 +653,7 @@
         "type": "object"
       },
       "openapi.policy.PolicyEntry": {
-        "description": "Wire-format representation of a [`Policy`] for HTTP responses and request\nbodies. `resource` is a slash-joined path template (e.g. `\"users/{id}\"`)\nrather than the segmented `Vec<String>` stored on the model.",
+        "description": "Wire-format representation of a [`Policy`] for HTTP responses and request\nbodies. `resource` is a slash-joined path template (e.g. `\"users/{id}\"`);\nthe model stores it as the same string.",
         "properties": {
           "action": {
             "oneOf": [
@@ -2356,7 +2356,7 @@
     },
     "/api/v1/admin/policy/list": {
       "get": {
-        "description": "Policies are read directly from the DB (not the cache) so the caller sees\nthe latest configuration. The `resource` field is flattened back from its\nsegmented storage form into a slash-joined path string.",
+        "description": "Policies are read directly from the DB (not the cache) so the caller sees\nthe latest configuration; `resource` is the same string the model stores.",
         "operationId": "openapi.policy.all_policies",
         "parameters": [
           {
