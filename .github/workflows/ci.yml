@@ -89,6 +89,22 @@ jobs:
           # injection (a larger DI effort), deferred at G-127. Until then, run single-
           # threaded like the integration and e2e jobs.
         run: cargo test --lib --test unit_tests --no-fail-fast -- --test-threads=1
+      # Build the single janux debug binary + embedded frontend that every
+      # downstream job (integration/e2e/ui/compliance) reuses as the
+      # `janux-build` artifact. Deps are rust-cache'd, so this is a quick
+      # link; CARGO_PROFILE_DEV_DEBUG:0 keeps the artifact small enough to
+      # round-trip as a GitHub artifact.
+      - name: Build janux debug binary
+        run: cargo build --bin janux
+
+      - name: Upload janux build (binary + embedded frontend)
+        uses: actions/upload-artifact@v5
+        with:
+          name: janux-build
+          path: |
+            target/debug/janux
+            frontend/dist
+          if-no-files-found: error
 
       - name: Test report summary
         if: always()
@@ -117,17 +133,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
 
-      - uses: actions/setup-node@v5
+      # The janux debug binary + its embedded frontend come from the
+      # `janux-build` artifact built once in `unit-tests`; this job compiles
+      # only its own test target (deps are rust-cache'd), so the runtime
+      # `./target/debug/janux` spawn finds the prebuilt binary and skips the
+      # in-test `cargo build --bin janux` fallback in tests/common.rs.
+      - name: Download janux build
+        uses: actions/download-artifact@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          name: janux-build
+          path: .
 
-      - name: Build frontend
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
+      - name: Make janux executable
+        run: chmod +x target/debug/janux
 
       - name: Run integration tests (single-threaded)
         run: cargo test --test z_integration_tests -- --test-threads=1
@@ -162,17 +180,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
 
-      - uses: actions/setup-node@v5
+      # The janux debug binary + its embedded frontend come from the
+      # `janux-build` artifact built once in `unit-tests`; this job compiles
+      # only its own test target (deps are rust-cache'd), so the runtime
+      # `./target/debug/janux` spawn finds the prebuilt binary and skips the
+      # in-test `cargo build --bin janux` fallback in tests/common.rs.
+      - name: Download janux build
+        uses: actions/download-artifact@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          name: janux-build
+          path: .
 
-      - name: Build frontend
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
+      - name: Make janux executable
+        run: chmod +x target/debug/janux
 
       # G-158: this step used to install Chromium for "Playwright-driven"
       # e2e tests that never drove a browser. The tier is HTTP-level.
@@ -200,11 +220,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
       - name: Install system dependencies (libsqlite3, openssl)
         run: |
           sudo apt-get update
@@ -216,18 +231,22 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Build frontend
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
+      # The janux debug binary + its embedded frontend come from the
+      # `janux-build` artifact built once in `unit-tests`; this tier only
+      # drives a real browser against the prebuilt server, so it needs no
+      # Rust toolchain or frontend build of its own.
+      - name: Download janux build
+        uses: actions/download-artifact@v5
+        with:
+          name: janux-build
+          path: .
+
+      - name: Make janux executable
+        run: chmod +x target/debug/janux
 
       - name: Install Playwright browser (the browser IS driven, per G-158)
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-
-      - name: Build janux (debug)
-        run: cargo build --bin janux
 
       - name: Run UI e2e tests (Playwright)
         working-directory: frontend
@@ -253,31 +272,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
       - name: Install system dependencies (libsqlite3, openssl)
         run: |
           sudo apt-get update
           sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
 
-      - uses: actions/setup-node@v5
+      # The janux debug binary + its embedded frontend come from the
+      # `janux-build` artifact built once in `unit-tests`; harness/server.py
+      # finds the prebuilt target/debug/janux and skips its `cargo build`
+      # fallback, so this tier needs no Rust toolchain or frontend build.
+      - name: Download janux build
+        uses: actions/download-artifact@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          name: janux-build
+          path: .
 
-      - name: Build frontend
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
-
-      # The harness spawns target/debug/janux itself (harness/server.py).
-      - name: Build janux (debug)
-        run: cargo build --bin janux
+      - name: Make janux executable
+        run: chmod +x target/debug/janux
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
