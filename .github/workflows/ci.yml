@@ -231,6 +231,13 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # The Playwright test runner lives in node_modules — `npm ci` installs
+      # it from the lockfile (the npm cache makes it fast). The frontend `dist`
+      # ships in the `janux-build` artifact, so we install deps only, no build.
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
       # The janux debug binary + its embedded frontend come from the
       # `janux-build` artifact built once in `unit-tests`; this tier only
       # drives a real browser against the prebuilt server, so it needs no
