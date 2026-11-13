@@ -9,6 +9,19 @@
 # `protobuf` DoS is eliminated by disabling prometheus' default feature so it is
 # no longer a dependency at all).
 #
+# Also fixed in place (2026 batch): crypto-bigint >=0.7.6
+# (RUSTSEC-2026-0387, via the openidconnect 4.0.1 -> 4.1.0 bump, which drops the
+# elliptic-curve 0.13 / p256 0.13 chain), ctutils >=0.4.4 (RUSTSEC-2026-0385),
+# zstd ^0.13.4 (RUSTSEC-2026-0391) + zstd-safe ^7.4.0 (RUSTSEC-2026-0398 / -0403,
+# the tantivy/turso zstd lineage), and rustix >=1.1.6 (RUSTSEC-2026-0486).
+#
+# Two advisories remain as *allowed* cargo-audit warnings (they do not fail CI
+# and are unfixable in place): lru 0.16.4 (RUSTSEC-2026-0253, a panic-unsafety
+# use-after-free in LruCache::pop, pinned by tantivy 0.26.2 on the turso path —
+# worth tracking upstream) and rustls-pemfile 2.2.0 (RUSTSEC-2025-0134,
+# "unmaintained"; reached only via the inactive toasty-driver-postgresql, and
+# the crate's final release).
+#
 # The IDs below are the *unfixable in place* transitive crates. For each one a
 # real upgrade is either unavailable, or it forces a `rust-crypto` ecosystem
 # migration (digest 0.10 -> 0.11, sha2/hmac, argon2, aes-gcm, jsonwebtoken)
@@ -52,4 +65,14 @@ ignore = [
    # (pulled by salvo-oapi) does not yet accept. rkyv is not in the active
    # build graph — nothing compiles it — so the archive path is unreachable.
     "RUSTSEC-2026-0235",
+   #
+   # ── libsqlite3-sys 0.38.2 ─────────────────────────────────────────────
+   # RUSTSEC-2026-0459 (`libsqlite3-sys` via C SQLite CVE-2026-119375,
+   # medium). Reached only through the OPTIONAL `toasty-driver-sqlite`
+   # driver, which is not in the active build graph — janux uses
+   # `toasty-driver-turso` (the default), so rusqlite/libsqlite3-sys is
+   # never compiled. rusqlite is already at its latest (0.40.2), which still
+   # pins `libsqlite3-sys = "0.38"`; the fix (>=0.39.0) is unreachable
+   # without a rusqlite release that does not yet exist.
+    "RUSTSEC-2026-0459",
 ]
