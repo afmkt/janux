@@ -22,7 +22,7 @@
 # env plumbing is NOT used here. On Linux open https://127.0.0.1/app; on macOS
 # trust Caddy's CA once (`up.py single-host trust-ca`).
 
-name: janux-single-host
+name: janux-dogfood
 
 services:
   # janux: the auth server + forward-auth probe (built here or pulled).
@@ -40,7 +40,12 @@ services:
       # janux loads "base" + "seed" from its WORKDIR (/app); data_dir is ./data.
       - ./base.toml:/app/base.toml:ro
       - ./seed.toml:/app/seed.toml:ro
-      - single_auth_data:/app/data
+      # Per-domain UI override: serve the freshly built frontend from the host's
+      # dist/ instead of the embedded (image-baked) UI, so the running stack
+      # shows a new build with NO image rebuild. Remove this line and the
+      # `pages_dir` in seed.toml to revert to the embedded UI.
+      - ../frontend/dist:/app/pages-override:ro
+      - dogfood_auth_data:/app/data
     healthcheck:
       # 503 unless server state is injected and the data dir is present
       # (src/ops.rs) -> a broken volume reads unhealthy, not "serving".
@@ -89,14 +94,29 @@ services:
     # `global { tls internal }` block, so no env override is needed here).
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - single_caddy_config:/config/caddy
-      - single_caddy_data:/data
+      - dogfood_caddy_config:/config/caddy
+      - dogfood_caddy_data:/data
     depends_on:
       auth:
         condition: service_healthy
 
 # 172.28.0.0/16 so base.toml's trusted_proxies pin Caddy's bridge source
 # (also avoids the G-149 boot warning). Distinct from split-hosts' 172.29.
+
+  # Mailpit: a local SMTP sink + web inbox so the magic-link email stays
+  # self-contained (no SaaS). `auth` hands magic links to mailpit:1025 (plain
+  # SMTP, no TLS); the human reads the "Janux login" link in the web inbox at
+  # http://localhost:8025. This is the one extra container vs. the plain demo.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025"   # SMTP the auth container sends magic links to
+      - "8025:8025"   # web inbox UI the user reads the link from
+    networks:
+      - default
+
 networks:
   default:
     driver: bridge
@@ -107,6 +127,6 @@ networks:
 
 # Named volumes are per-project so the two examples' data can coexist on disk.
 volumes:
-  single_auth_data:
-  single_caddy_data:
-  single_caddy_config:
+  dogfood_auth_data:
+  dogfood_caddy_data:
+  dogfood_caddy_config:

@@ -190,10 +190,10 @@ mod tests {
             vec!["base".into(), "seed".into()]
         } else {
             // On a fresh clone / CI the committed example config is the
-            // fixture; the canonical set lives in examples/single-host.
+            // fixture; the canonical set lives in examples/.
             vec![
-                "examples/single-host/base.example".into(),
-                "examples/single-host/seed.example".into(),
+                "examples/base.example".into(),
+                "examples/seed.example".into(),
             ]
         };
         let cfg = JanuxConfig::load_from(&files)
@@ -267,21 +267,37 @@ mod tests {
             );
         }
 
-        // G-133: magic links must land on a route that EXISTS — the
-        // hosted /login SPA consumes token/username/email from the query.
-        // The old /api/v1/auth/email/landing value 404'd out of the box.
-        let verify_url = url::Url::parse(
-            &tenant
-                .resend
-                .as_ref()
-                .expect("seed carries a [seed.resend] block")
-                .verify_url,
-        )
-        .expect("verify_url must parse");
-        assert_eq!(
-            verify_url.path(),
-            "/login",
-            "seeded verify_url must point at the hosted login SPA"
+        // G-133: magic links must land on a route that EXISTS — the hosted
+        // /login SPA consumes token/username/email from the query. The old
+        // /api/v1/auth/email/landing value 404'd out of the box. The guard is
+        // backend-agnostic: check whatever backend(s) the example seeds
+        // (resend / zonemail / smtp), so it holds whether the example uses the
+        // Resend SaaS or the self-hosted SMTP relay + Mailpit.
+        let check = |verify_url: &str| {
+            assert_eq!(
+                url::Url::parse(verify_url)
+                    .expect("verify_url must parse")
+                    .path(),
+                "/login",
+                "seeded verify_url must point at the hosted login SPA"
+            );
+        };
+        let mut checked = 0;
+        if let Some(b) = tenant.resend.as_ref() {
+            check(b.verify_url.as_str());
+            checked += 1;
+        }
+        if let Some(b) = tenant.zonemail.as_ref() {
+            check(b.verify_url.as_str());
+            checked += 1;
+        }
+        if let Some(b) = tenant.smtp.as_ref() {
+            check(b.verify_url.as_str());
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "the example seed must configure at least one mail backend for magic links"
         );
 
         // user_add_role no longer creates unknown roles (Step 4), so every

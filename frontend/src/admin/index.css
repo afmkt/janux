@@ -1,3 +1,75 @@
 body {
   margin: 0;
 }
+
+/* ─── Console shell ───────────────────────────────────────────────────────────
+   A hand-rolled flex frame (header + sidebar + main) shipped in the hashed CSS
+   bundle, so it is allowed by the server's `style-src 'self'` CSP. Mantine's
+   <AppShell> would express the same frame but injects its fixed-panel offsets as
+   a runtime <style> tag — blocked by that CSP — which left the main content
+   un-offset under the navbar. Nothing here is runtime-injected. */
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.shell-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  height: 56px;
+  padding: 0 1rem;
+  background: var(--mantine-color-body, #fff);
+  border-bottom: 1px solid var(--mantine-color-gray-3, #dee2e6);
+}
+
+.shell-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.shell-nav {
+  flex-shrink: 0;
+  width: 220px;
+  padding: 1rem;
+  background: var(--mantine-color-body, #fff);
+  border-right: 1px solid var(--mantine-color-gray-3, #dee2e6);
+}
+
+.shell-main {
+  flex: 1;
+  min-width: 0;
+  padding: 1.5rem;
+}
+
+/* Below the `sm` breakpoint the sidebar detaches into a slide-in overlay so the
+   content keeps full width; the backdrop closes it on tap. */
+@media (max-width: 767px) {
+  .shell-nav {
+    position: fixed;
+    top: 56px;
+    bottom: 0;
+    left: 0;
+    z-index: 90;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+
+  .shell-nav--open {
+    transform: translateX(0);
+    box-shadow: 0 0 16px rgb(0 0 0 / 0.2);
+  }
+
+  .shell-backdrop {
+    position: fixed;
+    inset: 56px 0 0 0;
+    z-index: 80;
+    background: rgb(0 0 0 / 0.3);
+  }
+}

@@ -38,6 +38,14 @@ All notable changes to Janux. The format follows [Keep a Changelog](https://keep
   to override. A loud boot warning flags a reachable host running with it on.
 
 ### Changed
+- **Examples** (`examples/`): the tree is now a single flat, dogfood-style
+  deployment — Caddy + nginx + Mailpit + the per-domain frontend override —
+  replacing the `single-host`/`split-hosts` subfolders and the `up.py`
+  lifecycle harness. `render-deploy.py` is single-host-only and copies this
+  flat example; its mailpit + frontend-override defaults match the dogfood
+  harness. `seed_toml_bootstraps_builtin_roles`' G-133 magic-link guard is now
+  backend-agnostic (any configured `resend` / `zonemail` / `smtp`, ≥1 required,
+  not Resend-only) so the SMTP-relay example satisfies it.
 - **User detail page** (`frontend/src/admin/tabs/UserDetailTab.tsx`, hash
   `#users/<name>`): Users is now a directory. Opening a row lands on a dedicated
   surface with grouped sections — Roles (chips + grant/revoke), Credentials
@@ -58,15 +66,31 @@ All notable changes to Janux. The format follows [Keep a Changelog](https://keep
   stops on a bare "Signed in." alert. It now renders "Signed in. You can close
   this tab." plus a **Continue to admin console** button (→ `/admin`), so a
   user who reaches `/login` without a redirect is no longer stranded.
-- **Admin console shell** (`frontend/src/admin/App.tsx`): the flat 12-item tab
-  strip is replaced by a Mantine `AppShell` — a grouped sidebar
-  (Identity · Directory · Authentication · Security · Insights), a header with the
-  Janux brand, a light/dark theme toggle, and a user menu (roles, MFA status,
-  self-service *Account*, sign out). Navigation is hash-routed (`#users`,
-  `#roles`, …) so deep-links and back/forward work with no new server route.
-  User detail deep-links use `#users/<name>`.
+- **Admin console shell** (`frontend/src/admin/App.tsx`,
+  `frontend/src/admin/index.css`): the flat 12-item tab strip is now a
+  **collapsible accordion sidebar** — one control per intent group
+  (Identity · Directory · Authentication · Security · Insights) that expands its
+  panel of sections, so an operator collapses the groups they are not in and the
+  group holding the active section stays open as navigation (and back/forward)
+  happens. A header carries the Janux brand, a light/dark theme toggle, and a
+  user menu (roles, MFA status, self-service *Account*, sign out). Navigation is
+  hash-routed (`#users`, `#roles`, …) so deep-links and back/forward work with no
+  new server route; user detail deep-links use `#users/<name>`. The frame is a
+  hand-rolled flex layout shipped in the hashed CSS bundle rather than Mantine's
+  `<AppShell>`: AppShell injects its fixed-panel offsets as a runtime `<style>`
+  tag, which the server's `style-src 'self'` CSP blocks — leaving the main
+  content un-offset and the sidebar overlapping it. The static layout reproduces
+  the same frame (and the mobile slide-in overlay) with no runtime-injected
+  style, so the console renders correctly under the CSP.
 - **Unified theme** (`frontend/src/shared/theme.ts`,
   `frontend/src/shared/providers.tsx`): all four SPAs (admin, login, consent,
   device) now mount one shared `ThemeProvider` with a brand accent (`grape`) and
   a persisted light/dark color scheme, so the console and the auth ceremony read
   as a single product.
+- **Hosted page caching** (`src/pages.rs`): HTML entry pages (`login`, `consent`,
+  `device`, `admin`) now carry `Cache-Control: no-cache` on both the 200 body and
+  the 304 revalidation, so a plain browser reload revalidates via the response
+  ETag instead of serving a stale entry that points at an already-replaced,
+  content-hashed bundle — the trap that made a freshly built frontend appear
+  unchanged. Hashed static assets get no `Cache-Control`, so the browser keeps
+  caching them by their content-hash name.

@@ -1,39 +1,120 @@
-# janux + Caddy forward-auth, two deployment scenarios
+# janux + Caddy forward-auth — a single-host example
 
-Two self-contained `docker compose` projects that put janux in front of a
-simple service and **gate that service with `forward_auth`** — one where the
-auth server and the service sit behind a **single host**, and one where
-auth, the service, and the front sit on **separate hostnames**. Each project
-is a 3-container stack:
+One self-contained `docker compose` project that puts janux in front of a
+simple service and **gates that service with `forward_auth`**. The auth server
+and the service sit behind a **single host** (`localhost`) — the only layout
+janux's host-only `Secure` session cookie supports cleanly, because the browser
+only re-sends the cookie to the host that set it.
 
-| service    | image          | role |
-| ---------- | -------------- | ---- |
-| `caddy`    | `caddy:latest` | public front; runs `forward_auth` for the gated path |
-| `auth`     | janux | the auth server / forward-auth probe |
-| `app`      | `nginx:alpine` | the "simple service" — serves one static file at `/app` |
+The stack is fully **self-contained**: the magic-link email is delivered to a
+local [Mailpit](https://github.com/axllent/mailpit) inbox instead of a real
+mailbox or SaaS, so you can try the whole sign-in flow with no credentials.
+
+| service    | image             | role |
+| ---------- | ----------------- | ---- |
+| `caddy`    | `caddy:latest`    | public front; runs `forward_auth` for the gated path |
+| `auth`     | janux            | the auth server / forward-auth probe |
+| `app`      | `nginx:alpine`    | the "simple service" — serves one static file at `/app` |
+| `mailpit`  | `axllent/mailpit` | local SMTP sink + web inbox for the magic link (no SaaS) |
 
 ```
 examples/
-  up.py                  # checks config exists (needs base.toml/seed.toml), maps hosts, runs either stack
-  single-host/           # ONE hostname (localhost): auth + gated /app, same host
-    compose.yml
-    Caddyfile
-    app-nginx.conf       # nginx `location /app/` -> aliased static file
-    base.example.toml    # template -> base.toml (gitignored), `cp` once by hand
-    seed.example.toml    # -> seed.toml (gitignored; put real creds in the copy)
-    site/index.html      # the protected static file
-  split-hosts/           # TWO hostnames: auth.example.com + app.example.com
-                         (same files, app-nginx.conf + seed keyed to app.example.com)
+  compose.yml          # the stack (name: janux)
+  Caddyfile            # localhost front: /app gated, everything else -> janux
+  app-nginx.conf       # nginx `location /app/` -> aliased static file
+  base.example.toml    # template -> base.toml (gitignored); `cp` once by hand
+  seed.example.toml    # -> seed.toml (gitignored); mail backend + bootstrap
+  site/index.html      # the protected static file
 ```
 
-## How to write policies
+## Request flow
 
+```
+/api/v1/auth/verify -> janux     (public — Caddy POSTs the auth probe here)
+/app                 -> forward_auth janux verify -> nginx (gated)
+/   (everything else) -> janux   (discovery, OIDC, admin UI, SCIM, health, /login)
+```
+
+On an unauthenticated probe janux answers `303 -> /login` (`forward_auth_redirect
+= true` in `base.toml`); Caddy propagates that to the browser, which authenticates
+at `/login`, gets its host-only cookie, and retries `/app`.
+
+## Quickstart
+
+```sh
+cd examples
+cp base.example.toml base.toml; cp seed.example.toml seed.toml
+#   edit base.toml's encryption_key:  openssl rand -hex 32
+docker compose up -d
+# open https://localhost/app
+```
+
+`base.toml` / `seed.toml` are gitignored (they hold per-run secrets), so copy the
+committed `*.example.toml` templates by hand on first run. The stack uses the
+local Mailpit relay by default, so no mail credentials are needed.
+
+## First time on macOS
+
+Caddy signs `localhost` with its local CA (`tls internal`). The browser shows a
+certificate warning on the first load. Two options:
+
+- **Quick:** click through the warning once; the `Secure` session cookie still
+  works over untrusted HTTPS, and the warning won't reappear for the session.
+- **One-time clean:** extract Caddy's root CA and trust it, then reload:
+  ```sh
+  docker compose exec caddy caddy trust extract --output caddy-root.crt 2>/dev/null \
+    || docker cp caddy:/data/caddy/pki/authorities/local/root.crt caddy-root.crt
+  security add-trusted-cert -r trustRoot \
+    -k ~/Library/Keychains/login.keychain-db caddy-root.crt
+  ```
+
+On Linux, `localhost` is a secure context already — just open `https://127.0.0.1/app`.
+
+## Sign in (magic link)
+
+1. Open the Mailpit inbox at <http://localhost:8025> in one tab and
+   <https://localhost/app> in another.
+2. `/app` won't load — it bounces you to `https://localhost/login`.
+3. On the login page, enter `tester@example.com` (a seeded `user`) and request
+   the link. `admin@example.com` and `root@example.com` work too.
+4. In the Mailpit tab, a **"Janux login"** email appears; click the link.
+5. The link auto-completes sign-in and sets your session. Back to the `/app`
+   tab, reload — you'll see **"Protected content ✓"**.
+
+## Serve the latest frontend without rebuilding the image
+
+The `localhost` domain's UI is served from a **bind-mounted** copy of the built
+frontend instead of the image-baked one (`../frontend/dist` → `/app/pages-override`,
+mounted in `compose.yml` and pointed at by `pages_dir` in `seed.toml`). janux
+reads that directory **per request**, so after editing `../frontend/src/*`:
+
+```sh
+cd ../frontend && npm run build   # regenerates ../frontend/dist
+```
+
+…the running stack serves the new build with **no image rebuild and no restart**.
+(HTML entry pages carry `Cache-Control: no-cache` so a plain reload picks up the
+new content-hashed bundles.) Remove the `../frontend/dist` volume in
+`compose.yml` and the `pages_dir` in `seed.toml` to revert to the embedded UI.
+
+## Tearing down
+
+```sh
+docker compose down            # stop, keep named volumes (CA + data persist)
+docker compose down -v         # also wipe the named volumes (fresh start)
+```
+
+## Writing policies (RBAC authoring)
+
+RBAC is **default-deny**: anything not granted is rejected. Built-in
+admin/scim/tenant/user endpoints are guarded in code (role membership) and need
+no policy rows; only tenant-defined resources — like the `/app` forward-auth path
+here — use the policy engine. Paths match **exactly** (G-43, no wildcards).
 
 #### Scenario 1 (simplest) — domain + role
 
 Omit `resource`: it defaults to `""`, which matches **any** path in the domain,
-so a single row full-grants one role the whole tenant. Handy as a broad allow,
-or to gate an entire domain per role in a few lines.
+so a single row full-grants one role the whole tenant.
 
 ```toml
 { domain = "localhost", role = "user" },
@@ -41,93 +122,34 @@ or to gate an entire domain per role in a few lines.
 { domain = "localhost", role = "root" },
 ```
 
-#### Scenario 2 (the workhorse — what forwards `/app`) — domain + resource + role
+#### Scenario 2 (the workhorse — what gates `/app`) — domain + resource + role
 
-Gate **one exact path per role** on the default-deny engine. Paths match
-**exactly** (G-43, no wildcards), so grant the real path the forward-auth proxy
+Gate **one exact path per role**. Grant the real path the forward-auth proxy
 hits — `/app`, no trailing slash. Every other field defaults: all methods;
-`source`/`target` = `Nothing` (the grant is purely "this role may reach this
-resource"); `mfa` = `false`; `allowed` = `true`.
+`source`/`target` = `Nothing`; `mfa` = `false`; `allowed` = `true`.
 
 ```toml
-{ domain = "localhost", resource = "/app1", role = "user" },
-{ domain = "localhost", resource = "/app2", role = "admin" },
-{ domain = "localhost", resource = "/app3", role = "root" },
+{ domain = "localhost", resource = "/app", role = "user" },
+{ domain = "localhost", resource = "/app", role = "admin" },
+{ domain = "localhost", resource = "/app", role = "root" },
 ```
 
 #### Scenario 3 (advanced) — domain + resource + role + source + target
 
-`source`/`target` only make a grant **conditional** on *who* the caller is and
-*what* they ask for. With both `Nothing` (Scenario 2) the row is a plain "this
-role may reach this resource" and the engine never looks at the caller. Turn them
-on and the engine resolves two identities and permits **only when they agree**.
+`source`/`target` make a grant **conditional** on *who* the caller is and *what*
+they ask for:
 
-**What each side means** —
+- `source` is an identity read from **the caller** (JWT/session): `Nothing`,
+  `User` (`jwt.user`), `Domain` (`jwt.domain`), or `Role`.
+- `target` is an identity read from **the request**: `Nothing`,
+  `FromPath{n}`, `FromQuery{n}`, or `FromHeader{n}`.
 
-- `source` is an identity read from **the caller** (its JWT / session):
-  - `Nothing` — no caller-side identity to compare
-  - `User` — the caller's username (`jwt.user`)
-  - `Domain` — the caller's home tenant (`jwt.domain`)
-  - `Role` — this row's own role id (the grant's role)
-- `target` is an identity read from **the request** the caller is making, i.e.
-  "which object are they asking for":
-  - `Nothing` — no request-side identity to compare
-  - `FromPath{n}` — the `{n}` path segment of the resource, e.g. `/app/{owner}`
-  - `FromQuery{n}` — the `?n=...` query parameter
-  - `FromHeader{n}` — a request header named `n` (looked up lower-cased)
-
-In TOML the target variants look like:
+The engine grants **iff the two agree** (both absent, or both present and equal)
+— *not* "missing is fine". `source = User` + `target = FromPath /app/{owner}`
+collapses access to "you may only reach **your own** thing": `alice` reaches
+`/app/alice`, but `/app/bob` is denied. `mfa = true` adds a TOTP step-up gate.
 
 ```toml
-{ domain = "app.example.com", resource = "/app1/{owner}", role = "user", source = "User", target = { FromPath = { pname = "owner" } }, mfa = true, allowed = true },
-{ domain = "app.example.com", resource = "/app2", role = "user", source = "User", target = { FromQuery = { qname = "owner" } }, mfa = true, allowed = true },
-{ domain = "app.example.com", resource = "/app3", role = "user", source = "User", target = { FromHeader = { hname = "x-tenant-id" } }, mfa = true, allowed = true },
-
-```
-
-**How the engine uses them** (`Policy::can_access`, default-deny):
-
-1. `domain` + `role` + **exact** resource must match first (G-43: exact, no
-   wildcards).
-2. It resolves `source` and `target`, each to an `Option<identity>`, then
-   **grants iff the two agree** — both absent, or both present and equal. It is
-   *not* "missing is fine": a `source` that does not equal the request's `target`
-   yields no match, so default-deny wins and the request is rejected.
-3. That "must be equal" **is** the self-scoping: bind `source` to the caller and
-   `target` to the object they name, and access collapses to "you may only reach
-   **your own** thing". `source = User` + `target = FromPath /app/{owner}` ⇒
-   `alice` reaches `/app/alice`, but `/app/bob` is **denied** (source `"alice"`
-   ≠ target `"bob"`).
-4. `source = Domain` + `target = FromHeader{x-tenant-id}` is the cross-tenant
-   case: reach the resource only when the caller's home tenant equals that header.
-5. `mfa = true` adds a gate: even when `source == target`, the caller must have
-   done a TOTP step-up first, else the engine asks for MFA re-auth, not allow.
-
-Full example — a user may reach **only their own** `/app/{owner}`, behind TOTP:
-
-```toml
-{ domain = "localhost", resource = "/app/{owner}", role = "user", source = "User", target = { FromPath = { pname = "owner" } }, mfa = true, allowed = true },
-```
-
-## Files
-
-- **`up.py`** — ensures the git-ignored `base.toml` / `seed.toml` exist
-  (create them from the committed `*.example.toml` templates by hand with `cp` on
-   first run — it NEVER renders or clobbers them, so the creds you put in
-   `seed.toml` survive every `up`), sets `CADDY_TLS`, maps split-hosts into
-   `/etc/hosts`, and runs compose.
-- **`single-host/`**, **`split-hosts/`** — see the tree above; each is a
-  standalone `docker compose` project.
-- **`site/index.html`** — the protected static file (self-contained: no
-  sub-resources, so only the single `/app` resource needs an RBAC row).
-
-## Manual run (without `up.py`)
-
-```sh
-cd examples/single-host
-cp base.example.toml base.toml; cp seed.example.toml seed.toml
-#   then edit base.toml's encryption_key (openssl rand -hex 32) and
-#   seed.toml's [seed.resend] creds + the admin email.
-CADDY_TLS="tls internal" docker compose up -d --build
-# open https://localhost/app
+{ domain = "localhost", resource = "/app/{owner}", role = "user",
+  source = "User", target = { FromPath = { pname = "owner" } }, mfa = true, allowed = true },
 ```

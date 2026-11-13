@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Render a Janux deploy pack from survey answers.
 
-Copies examples/<layout>/ into --out, writes base.toml + seed.toml,
-patches Caddyfile domain/path/TLS, and prints next steps.
+Copies the examples/ single-host stack into --out, writes base.toml + seed.toml,
+patches the Caddyfile domain/path/TLS, and prints next steps.
 
 Stdlib only. Safe defaults: generate-only, demo nginx backend, no secrets
 on the command line required.
@@ -23,7 +23,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES = REPO_ROOT / "examples"
 
 SINGLE_SUBNET = "172.28.0.0/16"
-SPLIT_SUBNET = "172.29.0.0/16"
 
 
 def die(msg: str, code: int = 1) -> None:
@@ -49,16 +48,12 @@ def load_answers(args: argparse.Namespace) -> dict:
         return default
 
     layout = pick("layout", args.layout, "single-host")
-    if layout not in ("single-host", "split-hosts"):
-        die("layout must be single-host or split-hosts")
+    if layout != "single-host":
+        die("this generator ships the single-host layout only")
 
     domain = pick("domain", args.domain)
     if not domain:
         die("domain is required (flag or answers JSON)")
-
-    app_domain = pick("app_domain", args.app_domain)
-    if layout == "split-hosts" and not app_domain:
-        die("split-hosts requires app_domain")
 
     resource = pick("resource", args.resource, "/app")
     if not str(resource).startswith("/"):
@@ -71,11 +66,7 @@ def load_answers(args: argparse.Namespace) -> dict:
         die("tls must be internal or acme")
 
     backend = pick("backend", args.backend, "app:80")
-    trusted = pick(
-        "trusted_proxies",
-        args.trusted_proxies,
-        SINGLE_SUBNET if layout == "single-host" else SPLIT_SUBNET,
-    )
+    trusted = pick("trusted_proxies", args.trusted_proxies, SINGLE_SUBNET)
     image = pick("image", args.image, "ghcr.io/afmkt/janux:latest")
     resend_key = pick("resend_key", args.resend_key)
     resend_from = pick("resend_from", args.resend_from, f"no-reply@{domain}")
@@ -84,19 +75,13 @@ def load_answers(args: argparse.Namespace) -> dict:
         encryption_key = secrets.token_hex(32)
 
     verify_scheme = "https"
-    verify_host = domain if layout == "single-host" else (app_domain or domain)
-    verify_url = pick(
-        "verify_url",
-        args.verify_url,
-        f"{verify_scheme}://{verify_host}/login",
-    )
+    verify_url = pick("verify_url", args.verify_url, f"{verify_scheme}://{domain}/login")
 
     tenant_name = pick("tenant_name", args.tenant_name, domain)
 
     return {
         "layout": layout,
         "domain": domain,
-        "app_domain": app_domain,
         "resource": resource,
         "role": role,
         "admin_email": admin_email,
@@ -113,10 +98,10 @@ def load_answers(args: argparse.Namespace) -> dict:
     }
 
 
-def copy_example(layout: str, out: Path) -> None:
-    src = EXAMPLES / layout
+def copy_example(out: Path) -> None:
+    src = EXAMPLES
     if not src.is_dir():
-        die(f"example layout missing: {src}")
+        die(f"example missing: {src}")
     if out.exists():
         die(f"output directory already exists: {out} (refuse to overwrite)")
     shutil.copytree(
@@ -125,6 +110,7 @@ def copy_example(layout: str, out: Path) -> None:
         ignore=shutil.ignore_patterns(
             "base.toml",
             "seed.toml",
+            "README.md",
             "__pycache__",
             "*.pyc",
         ),
@@ -150,15 +136,8 @@ port = 8080
 
 def write_seed_toml(out: Path, a: dict) -> None:
     domain = a["domain"]
-    if a["layout"] == "split-hosts":
-        domains_line = (
-            f'[{{ id = "{domain}", cors = ["tenant"] }}, '
-            f'{{ id = "{a["app_domain"]}", cors = ["tenant"] }}]'
-        )
-        policy_domain = a["app_domain"]
-    else:
-        domains_line = f'[{{ id = "{domain}", cors = [] }}, {{ id = "0.0.0.0", cors = [] }}]'
-        policy_domain = domain
+    domains_line = f'[{{ id = "{domain}", cors = [] }}, {{ id = "0.0.0.0", cors = [] }}]'
+    policy_domain = domain
 
     resend_block = ""
     if a["resend_key"]:
@@ -209,17 +188,12 @@ def patch_caddyfile(out: Path, a: dict) -> None:
     text = re.sub(r"path\s+/app\b", f"path {resource}", text)
     text = re.sub(r"@appName\b", "@gated", text)
 
-    if a["layout"] == "single-host":
-        text = re.sub(
-            r"(?m)^localhost\s*\{",
-            f"{a['domain']} {{",
-            text,
-            count=1,
-        )
-    else:
-        if a["app_domain"]:
-            text = text.replace("app.example.com", a["app_domain"])
-        text = text.replace("auth.example.com", a["domain"])
+    text = re.sub(
+        r"(?m)^localhost\s*\{",
+        f"{a['domain']} {{",
+        text,
+        count=1,
+    )
 
     path.write_text(text)
 
@@ -239,7 +213,7 @@ def patch_compose(out: Path, a: dict) -> None:
 
 
 def write_readme(out: Path, a: dict) -> None:
-    domain = a["domain"] if a["layout"] == "single-host" else a["app_domain"]
+    domain = a["domain"]
     (out / "DEPLOY.md").write_text(
         f"""# Janux deploy pack
 
@@ -249,7 +223,6 @@ Generated by `scripts/render-deploy.py`.
 |-------|-------|
 | layout | {a['layout']} |
 | domain | {a['domain']} |
-| app_domain | {a.get('app_domain') or '—'} |
 | resource | {a['resource']} |
 | role | {a['role']} |
 | tls | {a['tls']} |
@@ -291,9 +264,8 @@ def main() -> None:
     )
     ap.add_argument("--answers", help="JSON file with survey answers")
     ap.add_argument("--out", required=True, help="Output directory (must not exist)")
-    ap.add_argument("--layout", choices=("single-host", "split-hosts"))
+    ap.add_argument("--layout", choices=("single-host",))
     ap.add_argument("--domain")
-    ap.add_argument("--app-domain")
     ap.add_argument("--resource", default=None)
     ap.add_argument("--role", default=None)
     ap.add_argument("--admin-email", default=None)
@@ -311,7 +283,7 @@ def main() -> None:
     a = load_answers(args)
     out = Path(args.out).resolve()
 
-    copy_example(a["layout"], out)
+    copy_example(out)
     write_base_toml(out, a)
     write_seed_toml(out, a)
     patch_caddyfile(out, a)
@@ -330,9 +302,8 @@ def main() -> None:
     print("Next:")
     print(f"  1. Review {out / 'seed.toml'}")
     print(f"  2. cd {out} && docker compose up -d")
-    host = a["domain"] if a["layout"] == "single-host" else a["app_domain"]
-    print(f"  3. curl -fsS https://{host}/api/v1/health/ready")
-    print(f"  4. Open https://{host}/login")
+    print(f"  3. curl -fsS https://{a['domain']}/api/v1/health/ready")
+    print(f"  4. Open https://{a['domain']}/login")
     if a["mode"] != "live":
         print()
         print("Generate-only mode: not starting containers. Hand pack to the user.")

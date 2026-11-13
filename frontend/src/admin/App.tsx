@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  AppShell,
+  Accordion,
   Avatar,
   Badge,
   Button,
@@ -81,6 +81,11 @@ const NAV: NavEntry[] = [
 
 const GROUPS = ['Identity', 'Directory', 'Authentication', 'Security', 'Insights']
 
+// The nav group that holds a section — the accordion keeps the group of the
+// active section open so the current panel is always visible.
+const groupFor = (section: Section): string | undefined =>
+  NAV.find((n) => n.section === section)?.group
+
 interface RouteState {
   section: Section
   /** When section === 'users', optional username for the detail page. */
@@ -156,39 +161,57 @@ function SectionContent({
   }
 }
 
+// The navigation is a collapsible accordion: each intent group is a control that
+// expands its panel of sections, so an operator collapses the groups they are not
+// in and scans a short tree instead of a 12-item strip. Only the group holding
+// the active section is open (`openGroup`, single-open), which the parent keeps
+// in step with the route so deep-links and back/forward land on the visible panel.
 function Sidebar({
   section,
+  openGroup,
+  onToggleGroup,
   onNavigate,
 }: {
   section: Section
+  openGroup: string | null
+  onToggleGroup: (group: string | null) => void
   onNavigate: (section: Section) => void
 }) {
   return (
-    <Stack gap="lg">
+    <Accordion
+      variant="separator"
+      chevronPosition="right"
+      value={openGroup}
+      onChange={onToggleGroup}
+    >
       {GROUPS.map((group) => {
         const items = NAV.filter((n) => n.group === group)
         if (items.length === 0) return null
         return (
-          <div key={group}>
-            <Text size="xs" fw={700} c="dimmed" tt="uppercase" lh="1.5">
-              {group}
-            </Text>
-            <Stack gap="xs" mt="xs">
-              {items.map((item) => (
-                <Button
-                  key={item.section}
-                  fullWidth
-                  variant={section === item.section ? 'filled' : 'subtle'}
-                  onClick={() => onNavigate(item.section)}
-                >
-                  {item.label}
-                </Button>
-              ))}
-            </Stack>
-          </div>
+          <Accordion.Item key={group} value={group}>
+            <Accordion.Control>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase" lh="1.5">
+                {group}
+              </Text>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Stack gap="xs" pt="xs">
+                {items.map((item) => (
+                  <Button
+                    key={item.section}
+                    fullWidth
+                    variant={section === item.section ? 'filled' : 'subtle'}
+                    onClick={() => onNavigate(item.section)}
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+              </Stack>
+            </Accordion.Panel>
+          </Accordion.Item>
         )
       })}
-    </Stack>
+    </Accordion>
   )
 }
 
@@ -237,10 +260,19 @@ function UserMenu({ me, onAccount }: { me: SessionMe | null; onAccount: () => vo
   )
 }
 
+// The console frame is a hand-rolled flex layout (header + sidebar + main, see
+// index.css) rather than Mantine's <AppShell>: AppShell injects its fixed-panel
+// offsets as a runtime <style> tag, which the server's `style-src 'self'` CSP
+// blocks — leaving the main content un-offset under the fixed navbar and the
+// sidebar overlapping it. A static, bundle-shipped layout reproduces the same
+// frame (and the mobile overlay) without any runtime-injected style.
 function Console() {
   const [route, setRoute] = useState<RouteState>(routeFromHash)
   const [opened, setOpened] = useState(false)
   const [signal, setSignal] = useState<AuthSignal | null>(null)
+  const [openGroup, setOpenGroup] = useState<string | null>(
+    () => groupFor(route.section) ?? null,
+  )
   const { me } = useWhoami()
   const mobile = useMediaQuery('(max-width: 767px)')
 
@@ -251,9 +283,15 @@ function Console() {
     return () => setSignalHandler(null)
   }, [])
 
-  // Keep the section in sync with the URL so back/forward and deep-links work.
+  // Keep the section — and the accordion group holding it — in sync with the URL
+  // so back/forward and deep-links land on the visible panel.
   useEffect(() => {
-    const onHash = () => setRoute(routeFromHash())
+    const onHash = () => {
+      const next = routeFromHash()
+      setRoute(next)
+      const g = groupFor(next.section)
+      if (g) setOpenGroup(g)
+    }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
@@ -261,6 +299,8 @@ function Console() {
   const navigate = (next: Section) => {
     window.location.hash = hashFor(next)
     setRoute({ section: next, user: null })
+    const g = groupFor(next)
+    if (g) setOpenGroup(g)
     // Closing the mobile overlay after a tap keeps the content unobscured.
     setOpened(false)
   }
@@ -268,6 +308,8 @@ function Console() {
   const selectUser = (username: string | null) => {
     window.location.hash = hashFor('users', username)
     setRoute({ section: 'users', user: username })
+    // A user detail lives under Users (Identity); open its group so the path shows.
+    if (username) setOpenGroup('Identity')
   }
 
   const active = NAV.find((n) => n.section === route.section)
@@ -278,64 +320,75 @@ function Console() {
       : 'Account'
 
   return (
-    <AppShell
-      navbar={{ width: 220, breakpoint: 'sm', collapsed: { desktop: false, mobile: !opened } }}
-      header={{ height: 56 }}
-      padding="lg"
-      withBorder
-    >
-      <AppShell.Header p="md">
-        <Group h="100%" justify="space-between">
-          <Group gap="xs">
-            {mobile && (
-              <Button
-                variant="subtle"
-                size="compact"
-                color="gray"
-                onClick={() => setOpened((o) => !o)}
-                aria-label="Toggle navigation"
-              >
-                ☰
-              </Button>
-            )}
-            <Avatar src="/favicon.svg" size={30} radius="md" />
-            <Text fw={700} size="lg" lh={1}>
-              Janux
-            </Text>
-            <Badge variant="subtle" color="gray">
-              console
-            </Badge>
-          </Group>
-          <Group gap="xs">
-            <ColorSchemeToggle />
-            <UserMenu me={me} onAccount={() => navigate('account')} />
-          </Group>
+    <div className="shell">
+      <header className="shell-header">
+        <Group gap="xs">
+          {mobile && (
+            <Button
+              variant="subtle"
+              size="compact"
+              color="gray"
+              onClick={() => setOpened((o) => !o)}
+              aria-label="Toggle navigation"
+            >
+              ☰
+            </Button>
+          )}
+          <Avatar src="/favicon.svg" size={30} radius="md" />
+          <Text fw={700} size="lg" lh={1}>
+            Janux
+          </Text>
+          <Badge variant="subtle" color="gray">
+            console
+          </Badge>
         </Group>
-      </AppShell.Header>
+        <Group gap="xs">
+          <ColorSchemeToggle />
+          <UserMenu me={me} onAccount={() => navigate('account')} />
+        </Group>
+      </header>
 
-      <AppShell.Navbar p="md">
-        <Sidebar section={route.section} onNavigate={navigate} />
-      </AppShell.Navbar>
-
-      <AppShell.Main>
-        <Stack gap="md">
-          <div>
-            <Title order={2} mb="xs">
-              Admin console
-            </Title>
-            <Text c="dimmed" size="sm">
-              {subtitle}
-            </Text>
-          </div>
-          {signal && <SignalPanel kind={signal} onDone={() => setSignal(null)} />}
-          <SectionContent
+      <div className="shell-body">
+        <aside
+          className={mobile && opened ? 'shell-nav shell-nav--open' : 'shell-nav'}
+          aria-label="Navigation"
+        >
+          <Sidebar
             section={route.section}
-            user={route.user}
-            onSelectUser={selectUser}
+            openGroup={openGroup}
+            onToggleGroup={setOpenGroup}
+            onNavigate={navigate}
           />
-        </Stack>
-      </AppShell.Main>
-    </AppShell>
+        </aside>
+
+        {mobile && opened && (
+          <div
+            className="shell-backdrop"
+            onClick={() => setOpened(false)}
+            aria-hidden
+          />
+        )}
+
+        <main className="shell-main">
+          <Stack gap="md">
+            <div>
+              <Title order={2} mb="xs">
+                Admin console
+              </Title>
+              <Text c="dimmed" size="sm">
+                {subtitle}
+              </Text>
+            </div>
+            {signal && <SignalPanel kind={signal} onDone={() => setSignal(null)} />}
+            <SectionContent
+              section={route.section}
+              user={route.user}
+              onSelectUser={selectUser}
+            />
+          </Stack>
+        </main>
+      </div>
+    </div>
   )
 }
 

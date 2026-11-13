@@ -20,17 +20,20 @@ Stack: Rust · Salvo · Toasty (per-tenant schemas) · webauthn-rs · RSA-signed
 - **Multi-tenancy** — tenants are resolved from the request `Host`; each has its own database schema, signing keys, policies, and provider config.
 - **RBAC** — bounded role hierarchy with a level gate that closes privilege escalation by construction; default-deny on every endpoint.
 - **SCIM 2.0** — `/scim/v2/*` provisioning driven by a `client_credentials` machine principal.
-- **Forward-auth demo** — `examples/` ships two `docker compose` scenarios (single-host + split-hosts) that put Janux behind Caddy to gate a protected path.
+- **Forward-auth demo** — `examples/` is a single self-contained `docker compose` stack (janux + Caddy + a gated `/app` page, with a local Mailpit inbox) that puts Janux behind Caddy to gate a protected path.
 
 
 ## Quickstart (development)
 
-The `examples/` directory has two self-contained demos:
+The `examples/` directory is a single self-contained demo — janux behind Caddy,
+gating one static `/app` page, with a local Mailpit inbox so the magic link needs
+no SaaS:
 
 ```sh
 cd examples
-./up.py single-host up               # janux + Caddy + a protected /app page
-open https://localhost/app            # (macOS: run ./up.py single-host trust-ca first)
+cp base.example.toml base.toml; cp seed.example.toml seed.toml
+docker compose up -d                 # janux + Caddy + a protected /app page
+open https://localhost/app           # (macOS: trust Caddy's CA first — see examples/README.md)
 ```
 
 See [examples/README.md](examples/README.md) for details.
@@ -103,7 +106,7 @@ Hand off the signing keys to an external verifier (e.g. PostgREST, which verifie
 |---|---|
 | `src/` | Server: `router.rs`, factors (`email`, `otp`, `totp`, `passkey`, `social`), OIDC IdP (`oidc.rs`, `oidc_ext.rs`), RBAC (`role.rs`, `policy.rs`), tenancy (`db.rs`, `domain.rs`, `seed.rs`) |
 | `frontend/` | Vite + React multi-entry app (`login`, `admin`, `consent`, `device`) with a generated OpenAPI client (`src/api/`) |
-| `examples/` | Caddy + nginx forward-auth demos (single-host, split-hosts) |
+| `examples/` | Caddy + nginx forward-auth demo (single-host) with a local Mailpit inbox |
 | `janux-agent/` | Agent skill for deploy/ops (`SKILL.md`, `REF.md`) |
 | `tests/` | lib + `unit_tests`, `z_integration_tests`, HTTP-level e2e (`all_tests`), Python conformance suite (`compliant/`) |
 | `scripts/` | Operator helpers (`render-deploy.py`, …) |

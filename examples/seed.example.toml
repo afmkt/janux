@@ -1,9 +1,9 @@
-# Single-host example seed (Caddy front on `localhost`).
+# Janux example seed (Caddy front on `localhost`, self-contained local mail).
 # Tenant `localhost` serves the whole janux surface; the protected static
 # app lives at `path /app` and is gated here by the three /app rows near the
 # end (forward_auth -> /api/v1/auth/verify -> default-deny engine).
-# Copy -> seed.toml, set your [seed.resend] credentials, fill the admin
-# `email`, then `up.py single-host`. See ../README.md.
+# Copy -> seed.toml, adjust the mail backend + bootstrap `email`s, then
+# `docker compose up -d` from this directory. See README.md.
 
 # ================================================================
 # Seed configuration: populates tenant DB records on startup.
@@ -69,12 +69,14 @@ name = "localhost"
 #               per-file: anything missing from the dir falls back to the
 #               embedded frontend. Config-file-only by design — see
 #               docs/FRONTEND.md.
-domains = [{ id = "localhost", cors = [] }, { id = "0.0.0.0", cors = [] }]
-# Example with a page override:
-# domains = [
-#     { id = "localhost", cors = [] },
-#     { id = "auth.example.com", cors = ["tenant"], pages_dir = "./data/pages/auth.example.com" },
-# ]
+#
+# In this example the `localhost` domain's UI is served from a bind-mounted
+# copy of the built frontend (`../frontend/dist` -> `/app/pages-override` in
+# compose.yml), so a fresh `npm run build` in ../frontend shows up in the
+# running stack with NO image rebuild and NO restart (janux reads the dir
+# per request). The `0.0.0.0` domain keeps the embedded UI. Remove the
+# `pages_dir` (and the matching volume in compose.yml) to revert.
+domains = [{ id = "localhost", pages_dir = "/app/pages-override", cors = [] }, { id = "0.0.0.0", cors = [] }]
 
 # Pre-built roles. Created before users and policies so that
 # policy_create can resolve them.
@@ -84,42 +86,59 @@ roles = ["root", "admin", "scim", "user", "guest"]
 # VERIFIED login credential at seed time (G-131) — set the admin's to an
 # inbox you control; that is what makes the magic-link quickstart sign-in
 # work. An account without it has no credential and cannot sign in until
-# one is attached.
+# one is attached. `tester` is a plain `user` to walk the protected /app
+# flow as a regular account.
 users = [
       { name = "root", roles = ["root"], active = true, email = "root@example.com" },
       { name = "admin", roles = ["admin"], active = true, email = "admin@example.com" },
+      { name = "tester", roles = ["user"], active = true, email = "tester@example.com" },
 ]
 
 # RBAC is default-deny: gate /app here with exact-match rows. The three
 # progressively richer shapes and the source/target self-scoping engine are
-# documented in ../README.md#writing-policies-rbac-authoring.
+# documented in README.md#writing-policies-rbac-authoring.
 policies = [
         # Scenario 2 (the workhorse): grant the exact forward-auth path /app to
         # each built-in role. All other fields default (action = all methods,
         # source/target = Nothing, mfa = false, allowed = true). Scenario 1
         # (domain+role) and Scenario 3 (source+target self-scoping, e.g. a user
         # reaching only their own /app/{owner}) are documented in
-        # ../README.md#writing-policies-rbac-authoring.
+        # README.md#writing-policies-rbac-authoring.
         { domain = "localhost", resource = "/app", role = "user" },
         { domain = "localhost", resource = "/app", role = "admin" },
         { domain = "localhost", resource = "/app", role = "root" },
 ]
 
-[seed.resend]
-from = "noreply@example.com"
-resend_key = "your-resend-api-key"
-template = "./email/verify.html"
-# Where the magic link lands: the hosted login SPA, which reads
-# token/username/email from the query and auto-verifies (G-133 — the old
-# /api/v1/auth/email/landing value pointed at a route that never
-# existed, so every emailed link 404'd).
-verify_url = "http://localhost/login"
+# ── Mail backend: self-contained SMTP via the local Mailpit relay ─────────────
+# This example ships with Mailpit (a container in compose.yml: SMTP :1025, web
+# inbox :8025), so the magic link is fully local — no SaaS, no real mailbox.
+# `auth` hands links to mailpit:1025 (plain SMTP); read the "Janux login" link
+# in the web inbox at http://localhost:8025.
+#
+# mail_backend selects the active delivery backend regardless of the priority
+# order (resend -> zonemail -> smtp) below.
+mail_backend = "smtp"
 
-# ── Alternative mail backends ────────────────────────────────────────────────
+[seed.smtp]
+host = "mailpit"              # the Mailpit container, on the compose network
+port = 1025                  # Mailpit SMTP (plain, no TLS)
+from = "noreply@example.com"
+# A non-existent on-disk path -> janux falls back to its embedded verify.html.
+template = "verify.html"
+# Where the magic link lands: the hosted login SPA auto-verifies on load.
+verify_url = "https://localhost/login"
+tls = "plain"
+
+# ── Alternative mail backends (commented; enable one to replace Mailpit) ───────
 # The email factor uses the FIRST configured backend in priority order
-# resend -> zonemail -> smtp, or whichever `mail_backend` names below.
-# Resend (above) is the hosted default; to run self-hosted, comment it out
-# and enable one of these.
+# resend -> zonemail -> smtp, or whichever `mail_backend` names above.
+#
+# Resend (hosted SaaS default when no mail_backend is set):
+# [seed.resend]
+# from = "noreply@example.com"
+# resend_key = "your-resend-api-key"
+# template = "./email/verify.html"
+# verify_url = "http://localhost/login"
 #
 # Zonemail — a self-hosted DNS+SMTP stack (github.com/afmkt/zonemail):
 # [seed.zonemail]
@@ -129,7 +148,7 @@ verify_url = "http://localhost/login"
 # verify_url = "http://localhost/login"
 # api_token = "..."                     # only when Zonemail's API auth is on
 #
-# Built-in SMTP relay — hands off to a relay you control (no Zonemail):
+# Your own SMTP relay:
 # [seed.smtp]
 # host = "smtp.example.com"
 # port = 587                           # STARTTLS submission port
@@ -140,15 +159,13 @@ verify_url = "http://localhost/login"
 # password = "app-password"
 # tls = "required"                     # plain|opportunistic|required|implicit
 # insecure = false                    # dev only: accept unverified certs
-#
-# Force one backend regardless of priority:
-# mail_backend = "zonemail"
 
-
+# Present so the seed parses (OTPDTO has no default); never used because
+# mail_backend = "smtp". Placeholders only.
 [seed.alisms]
-api_secret = "your-sms-api-secret"
-api_key = "your-sms-api-key"
-template_code = "your-template-code"
-sign_name = "Your Company"
+api_key = "unused"
+api_secret = "unused"
+template_code = "unused"
+sign_name = "Example"
 region_id = "cn-shanghai"
 endpoint = "dysmsapi.aliyuncs.com"

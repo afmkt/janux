@@ -32,7 +32,9 @@
 use anyhow::Result;
 use rust_embed::RustEmbed;
 use salvo::http::StatusCode;
-use salvo::http::header::{CONTENT_TYPE, ETAG, HeaderName, HeaderValue, IF_NONE_MATCH};
+use salvo::http::header::{
+    CACHE_CONTROL, CONTENT_TYPE, ETAG, HeaderName, HeaderValue, IF_NONE_MATCH,
+};
 use salvo::prelude::*;
 use std::path::{Path, PathBuf};
 
@@ -118,11 +120,27 @@ pub fn confine(root: &Path, rel: &str) -> Option<PathBuf> {
     Some(out)
 }
 
+/// `Cache-Control` for a hosted resource: HTML entry documents get
+/// `no-cache` so a plain reload revalidates instead of serving a stale page
+/// that points at an already-replaced, content-hashed bundle. Hashed static
+/// assets keep the browser's default caching.
+fn cache_control(rel: &str) -> Option<HeaderValue> {
+    rel.ends_with(".html")
+        .then(|| HeaderValue::from_static("no-cache"))
+}
+
 /// Serve one frontend asset: disk override (confined under `pages_dir`)
 /// first, embedded asset second, 404 last. Honors conditional requests:
 /// both tiers carry an ETag and an `If-None-Match` hit answers 304 with no
 /// body (the behavior the replaced `static_embed` handler provided).
 pub async fn serve(req: &Request, res: &mut Response, rel: &str, pages_dir: Option<&Path>) {
+    // HTML entry pages must be revalidated every load so a freshly built,
+    // content-hashed bundle reference is never served stale from the browser
+    // cache on a plain reload. Set before the tiers so both the 200 body and
+    // the 304 revalidation carry the directive.
+    if let Some(cc) = cache_control(rel) {
+        res.headers_mut().insert(CACHE_CONTROL, cc);
+    }
     if let Some(root) = pages_dir
         && let Some(path) = confine(root, rel)
         && let Ok(meta) = tokio::fs::metadata(&path).await
@@ -532,5 +550,63 @@ mod tests {
         serve(&req, &mut res, "consent.html", None).await;
         assert_eq!(res.status_code, Some(StatusCode::NOT_MODIFIED));
         assert_headers(&res, "embedded 304");
+    }
+
+    /// HTML entry pages carry `Cache-Control: no-cache` (on the 200 body and
+    /// the 304 revalidation) so a plain reload revalidates instead of serving a
+    /// stale page pointing at an already-replaced, content-hashed bundle.
+    /// Hashed static assets get no `Cache-Control` — the browser keeps caching
+    /// them by their content-hash name.
+    #[tokio::test]
+    async fn serve_no_cache_for_html_but_not_assets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("login.html"), b"<html>override</html>").expect("write");
+        std::fs::write(root.join("app.js"), b"1").expect("write");
+
+        // HTML entry page: 200 carries no-cache.
+        let mut res = Response::new();
+        serve(&Request::new(), &mut res, "login.html", Some(root)).await;
+        assert_eq!(res.status_code, Some(StatusCode::OK));
+        assert_eq!(
+            res.headers()
+                .get(CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-cache"),
+            "HTML entry page must be revalidated, not served stale"
+        );
+
+        // The 304 revalidation must carry it too, so the browser keeps the
+        // directive across reloads.
+        let etag = res
+            .headers()
+            .get(ETAG)
+            .expect("disk etag")
+            .to_str()
+            .expect("ascii")
+            .to_string();
+        let mut req = Request::new();
+        req.headers_mut()
+            .insert(IF_NONE_MATCH, etag.parse().unwrap());
+        let mut res = Response::new();
+        serve(&req, &mut res, "login.html", Some(root)).await;
+        assert_eq!(res.status_code, Some(StatusCode::NOT_MODIFIED));
+        assert_eq!(
+            res.headers()
+                .get(CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-cache"),
+            "304 revalidation must carry no-cache"
+        );
+
+        // A hashed static asset is not HTML: no Cache-Control, so the browser
+        // keeps caching it.
+        let mut res = Response::new();
+        serve(&Request::new(), &mut res, "app.js", Some(root)).await;
+        assert_eq!(res.status_code, Some(StatusCode::OK));
+        assert!(
+            res.headers().get(CACHE_CONTROL).is_none(),
+            "non-HTML assets must not get no-cache"
+        );
     }
 }
