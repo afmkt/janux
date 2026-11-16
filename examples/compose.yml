@@ -35,15 +35,21 @@ services:
     restart: unless-stopped
     networks:
       - default
+    # janux reads its config from JANUX_CONFIG_FILE, a path inside the mounted
+    # config/ DIRECTORY (not a single-file bind mount: a missing file no longer
+    # turns into an empty dir that hides a real config or breaks the mount on a
+    # dir<->file type change). Copy the committed template into config/ first,
+    # then adjust the secrets:
+    #   cp janux.example.toml config/janux.toml
+    environment:
+      JANUX_CONFIG_FILE: /app/config/janux.toml
     volumes:
-      # janux loads "janux" (janux.toml) from its WORKDIR (/app); data_dir is
-      # ./data. Copy the committed template first, then adjust the secrets:
-      #   cp janux.example.toml janux.toml
-      - ./janux.toml:/app/janux.toml:ro
+      # The config dir janux reads JANUX_CONFIG_FILE from; data_dir is ./data.
+      - ./config:/app/config:ro
       # Per-domain UI override: serve the freshly built frontend from the host's
       # dist/ instead of the embedded (image-baked) UI, so the running stack
       # shows a new build with NO image rebuild. Remove this line and the
-      # `pages_dir` in janux.toml to revert to the embedded UI.
+      # `pages_dir` in config/janux.toml to revert to the embedded UI.
       - ../frontend/dist:/app/pages-override:ro
       - janux_auth_data:/app/data
     healthcheck:
@@ -114,7 +120,7 @@ services:
     networks:
       - default
 
-# 172.28.0.0/16 so janux.toml's trusted_proxies pin Caddy's bridge source (also
+# 172.28.0.0/16 so config/janux.toml's trusted_proxies pin Caddy's bridge source (also
 # avoids the G-149 boot warning).
 networks:
   default:
