@@ -65,10 +65,10 @@ test.describe('login SPA', () => {
       await page.goto(`${baseURL}/login?${link}`)
 
        // 4. The landing auto-POSTs to /api/v1/auth/email/verify, the server sets
-       //    the session cookie, and the app lands on the "Signed in." alert.
-      await expect(page.getByText(/Signed in\./i)).toBeVisible()
+       //    the session cookie, and the app routes straight to the admin console —
+       //    no intermediate "signed in — click continue" screen.
+      await expect(page).toHaveURL(/\/admin/)
+      await expect(page.getByText(/Admin console/i)).toBeVisible()
       await expect(page.getByRole('button', { name: /Email me a sign-in link/i })).not.toBeVisible()
-      // The no-target login terminal is now actionable, not a bare dead-end.
-      await expect(page.getByRole('button', { name: /Continue to admin console/i })).toBeVisible()
     })
 })

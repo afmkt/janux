@@ -78,8 +78,12 @@ function App() {
     // used in-memory only for the immediate resume hop and never
     // persisted to JS-readable storage.
     markSession()
+    // A completed login with no parked post-auth target (no OIDC
+    // client_id/state resume, no redirect_uri) routes straight to the admin
+    // console instead of parking on an intermediate "sign in — click continue"
+    // screen. `routeAfterAuth` handles the explicit-target cases above.
     const navigated = await routeAfterAuth(jwt)
-    if (!navigated) setPhase('done')
+    if (!navigated) window.location.href = '/admin'
   }, [])
 
   useEffect(() => {
@@ -401,14 +405,6 @@ function App() {
           )}
 
           {phase === 'done' && notice && <Alert color="green">{notice}</Alert>}
-          {phase === 'done' && !notice && (
-            <>
-              <Alert color="green">Signed in. You can close this tab.</Alert>
-              <Button fullWidth onClick={() => { window.location.href = '/admin' }}>
-                Continue to admin console
-              </Button>
-            </>
-          )}
         </Stack>
       </Container>
     </ThemeProvider>
