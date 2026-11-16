@@ -139,12 +139,16 @@ async fn main() {
     }
 
     // `janux.toml` is the default config file (a relative path in the working
-    // dir). `JANUX_CONFIG_FILE` overrides its name; `--config` layers
-    // additional files on top (later files win); `JANUX__*` env vars override
-    // every file value.
-    let default = std::env::var("JANUX_CONFIG_FILE").unwrap_or_else(|_| "janux".to_string());
-    let mut config_paths = vec![default];
-    config_paths.extend(cli.config);
+    // dir), loaded only when no `--config` is given. `JANUX_CONFIG_FILE`
+    // overrides its name. `--config <file>` (repeatable; later files win)
+    // supplies its OWN files and does NOT pull in the default — this is what
+    // lets the test harnesses point janux at a scratch config without a stray
+    // `janux.toml` in their cwd. `JANUX__*` env vars override every value.
+    let config_paths = if cli.config.is_empty() {
+        vec![std::env::var("JANUX_CONFIG_FILE").unwrap_or_else(|_| "janux".to_string())]
+    } else {
+        cli.config
+    };
 
     let server_config: JanuxConfig = JanuxConfig::load_from(&config_paths).unwrap_or_else(|e| {
         panic!(
