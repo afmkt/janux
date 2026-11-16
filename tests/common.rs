@@ -260,10 +260,10 @@ async fn provision_sessions(
         })
         .await;
 
-    let cfg = janux::server::JanuxConfig::load_from(&[seed_config
-        .to_str()
-        .expect("config path utf-8")
-        .to_string()])?;
+    let cfg = janux::server::JanuxConfig::load_from(
+        None,
+        &[seed_config.to_str().expect("config path utf-8").to_string()],
+    )?;
     let mut storage = janux::db::Storage::init(data_dir).await?;
     storage = storage.seed(&cfg).await?;
     let mut tenant = storage

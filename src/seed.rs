@@ -192,7 +192,7 @@ mod tests {
             // fixture; the canonical one lives in examples/.
             vec!["examples/janux.example".into()]
         };
-        let cfg = JanuxConfig::load_from(&files)
+        let cfg = JanuxConfig::load_from(None, &files)
             .expect("janux.toml must load through the production config path");
         let tenants = cfg.seed.expect("janux.toml must define [[seed]] tenants");
         let tenant = tenants

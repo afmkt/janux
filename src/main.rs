@@ -139,23 +139,25 @@ async fn main() {
     }
 
     // `janux.toml` is the default config file (a relative path in the working
-    // dir), loaded only when no `--config` is given. `JANUX_CONFIG_FILE`
-    // overrides its name. `--config <file>` (repeatable; later files win)
-    // supplies its OWN files and does NOT pull in the default — this is what
-    // lets the test harnesses point janux at a scratch config without a stray
-    // `janux.toml` in their cwd. `JANUX__*` env vars override every value.
-    let config_paths = if cli.config.is_empty() {
-        vec![std::env::var("JANUX_CONFIG_FILE").unwrap_or_else(|_| "janux".to_string())]
-    } else {
-        cli.config
+    // dir); `JANUX_CONFIG_FILE` overrides its name. It is OPTIONAL — absent in
+    // test harnesses and any deployment that supplies config another way — so a
+    // missing default is a clean "no config" rather than a hard "file not found"
+    // panic. `--config <file>` (repeatable; later files win) layers additional
+    // files ON TOP of the default, so `janux.toml` + `extra.toml` both apply.
+    // `JANUX__*` env vars override every value.
+    let default = std::env::var("JANUX_CONFIG_FILE").unwrap_or_else(|_| "janux".to_string());
+    let server_config: JanuxConfig = match JanuxConfig::load_from(Some(&default), &cli.config) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!(
+                "FATAL: failed to load configuration (default `{default}`, --config {:?}): {e}\n\
+                 Create `janux.toml` from `examples/janux.example.toml`, pass `--config <file>`, \
+                 or set `JANUX__*` env vars (e.g. JANUX__data_dir, JANUX__encryption_key).",
+                cli.config
+            );
+            std::process::exit(1);
+        }
     };
-
-    let server_config: JanuxConfig = JanuxConfig::load_from(&config_paths).unwrap_or_else(|e| {
-        panic!(
-            "Failed to load configuration files: {:?}: {e}",
-            config_paths
-        )
-    });
 
     // JWKS export is a cold, read-only operation needing only the public key
     // material (never the encryption key), so run it before the encryption-key

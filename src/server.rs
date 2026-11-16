@@ -365,14 +365,24 @@ pub struct JanuxConfig {
 }
 
 impl JanuxConfig {
-    /// Load config from one or more TOML file paths.
+    /// Load config from an optional default file plus a list of required
+    /// `--config` files.
     ///
-    /// Files are merged in order: later files override earlier ones (tables
-    /// merge recursively; arrays and scalars are replaced wholesale).
-    /// Precedence: environment variables (JANUX_*) override all files.
-    pub fn load_from(file_paths: &[String]) -> Result<Self, ConfigError> {
+    /// `default` (the `janux.toml` name or `JANUX_CONFIG_FILE`) is loaded FIRST
+    /// and is OPTIONAL: when it resolves to no file it is silently skipped, so a
+    /// harness or deployment that supplies config another way is not broken by a
+    /// missing default. `file_paths` are the explicit `--config` files and are
+    /// REQUIRED — a typo must surface, not vanish.
+    ///
+    /// Files merge in order, later overriding earlier (tables recursively;
+    /// arrays and scalars wholesale). Precedence: `JANUX__*` env vars override
+    /// every file.
+    pub fn load_from(default: Option<&str>, file_paths: &[String]) -> Result<Self, ConfigError> {
         let run_mode = std::env::var("RUN_ENV").unwrap_or_else(|_| "development".into());
         let mut builder = Config::builder();
+        if let Some(def) = default {
+            builder = builder.add_source(File::with_name(def).required(false));
+        }
         for path in file_paths {
             builder = builder.add_source(File::with_name(path));
         }
@@ -692,7 +702,7 @@ port = 9090
             .with_extension("")
             .to_string_lossy()
             .to_string();
-        let config = JanuxConfig::load_from(&[base_stem, override_stem]).unwrap();
+        let config = JanuxConfig::load_from(None, &[base_stem, override_stem]).unwrap();
 
         assert_eq!(config.data_dir, "/tmp/base");
         assert_eq!(config.encryption_key.as_deref(), Some("base-key"));
