@@ -26,7 +26,7 @@ All notable changes to Janux. The format follows [Keep a Changelog](https://keep
 - **Dump** (`src/dump.rs`): `[[tenants.mail]]` now reports the active backend
   and redacts the new secrets unless `--secrets`.
 - **Docs**: `docs/mailer.md` (design, now implemented); `janux-agent/REF.md`
-  seed reference; `examples/*/seed.example.toml` show the Zonemail / SMTP
+  seed reference; `examples/janux.example.toml` shows the Zonemail / SMTP
   alternatives.
 - **Debug diagnostics** (`debug` config / `JANUX__debug`): when on, 401/403
   failure responses carry the full reason in their `detail` field (which token
@@ -38,6 +38,11 @@ All notable changes to Janux. The format follows [Keep a Changelog](https://keep
   to override. A loud boot warning flags a reachable host running with it on.
 
 ### Changed
+- **Config** (`src/main.rs`): the default config is now a single `janux.toml`
+  (platform config + the `[[seed]]` bootstrap section, formerly `base.toml` +
+  `seed.toml`). `--config <file>` (repeatable) layers additional files on top;
+  `JANUX_CONFIG_FILE` overrides the default name. `examples/` ships one
+  `janux.example.toml`; `render-deploy.py` writes `janux.toml`.
 - **Examples** (`examples/`): the tree is now a single flat, dogfood-style
   deployment — Caddy + nginx + Mailpit + the per-domain frontend override —
   replacing the `single-host`/`split-hosts` subfolders and the `up.py`

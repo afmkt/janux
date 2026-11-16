@@ -969,9 +969,9 @@ impl Storage {
                                 "Domain '{}' is already claimed by tenant '{}'.\
                                    Tenant '{}' cannot also claim it.\
                                    Likely cause: a stale tenant directory '{}/{}' exists in the \
-                                   data dir from a previous run (or an older seed.toml) that seeded \
+                                   data dir from a previous run (or an older janux.toml) that seeded \
                                    tenant '{}' with this domain.\
-                                   Fix: rm -rf '{}/{}'  or make seed.toml domain lists disjoint.",
+                                   Fix: rm -rf '{}/{}'  or make janux.toml domain lists disjoint.",
                                 d.id,
                                 owner,
                                 name,

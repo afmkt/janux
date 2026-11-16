@@ -42,8 +42,8 @@ use clap::Parser;
 #[derive(clap::Parser, Debug)]
 #[command(name = "janux", version, about = "Janux authentication server")]
 struct Cli {
-    /// Paths to TOML configuration files. May be repeated; later files are
-    /// merged over earlier ones (default: base.toml + seed.toml)
+    /// Additional TOML configuration files layered over `janux.toml` (the
+    /// default). May be repeated; later files override earlier ones.
     #[arg(short, long)]
     config: Vec<String>,
 
@@ -138,16 +138,13 @@ async fn main() {
         }
     }
 
-    // Use --config if provided, fall back to JANUX_CONFIG_FILE env var,
-    // then the default base.toml + seed.toml pair
-    let config_paths = if cli.config.is_empty() {
-        match std::env::var("JANUX_CONFIG_FILE") {
-            Ok(path) => vec![path],
-            Err(_) => vec!["base".into(), "seed".into()],
-        }
-    } else {
-        cli.config
-    };
+    // `janux.toml` is the default config file (a relative path in the working
+    // dir). `JANUX_CONFIG_FILE` overrides its name; `--config` layers
+    // additional files on top (later files win); `JANUX__*` env vars override
+    // every file value.
+    let default = std::env::var("JANUX_CONFIG_FILE").unwrap_or_else(|_| "janux".to_string());
+    let mut config_paths = vec![default];
+    config_paths.extend(cli.config);
 
     let server_config: JanuxConfig = JanuxConfig::load_from(&config_paths).unwrap_or_else(|e| {
         panic!(
@@ -200,7 +197,8 @@ async fn main() {
         == Some("1234567812345678123456781234567812345678123456781234567812345678")
     {
         tracing::warn!(
-            "encryption_key is the well-known example key from base.example.toml — secrets at \
+            "encryption_key is the well-known example key from examples/janux.example.toml — \
+             secrets at \
              rest are effectively plaintext. Generate a fresh 32-byte hex key (e.g. `openssl \
              rand -hex 32`) before any real deployment."
         );

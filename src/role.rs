@@ -32,7 +32,7 @@ pub const BUILTIN_ROLES: &[(&str, i64)] = &[
 /// excluded: it is a platform-level, seed-only role — a
 /// runtime tenant has no cross-tenant authority, so the
 /// apex role has no meaning there. The platform tenant
-/// (seed.toml) creates the full `BUILTIN_ROLES` catalog
+/// (janux.toml) creates the full `BUILTIN_ROLES` catalog
 /// via `TenantDTO::save`; `bootstrap_tenant` uses this
 /// subset.
 pub const BUILTIN_ROLES_TENANT: &[(&str, i64)] =

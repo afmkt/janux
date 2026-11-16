@@ -1751,7 +1751,7 @@ mod tests {
 
     /// Tenant with OTP config pointing at a dead endpoint — SMS dispatch
     /// fails fast, which is all the throttle probe needs. The endpoint is
-    /// a BARE HOST (the production shape, cf. seed.toml's
+    /// a BARE HOST (the production shape, cf. janux.toml's
     /// `dysmsapi.aliyuncs.com`): `call_api` prepends `https://`, so a
     /// value like `http://127.0.0.1:9` would mangle into
     /// `https://http://127.0.0.1:9/` — a real DNS lookup of the hostname

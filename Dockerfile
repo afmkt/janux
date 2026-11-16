@@ -73,8 +73,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 USER janux
 
-# Config (base.toml/seed.toml) is bind-mounted into /app; the default
-# invocation loads "base" + "seed" from the working directory. Mounted
-# config files must be readable by UID 10001.
+# Config (janux.toml) is bind-mounted into /app; the default invocation
+# loads "janux" from the working directory. Mounted config files must be
+# readable by UID 10001.
 # data_dir (./data) must be a volume.
 CMD ["janux"]

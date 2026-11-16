@@ -131,7 +131,7 @@ pub async fn bootstrap_tenant(
     }
 
     // Role catalog for runtime tenants excludes root: it is the
-    // platform-level, cross-tenant authority established by seed.toml.
+    // platform-level, cross-tenant authority established by janux.toml.
     {
         let mut tenant = storage
             .tenant_by_id(tenant_name)
@@ -178,27 +178,23 @@ mod tests {
     use crate::server::JanuxConfig;
     use std::sync::LazyLock;
 
-    /// The seed.toml shape is the RBAC bootstrap source of truth:
-    /// guard it so a typo surfaces at `cargo test` time instead of as
-    /// a lockout on first boot. base.toml/seed.toml are gitignored
-    /// (local credentials); on CI or a fresh clone the committed
-    /// example files (identical shape, dummy secrets) are validated
-    /// instead.
+    /// The `[[seed]]` shape in janux.toml is the RBAC bootstrap source of
+    /// truth: guard it so a typo surfaces at `cargo test` time instead of as
+    /// a lockout on first boot. janux.toml is gitignored (local
+    /// credentials); on CI or a fresh clone the committed example file
+    /// (identical shape, dummy secrets) is validated instead.
     #[test]
     fn seed_toml_bootstraps_builtin_roles() {
-        let files: Vec<String> = if std::path::Path::new("seed.toml").exists() {
-            vec!["base".into(), "seed".into()]
+        let files: Vec<String> = if std::path::Path::new("janux.toml").exists() {
+            vec!["janux".into()]
         } else {
             // On a fresh clone / CI the committed example config is the
-            // fixture; the canonical set lives in examples/.
-            vec![
-                "examples/base.example".into(),
-                "examples/seed.example".into(),
-            ]
+            // fixture; the canonical one lives in examples/.
+            vec!["examples/janux.example".into()]
         };
         let cfg = JanuxConfig::load_from(&files)
-            .expect("seed.toml must load through the production config path");
-        let tenants = cfg.seed.expect("seed.toml must define [[seed]] tenants");
+            .expect("janux.toml must load through the production config path");
+        let tenants = cfg.seed.expect("janux.toml must define [[seed]] tenants");
         let tenant = tenants
             .iter()
             .find(|t| t.name == "localhost")
@@ -244,7 +240,7 @@ mod tests {
         // The role model is SPLIT across users: `root` (cross-tenant platform
         // operator) and `admin` (per-tenant operator) are distinct accounts.
         // A per-tenant admin must NOT hold root — root is platform-only
-        // (seed.toml) and is never provisioned by a runtime tenant
+        // (janux.toml) and is never provisioned by a runtime tenant
         // (bootstrap_tenant_excludes_root_role).
         assert!(
             admin.roles.contains(&"admin".to_string()),
@@ -482,7 +478,7 @@ mod tests {
     }
 
     /// G-131 (extended): `bootstrap_tenant` must NOT create the `root`
-    /// role. The apex role is platform-only (seed.toml); a runtime
+    /// role. The apex role is platform-only (janux.toml); a runtime
     /// tenant has no cross-tenant authority.
     #[tokio::test]
     async fn bootstrap_tenant_excludes_root_role() {

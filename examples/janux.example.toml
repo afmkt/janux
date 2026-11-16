@@ -1,18 +1,69 @@
-# Janux example seed (Caddy front on `localhost`, self-contained local mail).
-# Tenant `localhost` serves the whole janux surface; the protected static
-# app lives at `path /app` and is gated here by the three /app rows near the
-# end (forward_auth -> /api/v1/auth/verify -> default-deny engine).
-# Copy -> seed.toml, adjust the mail backend + bootstrap `email`s, then
-# `docker compose up -d` from this directory. See README.md.
+# Janux example config — the single default config file for janux running
+# BEHIND Caddy. `janux.toml` is the default name janux loads from its working
+# dir; copy this to `janux.toml` (gitignored, per-run secrets) and adjust, then:
+#   cp janux.example.toml janux.toml
+#   docker compose up -d            # from this directory
+#
+# This host runs the whole janux surface (hosted login UI, OIDC, admin,
+# SCIM, health) AND the forward-auth probe for the protected static app,
+# because a single Caddy front (`localhost`) is the only layout janux's
+# host-only session cookie supports cleanly. See README.md.
+#
+# Two parts in one file:
+#   1. Platform config (data_dir, encryption_key, proxy trust, [bind]).
+#   2. The [[seed]] section — first-boot bootstrap of tenant state
+#      (domains, roles, users, policies, provider config).
+#
+# `--config <file>` layers additional files on top (later files win);
+# `JANUX__*` env vars override every value. An empty or absent [[seed]]
+# section is allowed — the server just seeds nothing on boot.
 
-# ================================================================
-# Seed configuration: populates tenant DB records on startup.
-# Load order: `janux -c base -c seed` (the default).
+# ── Platform config ───────────────────────────────────────────────────────────
+# 64 hex chars (32 bytes) for AES-256-GCM. Generate your own, e.g.:
+#   openssl rand -hex 32
+# RECOVERY-CRITICAL: encrypts at-rest secrets (signing-key privates,
+# social provider secrets, TOTP, mail delivery keys).
+data_dir = "./data"
+
+encryption_key = "1234567812345678123456781234567812345678123456781234567812345678"
+
+# TRUE: Caddy overwrites X-Forwarded-*, so janux trusts them for tenant
+# resolution (Host / X-Forwarded-Host) and the forward-auth verify path
+# (X-Forwarded-Uri / X-Forwarded-Method). With this off, /app can never be
+# gated — verify would evaluate its own endpoint, not the proxied path.
+trust_forwarded_headers = true
+
+# G-149: restrict WHICH peers may SUPPLY X-Forwarded-*. Caddy sits on the
+# fixed `janux` bridge subnet (172.28.0.0/16 in compose.yml), so this
+# allow-list closes the tenant-spoof / limiter-bypass hole without a boot
+# warning.
+trusted_proxies = ["172.28.0.0/16"]
+
+# Opt-in: when Caddy's forward_auth probe is UNAUTHENTICATED, janux answers 303
+# -> /login instead of a bare 401, so a browser is sent to the hosted login page
+# and can authenticate + retry. A proxy cannot inject a Location into a copied
+# 3xx, so the redirect is janux's job. Off by default (401 problem+json is still
+# a valid forward-auth "denied" answer); harmless for direct callers.
+forward_auth_redirect = true
+
+# Verbose error diagnostics. When ON, 401/403 failure responses carry the full
+# reason in `detail` (which token check failed, which role is missing) — a big
+# help while developing, but it lets a client learn how to defeat a gate, so
+# NEVER leave it on a reachable host. Follows RUN_ENV when unset (ON for
+# development, the default; OFF for production); set explicitly to override:
+# debug = false
+
+[bind]
+address = "0.0.0.0"
+port = 8080
+
+# ── Seed configuration ────────────────────────────────────────────────────────
+# Populates tenant DB records on startup. Idempotent — roles/users/policies are
+# upserted, so the server can reboot against the same file.
 #
 # Each [[seed]] entry creates (or updates) one tenant: its domains,
 # built-in roles, bootstrap users, RBAC policies, and provider
-# config. Seeding is idempotent — roles/users/policies are upserted,
-# so the server can reboot against the same file.
+# config.
 #
 # Built-in role model:
 #   root    - cross-tenant platform operator: tenant lifecycle only.
@@ -55,7 +106,6 @@
 # repair path for an already-booted credential-less admin is "add the
 # email, restart"), or later via `admin/user/attach_email`. Replace the
 # placeholder addresses before running on a publicly reachable host.
-# ================================================================
 
 [[seed]]
 name = "localhost"

@@ -8,8 +8,6 @@ test-data/
 .env
 *.crt
 *.key
-base.toml
-seed.toml
 janux.toml
 .obsidian/
 .venv/

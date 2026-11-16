@@ -26,7 +26,7 @@ tenants. Each tenant is identified by a hostname.
                               allow → Caddy → your service
                               deny  → 401 or 303 → /login
 
-Config at bootstrap: `base.toml` + `seed.toml`. After that, admin API.
+Config at bootstrap: `janux.toml` (platform config + `[[seed]]`). After that, admin API.
 Schema/API: **REF.md**.
 
 ## Modes (read this first)
@@ -38,7 +38,7 @@ Schema/API: **REF.md**.
 | **Operate** | Janux already running | Need `janux_url` + `admin_jwt`; use Ops in REF.md / this skill |
 
 Never commit real secrets into git. Prefer `JANUX__encryption_key` (env)
-over putting the key in `base.toml` for production.
+over putting the key in `janux.toml` for production.
 
 ## Deployment survey (run this first for any new deploy)
 
@@ -93,7 +93,7 @@ curl -fsS https://<domain>/api/v1/health/ready
 
 ## Op 1 — Live deploy (only with explicit confirmation)
 
-1. Generate pack (Op 0) or author `base.toml` / `seed.toml` (see REF.md).
+1. Generate pack (Op 0) or author `janux.toml` (see REF.md).
 2. Encryption key: `openssl rand -hex 32` → prefer `JANUX__encryption_key` env.
 3. `cd <pack> && docker compose up -d` (or systemd/SSH only if user approved).
 4. Health-check `/api/v1/health/ready`, then open `/login` for admin magic link.

@@ -31,14 +31,14 @@ no SaaS:
 
 ```sh
 cd examples
-cp base.example.toml base.toml; cp seed.example.toml seed.toml
+cp janux.example.toml janux.toml
 docker compose up -d                 # janux + Caddy + a protected /app page
 open https://localhost/app           # (macOS: trust Caddy's CA first — see examples/README.md)
 ```
 
 See [examples/README.md](examples/README.md) for details.
 
-With no providers configured in `seed.toml`, the corresponding factors simply don't activate; the server still runs and serves the OIDC/admin/SCIM surfaces. Provider credentials (mail, SMS, social OAuth) are per-tenant seed config — **not** environment variables. The only env vars the server reads are `JANUX_CONFIG_FILE`, `RUN_ENV`, and `JANUX__*` field overrides (documented in `.env.example`); nothing auto-loads a `.env` file.
+With no providers configured in `janux.toml`, the corresponding factors simply don't activate; the server still runs and serves the OIDC/admin/SCIM surfaces. Provider credentials (mail, SMS, social OAuth) are per-tenant seed config — **not** environment variables. The only env vars the server reads are `JANUX_CONFIG_FILE`, `RUN_ENV`, and `JANUX__*` field overrides (documented in `.env.example`); nothing auto-loads a `.env` file.
 
 ## Agent / AI-assisted deploy
 
@@ -67,12 +67,12 @@ See `python3 scripts/render-deploy.py --help` and [janux-agent/SKILL.md](janux-a
 
 ## Configuration
 
-Layered TOML: `janux -c base -c seed` (later files override earlier; `JANUX__*` env vars override everything).
+Layered TOML: `janux.toml` is the default config name; `janux -c <file>` (repeatable) layers
+additional files on top (later files override earlier; `JANUX__*` env vars override everything).
 
 | File | Purpose | Tracked? |
 |---|---|---|
-| `base.example.toml` / `base.toml` | bind address, data dir, encryption key, proxy trust | example tracked, local gitignored |
-| `seed.example.toml` / `seed.toml` | bootstrap tenant (roles, users, policies, provider config) | example tracked, local gitignored |
+| `janux.example.toml` / `janux.toml` | platform config (bind, data dir, encryption key, proxy trust) + bootstrap tenant (roles, users, policies, provider config) | example tracked, local gitignored |
 | `.env.example` | documents the env vars the server reads (not auto-loaded) | example tracked |
 | `tests/test_config.toml` | test config with dummy values | tracked |
 
@@ -93,7 +93,7 @@ tar xzf backup-<ts>.tgz -C "$(dirname data)"                    # or:  cp -r bac
 
 Schedule the copy with cron/systemd timers.
 
-The complete restore set is the data dir **plus** your config files (`base.toml`/`seed.toml`) **plus** the `encryption_key` — without the key, the at-rest secrets (signing keys, provider credentials) are unrecoverable.
+The complete restore set is the data dir **plus** your config file (`janux.toml`) **plus** the `encryption_key` — without the key, the at-rest secrets (signing keys, provider credentials) are unrecoverable.
 
 Rotate the encryption key with `janux rekey <64-hex-new-key>`, which re-encrypts every at-rest secret (signing-key privates, provider secrets, TOTP, stored mail/SMS credentials) under the new key. After a successful run, **put the new key in your config** or the next boot cannot decrypt.
 

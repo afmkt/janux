@@ -22,8 +22,7 @@ examples/
   compose.yml          # the stack (name: janux)
   Caddyfile            # localhost front: /app gated, everything else -> janux
   app-nginx.conf       # nginx `location /app/` -> aliased static file
-  base.example.toml    # template -> base.toml (gitignored); `cp` once by hand
-  seed.example.toml    # -> seed.toml (gitignored); mail backend + bootstrap
+  janux.example.toml   # template -> janux.toml (gitignored); `cp` once by hand
   site/index.html      # the protected static file
 ```
 
@@ -36,21 +35,21 @@ examples/
 ```
 
 On an unauthenticated probe janux answers `303 -> /login` (`forward_auth_redirect
-= true` in `base.toml`); Caddy propagates that to the browser, which authenticates
+= true` in `janux.toml`); Caddy propagates that to the browser, which authenticates
 at `/login`, gets its host-only cookie, and retries `/app`.
 
 ## Quickstart
 
 ```sh
 cd examples
-cp base.example.toml base.toml; cp seed.example.toml seed.toml
-#   edit base.toml's encryption_key:  openssl rand -hex 32
+cp janux.example.toml janux.toml
+#   edit janux.toml's encryption_key:  openssl rand -hex 32
 docker compose up -d
 # open https://localhost/app
 ```
 
-`base.toml` / `seed.toml` are gitignored (they hold per-run secrets), so copy the
-committed `*.example.toml` templates by hand on first run. The stack uses the
+`janux.toml` is gitignored (it holds per-run secrets), so copy the committed
+`janux.example.toml` template by hand on first run. The stack uses the
 local Mailpit relay by default, so no mail credentials are needed.
 
 ## First time on macOS
@@ -85,7 +84,7 @@ On Linux, `localhost` is a secure context already — just open `https://127.0.0
 
 The `localhost` domain's UI is served from a **bind-mounted** copy of the built
 frontend instead of the image-baked one (`../frontend/dist` → `/app/pages-override`,
-mounted in `compose.yml` and pointed at by `pages_dir` in `seed.toml`). janux
+mounted in `compose.yml` and pointed at by `pages_dir` in `janux.toml`). janux
 reads that directory **per request**, so after editing `../frontend/src/*`:
 
 ```sh
@@ -95,7 +94,7 @@ cd ../frontend && npm run build   # regenerates ../frontend/dist
 …the running stack serves the new build with **no image rebuild and no restart**.
 (HTML entry pages carry `Cache-Control: no-cache` so a plain reload picks up the
 new content-hashed bundles.) Remove the `../frontend/dist` volume in
-`compose.yml` and the `pages_dir` in `seed.toml` to revert to the embedded UI.
+`compose.yml` and the `pages_dir` in `janux.toml` to revert to the embedded UI.
 
 ## Tearing down
 

@@ -36,16 +36,14 @@ services:
     networks:
       - default
     volumes:
-      # janux loads "base" + "seed" from its WORKDIR (/app); data_dir is ./data.
-      # Copy the committed templates first, then adjust the secrets:
-      #   cp base.example.toml base.toml
-      #   cp seed.example.toml seed.toml
-      - ./base.toml:/app/base.toml:ro
-      - ./seed.toml:/app/seed.toml:ro
+      # janux loads "janux" (janux.toml) from its WORKDIR (/app); data_dir is
+      # ./data. Copy the committed template first, then adjust the secrets:
+      #   cp janux.example.toml janux.toml
+      - ./janux.toml:/app/janux.toml:ro
       # Per-domain UI override: serve the freshly built frontend from the host's
       # dist/ instead of the embedded (image-baked) UI, so the running stack
       # shows a new build with NO image rebuild. Remove this line and the
-      # `pages_dir` in seed.toml to revert to the embedded UI.
+      # `pages_dir` in janux.toml to revert to the embedded UI.
       - ../frontend/dist:/app/pages-override:ro
       - janux_auth_data:/app/data
     healthcheck:
@@ -116,7 +114,7 @@ services:
     networks:
       - default
 
-# 172.28.0.0/16 so base.toml's trusted_proxies pin Caddy's bridge source (also
+# 172.28.0.0/16 so janux.toml's trusted_proxies pin Caddy's bridge source (also
 # avoids the G-149 boot warning).
 networks:
   default:

@@ -5,9 +5,10 @@ authoring config or calling the admin API.
 
 ---
 
-## base.toml
+## janux.toml — platform config
 
-Layered TOML. `janux -c base -c seed` loads both; later file wins.
+Layered TOML. `janux.toml` is the default config name; `janux -c <file>`
+layers additional files on top (later files win).
 Env vars with prefix `JANUX__` override everything (field overrides
 only, e.g. `JANUX__bind__port=9090`).
 
@@ -31,7 +32,7 @@ only, e.g. `JANUX__bind__port=9090`).
 
 ---
 
-## seed.toml
+## janux.toml — [[seed]] bootstrap
 
 Bootstraps tenant state at startup. Idempotent — safe to re-run.
 
@@ -293,7 +294,7 @@ a token for an admin-role user in the tenant's home domain.
                         else 401 to the browser
 
 The `X-Forwarded-*` headers are critical. Set `trust_forwarded_headers=true`
-and `trusted_proxies=[<proxy-subnet>]` in base.toml. Without
+and `trusted_proxies=[<proxy-subnet>]` in janux.toml. Without
 `trusted_proxies`, any peer can spoof the tenant (G-149).
 
 ---
@@ -308,7 +309,7 @@ Two key kinds; **only the encryption key is operator-provided**:
 | Signing (RSA RS256) | N (one/domain) | janux auto, at seed | Signs session/id/refresh/device JWTs |
 
     ENCRYPTION key
-      - base.toml `encryption_key` (64 hex / 32 bytes) or, overriding it,
+      - janux.toml `encryption_key` (64 hex / 32 bytes) or, overriding it,
         env var `JANUX__encryption_key=<hex>` (prefix `JANUX`, `__` sep).
       - REQUIRED at boot (FATAL exit if missing); warning if it equals the
         example key. Process-wide, once-only (`OnceLock`): stable across
@@ -347,7 +348,7 @@ and no upload API — customization is **file override** only.
       The server exits; it does NOT start. Existing files are overwritten
       (a refresh, not a merge with operator edits).
 
-     Point a domain at <dir> in `seed.toml` (config-file-only, declarative
+     Point a domain at <dir> in `janux.toml` (config-file-only, declarative
       — the key is `pages.<domain>` in the tenant Config store; boot reads
       it at startup, so restart to apply; removing it on the next restart
       disables the override):

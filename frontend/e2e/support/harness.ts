@@ -130,7 +130,7 @@ async function waitForHealth(baseURL: string, timeoutMs = 30_000): Promise<void>
 // the policy engine. The POLICY_ROWS here are therefore vestigial: they are
 // kept only as a harmless exercise of the ENGINE tier (validate_jwt_for via
 // /api/v1/verify) and to keep the seeded tenant shape parallel to a real
-// seed.toml. The domain is `localhost` because the browser talks to
+// janux.toml. The domain is `localhost` because the browser talks to
 // `http://localhost:<port>`, so the Host header resolves the tenant by it.
 const POLICY_ROWS: [string, string][] = [
     // root: cross-tenant lifecycle
