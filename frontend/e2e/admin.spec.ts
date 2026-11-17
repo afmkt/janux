@@ -9,7 +9,8 @@ import { readState, latestMagicLink } from './support/harness'
 const ADMIN = { name: 'admin', email: 'admin@example.com' }
 
 // Complete a magic-link login in `page` — the same click-through the login SPA
-// test drives, ending on the "Signed in." alert.
+// test drives, ending on the admin console (post-auth routes straight to
+// /admin; the intermediate "Signed in." acknowledgement page is gone).
 async function signIn(page: Page): Promise<void> {
    const { baseURL, mockUrl } = readState()
    await page.goto(`${baseURL}/login`)
@@ -21,7 +22,10 @@ async function signIn(page: Page): Promise<void> {
    const link = await latestMagicLink(mockUrl)
    expect(link).toContain('token=')
    await page.goto(`${baseURL}/login?${link}`)
-   await expect(page.getByText(/Signed in\./i)).toBeVisible()
+   // G-165: post-auth routes straight to the admin console — no intermediate
+   // "Signed in." screen — so a completed login lands on the console itself.
+   await expect(page).toHaveURL(/\/admin/)
+   await expect(page.getByRole('heading', { name: /Admin console/i })).toBeVisible()
 }
 
 test.describe('admin SPA', () => {

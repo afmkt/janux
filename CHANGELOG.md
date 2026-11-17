@@ -67,10 +67,10 @@ All notable changes to Janux. The format follows [Keep a Changelog](https://keep
   magic-link factor is available via Resend **or** Zonemail **or** a built-in
   SMTP relay.
 - **Login terminal** (`frontend/src/login/App.tsx`): a magic-link login with
-  no parked return target (no `client_id`/`state`/`redirect_uri`) no longer
-  stops on a bare "Signed in." alert. It now renders "Signed in. You can close
-  this tab." plus a **Continue to admin console** button (→ `/admin`), so a
-  user who reaches `/login` without a redirect is no longer stranded.
+  no parked return target (no `client_id`/`state`/`redirect_uri`) routes
+  straight to `/admin` — the admin console — instead of parking on an
+  intermediate "Signed in — click continue" screen, so a user who reaches
+  `/login` without a redirect lands on the console.
 - **Admin console shell** (`frontend/src/admin/App.tsx`,
   `frontend/src/admin/index.css`): the flat 12-item tab strip is now a
   **collapsible accordion sidebar** — one control per intent group
