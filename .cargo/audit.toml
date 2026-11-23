@@ -15,12 +15,22 @@
 # zstd ^0.13.4 (RUSTSEC-2026-0391) + zstd-safe ^7.4.0 (RUSTSEC-2026-0398 / -0403,
 # the tantivy/turso zstd lineage), and rustix >=1.1.6 (RUSTSEC-2026-0486).
 #
-# Two advisories remain as *allowed* cargo-audit warnings (they do not fail CI
+# Also fixed in place (2026-11 batch): url >=2.5.9 (RUSTSEC-2026-0592, stack
+# overflow in Url::origin on nested blob: URLs) and lettre >=0.11.24
+# (RUSTSEC-2026-0560..-0565: EHLO-whitespace panic, quoted-local-part address
+# confusion, STARTTLS reply injection, mailbox display-name CRLF panic, and
+# unbounded SMTP reply buffering / missing dot-stuffing).
+#
+# Three advisories remain as *allowed* cargo-audit warnings (they do not fail CI
 # and are unfixable in place): lru 0.16.4 (RUSTSEC-2026-0253, a panic-unsafety
 # use-after-free in LruCache::pop, pinned by tantivy 0.26.2 on the turso path —
-# worth tracking upstream) and rustls-pemfile 2.2.0 (RUSTSEC-2025-0134,
+# worth tracking upstream), rustls-pemfile 2.2.0 (RUSTSEC-2025-0134,
 # "unmaintained"; reached only via the inactive toasty-driver-postgresql, and
-# the crate's final release).
+# the crate's final release), and chrono 0.4.45 (RUSTSEC-2026-0543,
+# "unmaintained"; the crate is archived in favour of jiff — which janux already
+# uses — but it is pulled transitively by certon/salvo-acme, oauth2,
+# openidconnect, salvo-oapi, salvo-tus and turso_core, so it cannot be dropped
+# without a broad upstream migration).
 #
 # The IDs below are the *unfixable in place* transitive crates. For each one a
 # real upgrade is either unavailable, or it forces a `rust-crypto` ecosystem
