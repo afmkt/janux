@@ -5,8 +5,8 @@ import { readState, latestMagicLink } from './support/harness'
 // passkey, social. This spec drives a *real* browser through the genuine
 // magic-link flow against the real janux backend (G-165).
 //
-// The form renders a username field plus an "Email me a sign-in link" button.
-// Clicking it opens the email field + "Send link"; submitting POSTs to
+// The form renders a username field plus an always-visible email field with a
+// "Send link" button on its right; submitting POSTs to
 // /api/v1/auth/email/request and the server drops a verification link onto the
 // wire — captured here by the mock Resend endpoint, then followed in-browser
 // exactly as a user would click the email.
@@ -19,8 +19,9 @@ test.describe('login SPA', () => {
       await page.goto(`${baseURL}/login`)
       const h = page.getByRole('heading', { name: /Sign in/i })
       await expect(h).toBeVisible()
-      // The email factor renders "Email me a sign-in link".
-      await expect(page.getByRole('button', { name: /Email me a sign-in link/i })).toBeVisible()
+      // The email factor renders an always-visible email field + "Send link".
+      await expect(page.getByLabel(/Email address/i)).toBeVisible()
+      await expect(page.getByRole('button', { name: /^Send link$/i })).toBeVisible()
       await expect(page.getByLabel(/Username/i)).toBeVisible()
     })
 
@@ -33,9 +34,7 @@ test.describe('login SPA', () => {
          if (r.url().includes('/email/request')) requests.push(r.url())
        })
       await page.goto(`${baseURL}/login`)
-      // With no username, selecting the link factor still opens the email field
-      // but no request flies out yet.
-      await page.getByRole('button', { name: /Email me a sign-in link/i }).click()
+      // With no username, "Send link" must alert before any request flies out.
       await expect(page.getByLabel(/Email address/i)).toBeVisible()
       // Click "Send link" with an empty username — it must alert, not send.
       await page.getByRole('button', { name: /^Send link$/i }).click()
@@ -47,11 +46,9 @@ test.describe('login SPA', () => {
 
    test('completes a magic link and lands signed-in', async ({ page }) => {
       const { baseURL, mockUrl } = readState()
-       // 1. Fill the username and pick the email (magic-link) factor, which
-       //    reveals the email field.
+       // 1. Fill the username and the always-visible email field.
       await page.goto(`${baseURL}/login`)
       await page.getByLabel(/Username/i).fill(ADMIN.name)
-      await page.getByRole('button', { name: /Email me a sign-in link/i }).click()
       await page.getByLabel(/Email address/i).fill(ADMIN.email)
 
        // 2. "Send link" fires the real POST /api/v1/auth/email/request.
@@ -69,6 +66,6 @@ test.describe('login SPA', () => {
        //    no intermediate "signed in — click continue" screen.
       await expect(page).toHaveURL(/\/admin/)
       await expect(page.getByText(/Admin console/i)).toBeVisible()
-      await expect(page.getByRole('button', { name: /Email me a sign-in link/i })).not.toBeVisible()
+      await expect(page.getByLabel(/Email address/i)).not.toBeVisible()
     })
 })

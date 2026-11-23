@@ -64,8 +64,8 @@ function App() {
   })
   const [username, setUsername] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
-  const [activeFactor, setActiveFactor] = useState<string | null>(null)
-  const [identifier, setIdentifier] = useState('')
+  const [emailIdentifier, setEmailIdentifier] = useState('')
+  const [otpIdentifier, setOtpIdentifier] = useState('')
   const [otpCode, setOtpCode] = useState('')
   const [otpToken, setOtpToken] = useState<string | null>(null)
   // State copy of `landing.code` so a failed redeem can clear it and fall
@@ -173,7 +173,7 @@ function App() {
   }
 
   const submitEmail = async () => {
-    if (!emailFactor || !requireUsername() || !identifier.trim()) return
+    if (!emailFactor || !requireUsername() || !emailIdentifier.trim()) return
     setBusy(true)
     setError(null)
     try {
@@ -181,7 +181,7 @@ function App() {
       // plain redirect_uri) so the emailed link can resume it after verify.
       const body: Record<string, string> = {
         name: username.trim(),
-        email: identifier.trim(),
+        email: emailIdentifier.trim(),
       }
       const clientId = params.get('client_id')
       const state = params.get('state')
@@ -199,13 +199,13 @@ function App() {
   }
 
   const submitOtpRequest = async () => {
-    if (!otpFactor || !requireUsername() || !identifier.trim()) return
+    if (!otpFactor || !requireUsername() || !otpIdentifier.trim()) return
     setBusy(true)
     setError(null)
     try {
       const data = await postJson(otpFactor.request, {
         name: username.trim(),
-        mobile: identifier.trim(),
+        mobile: otpIdentifier.trim(),
       })
       if (!data.jwt) throw new Error('OTP request succeeded but no ceremony token was issued')
       setOtpToken(data.jwt)
@@ -225,7 +225,7 @@ function App() {
       const data = await postJson(otpFactor.verify, {
         token: otpToken,
         name: username.trim(),
-        mobile: identifier.trim(),
+        mobile: otpIdentifier.trim(),
         code: otpCode.trim(),
         cookie: SESSION_COOKIE,
       })
@@ -249,17 +249,6 @@ function App() {
     } finally {
       setBusy(false)
     }
-  }
-
-  const selectFactor = (factor: string) => {
-    setError(null)
-    if (activeFactor === factor) {
-      setActiveFactor(null)
-      setIdentifier('')
-      return
-    }
-    setActiveFactor(factor)
-    setIdentifier('')
   }
 
   return (
@@ -289,53 +278,35 @@ function App() {
               />
 
               {emailFactor && (
-                <Button
-                  variant={activeFactor === 'email' ? 'filled' : 'default'}
-                  fullWidth
+                <TextInput
+                  label="Email address"
+                  placeholder="you@example.com"
+                  value={emailIdentifier}
+                  onChange={(e) => setEmailIdentifier(e.currentTarget.value)}
                   disabled={busy}
-                  onClick={() => selectFactor('email')}
-                >
-                  Email me a sign-in link
-                </Button>
-              )}
-              {activeFactor === 'email' && (
-                <>
-                  <TextInput
-                    label="Email address"
-                    placeholder="you@example.com"
-                    value={identifier}
-                    onChange={(e) => setIdentifier(e.currentTarget.value)}
-                    disabled={busy}
-                  />
-                  <Button fullWidth onClick={submitEmail} loading={busy}>
-                    Send link
-                  </Button>
-                </>
+                  rightSectionPointerEvents="all"
+                  rightSection={
+                    <Button size="sm" onClick={submitEmail} loading={busy}>
+                      Send link
+                    </Button>
+                  }
+                />
               )}
 
               {otpFactor && (
-                <Button
-                  variant={activeFactor === 'otp' ? 'filled' : 'default'}
-                  fullWidth
+                <TextInput
+                  label="Mobile number"
+                  placeholder="+86…"
+                  value={otpIdentifier}
+                  onChange={(e) => setOtpIdentifier(e.currentTarget.value)}
                   disabled={busy}
-                  onClick={() => selectFactor('otp')}
-                >
-                  Text me a code
-                </Button>
-              )}
-              {activeFactor === 'otp' && (
-                <>
-                  <TextInput
-                    label="Mobile number"
-                    placeholder="+86…"
-                    value={identifier}
-                    onChange={(e) => setIdentifier(e.currentTarget.value)}
-                    disabled={busy}
-                  />
-                  <Button fullWidth onClick={submitOtpRequest} loading={busy}>
-                    Send code
-                  </Button>
-                </>
+                  rightSectionPointerEvents="all"
+                  rightSection={
+                    <Button size="sm" onClick={submitOtpRequest} loading={busy}>
+                      Send code
+                    </Button>
+                  }
+                />
               )}
 
               {(emailFactor || otpFactor) && (passkeyFactor || socialProviders.length > 0) && (
@@ -379,7 +350,7 @@ function App() {
           {phase === 'email-sent' && (
             <>
               <Alert color="green">
-                Check your inbox — a sign-in link is on its way to {identifier}.
+                Check your inbox — a sign-in link is on its way to {emailIdentifier}.
               </Alert>
               <Button variant="default" fullWidth onClick={submitEmail} loading={busy}>
                 Send it again
@@ -389,7 +360,7 @@ function App() {
 
           {phase === 'otp-code' && (
             <>
-              <Alert color="green">Enter the 6-digit code sent to {identifier}.</Alert>
+              <Alert color="green">Enter the 6-digit code sent to {otpIdentifier}.</Alert>
               <TextInput
                 label="Code"
                 value={otpCode}

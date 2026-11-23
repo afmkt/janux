@@ -29,6 +29,6 @@ test.describe('consent SPA', () => {
        // carry the visitor back through /login rather than hang.
       await page.goto(`${baseURL}/consent?state=demo-state`)
       await expect(page).toHaveURL(/\/login\?.*redirect_uri=/)
-      await expect(page.getByRole('button', { name: /Email me a sign-in link/i })).toBeVisible()
+      await expect(page.getByLabel(/Email address/i)).toBeVisible()
        })
 })

@@ -15,7 +15,6 @@ async function signIn(page: Page): Promise<void> {
    const { baseURL, mockUrl } = readState()
    await page.goto(`${baseURL}/login`)
    await page.getByLabel(/Username/i).fill(ADMIN.name)
-   await page.getByRole('button', { name: /Email me a sign-in link/i }).click()
    await page.getByLabel(/Email address/i).fill(ADMIN.email)
    await page.getByRole('button', { name: /^Send link$/i }).click()
    await expect(page.getByText(/Check your inbox/i)).toBeVisible()
@@ -35,7 +34,7 @@ test.describe('admin SPA', () => {
       // No session yet: the guard redirects to /login carrying a redirect_uri.
       await expect(page).toHaveURL(new RegExp('/admin|/login\\?.*redirect_uri='))
       await expect(
-         page.getByText(/Redirecting to sign-in|Email me a sign-in link/i),
+         page.getByText(/Redirecting to sign-in|Send link/i),
        ).toBeVisible()
       // It must have ended up on the login route.
       await expect(new URL(page.url()).pathname).toBe('/login')
