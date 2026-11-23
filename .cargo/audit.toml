@@ -16,10 +16,13 @@
 # the tantivy/turso zstd lineage), and rustix >=1.1.6 (RUSTSEC-2026-0486).
 #
 # Also fixed in place (2026-11 batch): url >=2.5.9 (RUSTSEC-2026-0592, stack
-# overflow in Url::origin on nested blob: URLs) and lettre >=0.11.24
+# overflow in Url::origin on nested blob: URLs), lettre >=0.11.24
 # (RUSTSEC-2026-0560..-0565: EHLO-whitespace panic, quoted-local-part address
 # confusion, STARTTLS reply injection, mailbox display-name CRLF panic, and
-# unbounded SMTP reply buffering / missing dot-stuffing).
+# unbounded SMTP reply buffering / missing dot-stuffing), and cookie >=0.18.3
+# (RUSTSEC-2026-0594, medium: private-cookie nonces can repeat in processes that
+# fork — a `PrivateJar::add`/`add_original` RNG-seed defect; pulled transitively
+# by salvo-csrf/salvo-session/salvo_core, fixed by the lockfile bump).
 #
 # Three advisories remain as *allowed* cargo-audit warnings (they do not fail CI
 # and are unfixable in place): lru 0.16.4 (RUSTSEC-2026-0253, a panic-unsafety

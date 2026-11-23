@@ -33,9 +33,12 @@ test.describe('admin SPA', () => {
       await page.goto(`${baseURL}/admin`)
       // No session yet: the guard redirects to /login carrying a redirect_uri.
       await expect(page).toHaveURL(new RegExp('/admin|/login\\?.*redirect_uri='))
-      await expect(
-         page.getByText(/Redirecting to sign-in|Send link/i),
-       ).toBeVisible()
+      // The login page is the always-rendered "Sign in" heading (the same
+      // signal the consent-redirect and login specs use). The login form no
+      // longer surfaces a standalone "Send link" button — it lives as the
+      // email field's right-section control — so the redirect notice is gone
+      // by the time the bounce settles and the heading is the stable target.
+      await expect(page.getByRole('heading', { name: /Sign in/i })).toBeVisible()
       // It must have ended up on the login route.
       await expect(new URL(page.url()).pathname).toBe('/login')
       })
