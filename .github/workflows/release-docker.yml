@@ -10,6 +10,10 @@
 # Triggered by version tags (v1.2.3); workflow_dispatch pushes
 # `latest` + short-SHA tags without a version tag.
 #
+# `workflow_run` also fires it once "Janux Auth CI - Test Suite" completes;
+# the `gate` job restricts that path to a green run on `main`, so the image
+# is published automatically as soon as CI passes.
+#
 # NOTE: the first time this pushes, GHCR creates the package as
 # PRIVATE. Make it public once:
 #   github.com/users/afmkt/packages/container/janux/settings
@@ -22,6 +26,10 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+  # Auto-fire after the CI suite; the `gate` job below limits it to green main.
+  workflow_run:
+    workflows: ["Janux Auth CI - Test Suite"]
+    types: [completed]
 
 env:
   REGISTRY: ghcr.io
@@ -30,11 +38,28 @@ env:
   ALIYUN_IMAGE: crpi-zuhwpd6fwca3b0fc.cn-shanghai.personal.cr.aliyuncs.com/afmkt/janux
 
 jobs:
+  # ═══════════════ Trigger gate ═══════════════
+  #
+  # Three events can reach this workflow: `v*` tag push, manual
+  # `workflow_dispatch`, and `workflow_run` (after CI). The first two always
+  # build; the `workflow_run` path must build only when CI was green on the
+  # release branch — never from a PR or from `develop`, and never when CI
+  # failed. One job encodes the policy; every downstream job `needs` it, so a
+  # skipped gate skips the whole pipeline cleanly.
+  gate:
+    name: Gate (build only on green CI / tag / manual)
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    steps:
+      - run: |
+          echo "gate passed for event '${{ github.event_name }}'"
+
   # ═══════════════ Per-arch builds (push by digest) ═══════════════
 
   docker-amd64:
     name: Docker image (linux/amd64)
     runs-on: ubuntu-latest
+    needs: [gate]
     permissions:
       contents: read
       packages: write
@@ -42,6 +67,12 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # `workflow_run` loads this file from the default branch, so a bare
+          # checkout would build main's *latest*, not the commit CI tested.
+          # Pin the tested commit on the auto path; otherwise use this event's
+          # own ref (the tag, or the dispatched ref).
+          ref: ${{ (github.event_name == 'workflow_run') && github.event.workflow_run.head_sha || github.ref }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -90,6 +121,7 @@ jobs:
     name: Docker image (linux/arm64)
     # Native arm64 runner: no QEMU, so the Rust build is fast.
     runs-on: ubuntu-24.04-arm
+    needs: [gate]
     permissions:
       contents: read
       packages: write
@@ -97,6 +129,12 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # `workflow_run` loads this file from the default branch, so a bare
+          # checkout would build main's *latest*, not the commit CI tested.
+          # Pin the tested commit on the auto path; otherwise use this event's
+          # own ref (the tag, or the dispatched ref).
+          ref: ${{ (github.event_name == 'workflow_run') && github.event.workflow_run.head_sha || github.ref }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -149,7 +187,7 @@ jobs:
 
   docker-smoke:
     name: Smoke-test built image
-    needs: [docker-amd64]
+    needs: [gate, docker-amd64]
     runs-on: ubuntu-latest
     permissions:
       packages: read
@@ -222,7 +260,7 @@ jobs:
 
   docker-publish:
     name: Publish multi-arch manifest
-    needs: [docker-amd64, docker-arm64, docker-smoke]
+    needs: [gate, docker-amd64, docker-arm64, docker-smoke]
     runs-on: ubuntu-latest
     permissions:
       packages: write
